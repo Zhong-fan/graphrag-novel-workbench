@@ -10,9 +10,15 @@ import type {
   User,
 } from "../types";
 
+type SelectProjectOptions = {
+  showLoading?: boolean;
+  silent?: boolean;
+};
 
 const tokenKey = "graph_mvp_token";
-
+const indexPendingMessage = "Index job submitted. Waiting for project status to become ready.";
+const indexReadyMessage = "GraphRAG index completed. You can generate content now.";
+const pollDelayMs = 3000;
 
 export const useWorkbenchStore = defineStore("workbench", () => {
   const bootstrap = ref<BootstrapResponse | null>(null);
@@ -25,7 +31,36 @@ export const useWorkbenchStore = defineStore("workbench", () => {
   const error = ref("");
   const success = ref("");
 
+  let projectPollTimer: number | null = null;
+
   const isAuthenticated = computed(() => Boolean(token.value && currentUser.value));
+
+  function stopProjectPolling() {
+    if (projectPollTimer !== null) {
+      window.clearTimeout(projectPollTimer);
+      projectPollTimer = null;
+    }
+  }
+
+  function scheduleProjectPolling(projectId: number) {
+    stopProjectPolling();
+    projectPollTimer = window.setTimeout(async () => {
+      projectPollTimer = null;
+      if (activeProject.value?.project.id !== projectId) {
+        return;
+      }
+      await selectProject(projectId, { showLoading: false, silent: true });
+    }, pollDelayMs);
+  }
+
+  function syncProjectSummary(project: Project) {
+    const index = projects.value.findIndex((item) => item.id === project.id);
+    if (index >= 0) {
+      projects.value[index] = project;
+      return;
+    }
+    projects.value.unshift(project);
+  }
 
   function setToken(next: string | null) {
     token.value = next;
@@ -44,6 +79,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
         currentUser.value = await api.me(token.value);
         await loadProjects();
       } catch {
+        stopProjectPolling();
         setToken(null);
         currentUser.value = null;
       }
@@ -59,9 +95,9 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       setToken(response.token);
       currentUser.value = response.user;
       await loadProjects();
-      success.value = "注册完成，已自动登录。";
+      success.value = "Registration complete. Logged in automatically.";
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "注册失败。";
+      error.value = err instanceof Error ? err.message : "Registration failed.";
     } finally {
       loading.value = false;
     }
@@ -76,21 +112,22 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       setToken(response.token);
       currentUser.value = response.user;
       await loadProjects();
-      success.value = "登录成功。";
+      success.value = "Login successful.";
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "登录失败。";
+      error.value = err instanceof Error ? err.message : "Login failed.";
     } finally {
       loading.value = false;
     }
   }
 
   function logout() {
+    stopProjectPolling();
     setToken(null);
     currentUser.value = null;
     projects.value = [];
     activeProject.value = null;
     currentGeneration.value = null;
-    success.value = "已退出登录。";
+    success.value = "Logged out.";
     error.value = "";
   }
 
@@ -104,19 +141,50 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
-  async function selectProject(projectId: number) {
+  async function selectProject(projectId: number, options: SelectProjectOptions = {}) {
     if (!token.value) {
       return;
     }
-    loading.value = true;
-    error.value = "";
+
+    const { showLoading = true, silent = false } = options;
+    if (showLoading) {
+      loading.value = true;
+    }
+    if (!silent) {
+      error.value = "";
+    }
+
     try {
-      activeProject.value = await api.projectDetail(token.value, projectId);
-      currentGeneration.value = activeProject.value.generations[0] ?? null;
+      const detail = await api.projectDetail(token.value, projectId);
+      activeProject.value = detail;
+      syncProjectSummary(detail.project);
+
+      if (currentGeneration.value) {
+        currentGeneration.value =
+          detail.generations.find((item) => item.id === currentGeneration.value?.id) ??
+          detail.generations[0] ??
+          null;
+      } else {
+        currentGeneration.value = detail.generations[0] ?? null;
+      }
+
+      if (detail.project.indexing_status === "indexing") {
+        scheduleProjectPolling(projectId);
+      } else {
+        stopProjectPolling();
+        if (detail.project.indexing_status === "ready" && success.value === indexPendingMessage) {
+          success.value = indexReadyMessage;
+        }
+      }
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "读取项目失败。";
+      stopProjectPolling();
+      if (!silent) {
+        error.value = err instanceof Error ? err.message : "Failed to load project.";
+      }
     } finally {
-      loading.value = false;
+      if (showLoading) {
+        loading.value = false;
+      }
     }
   }
 
@@ -137,9 +205,9 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       const project = await api.createProject(token.value, payload);
       await loadProjects();
       await selectProject(project.id);
-      success.value = "项目已创建。";
+      success.value = "Project created.";
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "创建项目失败。";
+      error.value = err instanceof Error ? err.message : "Failed to create project.";
     } finally {
       loading.value = false;
     }
@@ -155,9 +223,9 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     try {
       await api.addMemory(token.value, activeProject.value.project.id, payload);
       await selectProject(activeProject.value.project.id);
-      success.value = "记忆已加入项目。";
+      success.value = "Memory added to the project.";
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "写入记忆失败。";
+      error.value = err instanceof Error ? err.message : "Failed to save memory.";
     } finally {
       loading.value = false;
     }
@@ -173,9 +241,9 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     try {
       await api.addSource(token.value, activeProject.value.project.id, payload);
       await selectProject(activeProject.value.project.id);
-      success.value = "资料已加入项目。";
+      success.value = "Source added to the project.";
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "写入资料失败。";
+      error.value = err instanceof Error ? err.message : "Failed to save source.";
     } finally {
       loading.value = false;
     }
@@ -189,11 +257,11 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     error.value = "";
     success.value = "";
     try {
-      await api.indexProject(token.value, activeProject.value.project.id, { force_rebuild: true });
-      await selectProject(activeProject.value.project.id);
-      success.value = "GraphRAG 索引和 Neo4j 同步已完成。";
+      const response = await api.indexProject(token.value, activeProject.value.project.id, { force_rebuild: false });
+      success.value = response.status === "ready" ? indexReadyMessage : indexPendingMessage;
+      await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "索引失败。";
+      error.value = err instanceof Error ? err.message : "Failed to start indexing.";
     } finally {
       loading.value = false;
     }
@@ -208,10 +276,10 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     success.value = "";
     try {
       currentGeneration.value = await api.generate(token.value, activeProject.value.project.id, payload);
-      await selectProject(activeProject.value.project.id);
-      success.value = "新的小说内容已经生成。";
+      await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
+      success.value = "New content generated.";
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "生成失败。";
+      error.value = err instanceof Error ? err.message : "Generation failed.";
     } finally {
       loading.value = false;
     }

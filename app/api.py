@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,8 @@ from .graphrag_service import GraphRAGService
 from .models import GenerationRun, GraphWorkspace, Memory, Project, SourceDocument, User
 from .story_service import StoryGenerationService
 
+logger = logging.getLogger(__name__)
+
 
 def _project_or_404(db: Session, user_id: int, project_id: int) -> Project:
     project = db.scalar(select(Project).where(Project.id == project_id, Project.owner_id == user_id))
@@ -51,6 +54,12 @@ def _workspace_record(db: Session, project: Project, workspace_path: Path) -> Gr
     db.add(record)
     db.flush()
     return record
+
+
+def _mark_project_stale(project: Project) -> None:
+    project.indexing_status = "stale"
+    if project.graph_workspace is not None:
+        project.graph_workspace.neo4j_sync_status = "stale"
 
 
 def create_app() -> FastAPI:
@@ -92,6 +101,7 @@ def create_app() -> FastAPI:
                 record.last_indexed_at = datetime.utcnow()
                 db.commit()
             except Exception:
+                logger.exception("Background GraphRAG index failed for project_id=%s", project_id)
                 db.rollback()
                 project = db.get(Project, project_id)
                 if project is None:
@@ -210,7 +220,7 @@ def create_app() -> FastAPI:
             importance=payload.importance,
         )
         db.add(memory)
-        project.indexing_status = "stale"
+        _mark_project_stale(project)
         db.commit()
         db.refresh(memory)
         return MemoryOut.model_validate(memory)
@@ -230,7 +240,7 @@ def create_app() -> FastAPI:
             source_kind=payload.source_kind,
         )
         db.add(source)
-        project.indexing_status = "stale"
+        _mark_project_stale(project)
         db.commit()
         db.refresh(source)
         return SourceOut.model_validate(source)
