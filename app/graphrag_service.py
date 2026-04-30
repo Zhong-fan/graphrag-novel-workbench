@@ -270,8 +270,9 @@ class GraphRAGService:
         env["GRAPHRAG_API_BASE"] = self.settings.openai_base_url
         env["GRAPHRAG_CHAT_MODEL"] = self.settings.utility_model
         env["GRAPHRAG_EMBEDDING_MODEL"] = self.settings.embedding_model
+        env["GRAPH_MVP_LOCAL_EMBEDDINGS"] = "1" if self.settings.graphrag_local_embeddings else "0"
         completed = subprocess.run(
-            ["python", "-m", "graphrag", *args],
+            ["python", "-m", "app.graphrag_cli", *args],
             cwd=str(cwd),
             env=env,
             capture_output=True,

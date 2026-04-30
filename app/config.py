@@ -30,6 +30,7 @@ class Settings:
     auth_exp_hours: int
     graphrag_response_type: str
     graphrag_index_method: str
+    graphrag_local_embeddings: bool
 
     @property
     def sqlalchemy_database_url(self) -> str:
@@ -52,6 +53,12 @@ def _normalize_index_method(method: str) -> str:
     if normalized in allowed:
         return normalized
     return "fast"
+
+
+def _parse_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _load_dotenv(path: Path) -> dict[str, str]:
@@ -109,5 +116,9 @@ def load_settings() -> Settings:
         or "Multiple Paragraphs",
         graphrag_index_method=_normalize_index_method(
             _resolve("GRAPH_MVP_GRAPHRAG_INDEX_METHOD", dotenv_values, "fast") or "fast"
+        ),
+        graphrag_local_embeddings=_parse_bool(
+            _resolve("GRAPH_MVP_LOCAL_EMBEDDINGS", dotenv_values, "true"),
+            default=True,
         ),
     )

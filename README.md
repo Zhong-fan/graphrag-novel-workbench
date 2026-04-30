@@ -1,97 +1,60 @@
-# GraphRAG 中文小说工作台
+# GraphRAG Novel Workbench
 
-这是一个按 `GraphRAG + MySQL + Neo4j + Vue` 路线重构中的中文小说项目。
+一个面向中文小说创作的工作台。
 
-当前目标不是“命令行多生成几章示例”，而是把下面这套完整应用做出来：
+它把项目资料、长期记忆和参考文本整理进 GraphRAG 索引，再结合 MySQL、Neo4j 和真实模型接口，提供一套可操作的写作流程。
 
-- `Vue 3 + TypeScript` 前端工作台
-- `FastAPI` 应用服务层
-- `MySQL` 用户、项目、记忆、资料、生成历史
-- 官方 `GraphRAG` 索引与查询
-- `Neo4j` 图谱同步与图关系承载
-- 真实模型写作，不走本地 mock
+## 功能
 
-## 当前实现路线
-
-系统现在按下面这条主链工作：
-
-1. 用户注册并登录
-2. 创建自己的小说项目
-3. 录入世界设定、写作规则、长期记忆、参考资料
-4. 后端把这些内容写入 `GraphRAG workspace`
-5. 官方 `GraphRAG` 执行 `init / index / query`
-6. 索引结果同步一份到 `Neo4j`
-7. 写作请求先走 `GraphRAG local/global` 查询
-8. 查询结果再交给写作模型生成正文
-9. 生成历史、记忆、项目归属保存在 `MySQL`
-
-这和之前的自定义图检索路线不同。现在的方向是“应用层自建，GraphRAG 官方链路接入”。
+- 用户注册、登录
+- 小说项目创建与管理
+- 长期记忆录入
+- 参考资料录入
+- GraphRAG 索引
+- 基于检索结果生成正文
+- 生成历史查看
+- Neo4j 图谱投影
 
 ## 技术栈
 
-后端：
+- 后端：FastAPI、SQLAlchemy、PyMySQL
+- 前端：Vue 3、TypeScript、Pinia、Vite
+- 检索：Microsoft GraphRAG
+- 数据库：MySQL 8、Neo4j 5
+
+## 运行前准备
+
+需要本机具备：
 
 - Python 3.11
-- FastAPI
-- SQLAlchemy 2
-- PyMySQL
-- Neo4j Python Driver
-- 官方 GraphRAG
+- Node.js 18+
+- Docker Desktop
 
-前端：
+## 快速开始
 
-- Vue 3
-- TypeScript
-- Vite
-- Pinia
+1. 安装后端依赖
 
-基础设施：
-
-- Docker Compose
-- MySQL 8.4
-- Neo4j 5
-
-## 目录结构
-
-```text
-MVP/
-  app/
-    api.py
-    auth.py
-    config.py
-    contracts.py
-    db.py
-    graphrag_service.py
-    llm.py
-    models.py
-    story_service.py
-  frontend/
-    src/
-    package.json
-    vite.config.ts
-  scripts/
-    start-workbench.ps1
-  workspace/
-    graphrag_projects/
-  docker-compose.yml
-  requirements.txt
-  .env
+```powershell
+python -m pip install -r requirements.txt
 ```
 
-## 环境配置
+2. 安装前端依赖
 
-项目默认从根目录 `.env` 读取配置。当前关键项：
+```powershell
+cd frontend
+npm install
+cd ..
+```
+
+3. 准备环境变量
+
+把 [`.env.example`](./.env.example) 复制为 `.env`，再按你的环境填写。
+
+至少需要确认这些项：
 
 ```dotenv
-GRAPH_MVP_LLM_MODE=openai
-GRAPH_MVP_WRITER_MODEL=gpt-5.5
-GRAPH_MVP_UTILITY_MODEL=gpt-5.4-mini
-GRAPH_MVP_EMBEDDING_MODEL=text-embedding-3-large
-GRAPH_MVP_GRAPHRAG_RESPONSE_TYPE=Multiple Paragraphs
-GRAPH_MVP_GRAPHRAG_INDEX_METHOD=fast
-
-OPENAI_API_KEY=...
-OPENAI_BASE_URL=.../v1
+OPENAI_API_KEY=your-api-key
+OPENAI_BASE_URL=https://api.openai.com/v1
 
 MYSQL_HOST=127.0.0.1
 MYSQL_PORT=3307
@@ -105,51 +68,21 @@ NEO4J_PASSWORD=graphrag-password
 NEO4J_DATABASE=neo4j
 
 AUTH_SECRET=replace-this-with-a-long-random-secret
-AUTH_EXP_HOURS=168
 ```
 
-注意：项目自己的 MySQL 容器当前映射到宿主机 `3307`，避免和本机已有 MySQL 冲突。
-
-## 启动基础设施
+4. 启动基础服务
 
 ```powershell
 docker compose up -d mysql neo4j
 ```
 
-服务端口：
-
-- MySQL: `127.0.0.1:3307`
-- Neo4j Bolt: `127.0.0.1:7687`
-- Neo4j Browser: `http://127.0.0.1:7474`
-
-## 安装依赖
-
-后端：
-
-```powershell
-python -m pip install -r requirements.txt
-```
-
-前端：
-
-```powershell
-cd frontend
-npm install
-cd ..
-```
-
-## 启动后端
+5. 启动后端
 
 ```powershell
 python -m app.api
 ```
 
-后端启动后访问：
-
-- `http://127.0.0.1:8000`
-- `http://127.0.0.1:8000/api/bootstrap`
-
-## 启动前端开发模式
+6. 启动前端开发服务器
 
 ```powershell
 cd frontend
@@ -158,77 +91,95 @@ npm run dev
 
 然后打开：
 
-- `http://127.0.0.1:5173`
+- 前端：`http://127.0.0.1:5173`
+- 后端：`http://127.0.0.1:8000`
+- 启动检查：`http://127.0.0.1:8000/api/bootstrap`
+- Neo4j Browser：`http://127.0.0.1:7474`
 
-Vite 会把 `/api` 代理到 `http://127.0.0.1:8000`。
+## 默认配置说明
 
-## 构建前端成品
+项目默认更偏向开发联调，而不是大规模生产运行。
 
-```powershell
-cd frontend
-npm run build
-cd ..
+关键默认值：
+
+- `GRAPH_MVP_GRAPHRAG_INDEX_METHOD=fast`
+- `GRAPH_MVP_GRAPHRAG_RESPONSE_TYPE=Multiple Paragraphs`
+- `GRAPH_MVP_LOCAL_EMBEDDINGS=true`
+
+说明：
+
+- `fast` 索引更适合开发时快速验证主链
+- `GRAPH_MVP_LOCAL_EMBEDDINGS=true` 会为 GraphRAG CLI 启用项目内的本地 fallback embeddings
+- 这样做的目的，是避免某些 OpenAI 兼容接口不提供 embeddings 时，索引过程长期卡在重试
+
+如果你的模型服务本身支持真实 embeddings，可以把：
+
+```dotenv
+GRAPH_MVP_LOCAL_EMBEDDINGS=false
 ```
 
-构建结果在 `frontend/dist/`，之后由 FastAPI 直接托管。
+## 推荐使用流程
 
-## 一键启动脚本
+1. 注册并登录
+2. 创建一个小说项目
+3. 填写项目前提、世界设定、写作规则
+4. 添加记忆和参考资料
+5. 触发 GraphRAG 索引
+6. 等待项目状态变为 `ready`
+7. 发起生成请求
+8. 查看生成历史与检索上下文
 
-```powershell
-.\scripts\start-workbench.ps1
+## 项目结构
+
+```text
+MVP/
+  app/                后端服务与 GraphRAG 集成
+  frontend/           Vue 工作台
+  scripts/            启动脚本
+  workspace/          GraphRAG workspace
+  output/             运行输出
+  docker-compose.yml  MySQL / Neo4j
+  requirements.txt
 ```
 
-这个脚本会：
+## 常见问题
 
-1. 启动 `MySQL + Neo4j`
-2. 构建前端
-3. 启动 FastAPI
+### 1. 点击索引后一直是 `indexing`
 
-## 写作规范
+优先检查：
 
-正文标点规则固定为：
+- `.env` 里的模型接口是否可用
+- Docker 里的 MySQL、Neo4j 是否正常运行
+- 后端日志和 `workspace/graphrag_projects/.../logs/indexing-engine.log`
 
-- 普通对话使用 `「」`
-- 嵌套引号使用 `『』`
+### 2. OpenAI 兼容接口可以聊天，但索引失败
 
-这条规则会作为项目写作约束进入生成流程。
+这通常说明：
 
-## 当前状态
+- chat 接口可用
+- embedding 接口不可用
 
-开发联调建议：
-- 默认把 `GRAPH_MVP_GRAPHRAG_INDEX_METHOD` 设为 `fast`，先把主链跑通
-- 只有在需要更完整图谱质量时，再切回 `standard`
-- `GraphRAG index` 天然比 `query` 慢，适合做后台任务，不适合阻塞式前台等待
+当前项目默认已经提供本地 fallback embeddings，用于降低这类问题对联调的影响。
 
-当前已经完成或落地的部分：
+### 3. MySQL 端口冲突
 
-- 新的认证与项目模型
-- `MySQL` 数据层
-- `GraphRAG workspace` 生成与配置补丁
-- `Neo4j` 同步服务骨架
-- 新版 Vue 工作台结构
-- 新版 API 主路径
+项目默认映射：
 
-当前还在继续收口的部分：
+- MySQL：`3307`
 
-- 用真实项目数据打通 GraphRAG `index/query`
-- 完整验证 Neo4j 同步字段映射
-- 清理旧的 MVP 遗留模块
-- 更完整的前端交互与错误反馈
+如果本机已有 MySQL，通常不需要改动；只要保证 `.env` 和 `docker-compose.yml` 一致即可。
 
 ## 说明
 
-当前项目没有用 `LangChain`。
+这个仓库当前更适合：
 
-这是有意选择。你这个项目的关键是：
+- 本地开发
+- 产品原型验证
+- GraphRAG 写作流程实验
 
-- 应用层状态必须自己掌控
-- GraphRAG 必须接官方链路
-- 登录、记忆、项目归属必须是业务系统的一部分
+如果要走生产环境，还需要继续加强：
 
-所以正确分层是：
-
-- `MySQL` 管应用状态
-- `GraphRAG` 管索引和查询
-- `Neo4j` 管图关系投影
-- `Vue + FastAPI` 管产品形态
+- 后台任务管理
+- 失败重试策略
+- 更清晰的索引进度展示
+- 更稳定的模型与 embedding provider
