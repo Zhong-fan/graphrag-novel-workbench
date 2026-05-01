@@ -3,41 +3,80 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
-from .auth import get_current_user, hash_password, issue_token, verify_password
+from .auth import (
+    create_captcha,
+    get_current_user,
+    get_optional_user,
+    hash_password,
+    issue_token,
+    verify_captcha,
+    verify_password,
+)
 from .config import load_settings
 from .contracts import (
     AuthResponse,
     BootstrapResponse,
+    CaptchaChallenge,
+    FavoriteToggleResponse,
     GenerateRequest,
     GenerationOut,
     IndexRequest,
     IndexResponse,
+    LikeToggleResponse,
     LoginRequest,
+    NovelCardOut,
+    NovelChapterOut,
+    NovelDetailOut,
     MemoryCreateRequest,
     MemoryOut,
+    AppendNovelChapterRequest,
+    NovelCommentCreateRequest,
+    NovelCommentOut,
+    PublishNovelRequest,
     ProjectCreateRequest,
     ProjectDetailResponse,
     ProjectOut,
     RegisterRequest,
     SourceCreateRequest,
     SourceOut,
+    UpdateNovelRequest,
     UserOut,
+    UserProfileOut,
+    UserProfileUpdateRequest,
 )
 from .db import db_session, get_db, init_db
 from .graphrag_service import GraphRAGService
-from .models import GenerationRun, GraphWorkspace, Memory, Project, SourceDocument, User
+from .models import (
+    GenerationRun,
+    GraphWorkspace,
+    Memory,
+    Novel,
+    NovelChapter,
+    NovelComment,
+    NovelFavorite,
+    NovelLike,
+    Project,
+    SourceDocument,
+    User,
+    UserProfile,
+)
 from .story_service import StoryGenerationService
 
 logger = logging.getLogger(__name__)
+
+
+def _username_to_internal_email(username: str) -> str:
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    suffix = abs(hash((username, timestamp))) % 100000
+    return f"user-{timestamp}-{suffix}@local.invalid"
 
 
 def _project_or_404(db: Session, user_id: int, project_id: int) -> Project:
@@ -62,6 +101,182 @@ def _mark_project_stale(project: Project) -> None:
         project.graph_workspace.neo4j_sync_status = "stale"
 
 
+def _user_out(user: User) -> UserOut:
+    return UserOut(id=user.id, username=user.display_name, email=user.email)
+
+
+def _novel_excerpt(novel: Novel) -> str:
+    chapter = sorted(novel.chapters, key=lambda item: item.chapter_no)[0] if novel.chapters else None
+    if chapter is not None and chapter.content.strip():
+        return chapter.content.strip()[:160]
+    if chapter is not None and chapter.summary.strip():
+        return chapter.summary.strip()[:160]
+    return novel.summary.strip()[:160]
+
+
+def _novel_card_out(novel: Novel, current_user_id: int | None = None) -> NovelCardOut:
+    favorite_user_ids = {item.user_id for item in novel.favorites}
+    like_user_ids = {item.user_id for item in novel.likes}
+    return NovelCardOut(
+        id=novel.id,
+        title=novel.title,
+        author=novel.author_name,
+        summary=novel.summary,
+        genre=novel.genre,
+        tagline=novel.tagline,
+        cover_url=novel.cover_url,
+        status=novel.status,
+        visibility=novel.visibility,
+        likes_count=len(novel.likes),
+        favorites_count=len(novel.favorites),
+        comments_count=len(novel.comments),
+        chapters_count=len(novel.chapters),
+        latest_excerpt=_novel_excerpt(novel),
+        is_liked=current_user_id in like_user_ids if current_user_id is not None else False,
+        is_favorited=current_user_id in favorite_user_ids if current_user_id is not None else False,
+        created_at=novel.created_at,
+        updated_at=novel.updated_at,
+    )
+
+
+def _novel_detail_out(novel: Novel, current_user_id: int | None = None) -> NovelDetailOut:
+    return NovelDetailOut(
+        **_novel_card_out(novel, current_user_id=current_user_id).model_dump(),
+        chapters=[
+            NovelChapterOut.model_validate(chapter)
+            for chapter in sorted(novel.chapters, key=lambda item: item.chapter_no)
+        ],
+    )
+
+
+def _novel_comment_out(comment: NovelComment) -> NovelCommentOut:
+    return NovelCommentOut(
+        id=comment.id,
+        user_id=comment.user_id,
+        username=comment.user.display_name,
+        content=comment.content,
+        created_at=comment.created_at,
+    )
+
+
+def _generation_or_404(db: Session, project_id: int, generation_id: int) -> GenerationRun:
+    generation = db.scalar(
+        select(GenerationRun).where(GenerationRun.project_id == project_id, GenerationRun.id == generation_id)
+    )
+    if generation is None:
+        raise HTTPException(status_code=404, detail="生成结果不存在。")
+    return generation
+
+
+def _novel_viewable_or_404(db: Session, novel_id: int, current_user_id: int | None = None) -> Novel:
+    novel = db.scalar(
+        select(Novel)
+        .options(
+            selectinload(Novel.owner),
+            selectinload(Novel.chapters),
+            selectinload(Novel.likes),
+            selectinload(Novel.favorites),
+            selectinload(Novel.comments),
+        )
+        .where(Novel.id == novel_id)
+    )
+    if novel is None:
+        raise HTTPException(status_code=404, detail="作品不存在。")
+    if novel.visibility != "public" and novel.owner_id != current_user_id:
+        raise HTTPException(status_code=404, detail="作品不存在。")
+    return novel
+
+
+def _novel_owned_or_404(db: Session, user_id: int, novel_id: int) -> Novel:
+    novel = db.scalar(
+        select(Novel)
+        .options(
+            selectinload(Novel.owner),
+            selectinload(Novel.chapters),
+            selectinload(Novel.likes),
+            selectinload(Novel.favorites),
+            selectinload(Novel.comments),
+        )
+        .where(Novel.id == novel_id, Novel.owner_id == user_id)
+    )
+    if novel is None:
+        raise HTTPException(status_code=404, detail="作品不存在或无权限。")
+    return novel
+
+
+def _ensure_seed_novels(db: Session) -> None:
+    published_exists = db.scalar(select(Novel.id).where(Novel.visibility == "public").limit(1))
+    if published_exists is not None:
+        return
+
+    seed_user = db.scalar(select(User).where(User.display_name == "书城编辑部"))
+    if seed_user is None:
+        password_hash, password_salt = hash_password("SeedUser123")
+        seed_user = User(
+            email="seed-bookstore@local.invalid",
+            display_name="书城编辑部",
+            password_hash=password_hash,
+            password_salt=password_salt,
+        )
+        db.add(seed_user)
+        db.flush()
+
+    seed_payloads = [
+        {
+            "title": "雨停之前的十分钟",
+            "genre": "都市情感",
+            "tagline": "高架桥下的重逢，像一场迟来的告白。",
+            "summary": "一场暴雨把多年未见的两个人重新推回同一片屋檐下。",
+            "content": "雨水从广告牌边缘一滴一滴落下来，她撑着伞站在便利店门口，看见那个人从街对面跑来，像从很多年前的傍晚里穿出来。",
+        },
+        {
+            "title": "深蓝地铁终点站",
+            "genre": "轻科幻",
+            "tagline": "所有错过的人，都在最后一站留下回声。",
+            "summary": "一列地铁在城市深夜尽头缓缓停下，把遗失的记忆推回现实。",
+            "content": "列车驶入终点站时，车窗外的城市灯光像浸在海里。她听见广播报站，却突然觉得这声音像在叫很久以前的自己。",
+        },
+        {
+            "title": "春天先路过阳台",
+            "genre": "治愈日常",
+            "tagline": "两个人和一盆快要枯萎的栀子花，慢慢学会重新生活。",
+            "summary": "一次普通的照料，让两个人重新学会把生活扶正。",
+            "content": "清晨六点，阳光落在洗净的玻璃杯上，像把整个房间擦亮了一遍。她忽然想起，已经很久没有认真看过窗外。",
+        },
+        {
+            "title": "夏夜失物招领",
+            "genre": "青春悬疑",
+            "tagline": "有人在失物招领处寄存了一封没有收件人的信。",
+            "summary": "一封没有署名的信，把平静夏夜撕开了一道口子。",
+            "content": "他把信封翻过来时，封口处还带着一点潮湿，像刚从河边的风里带回来。没有名字，没有地址，只有一句手写的『如果你看见月亮，请替我保密。』",
+        },
+    ]
+
+    for idx, item in enumerate(seed_payloads, start=1):
+        novel = Novel(
+            owner=seed_user,
+            author_name=seed_user.display_name,
+            title=item["title"],
+            summary=item["summary"],
+            genre=item["genre"],
+            tagline=item["tagline"],
+            status="published",
+            visibility="public",
+        )
+        db.add(novel)
+        db.flush()
+        db.add(
+            NovelChapter(
+                novel=novel,
+                title=f"第{idx}章",
+                summary=item["summary"],
+                content=item["content"],
+                chapter_no=1,
+            )
+        )
+    db.commit()
+
+
 def create_app() -> FastAPI:
     settings = load_settings()
     app = FastAPI(
@@ -80,6 +295,8 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def startup() -> None:
         init_db()
+        with db_session() as db:
+            _ensure_seed_novels(db)
 
     def run_index_job(project_id: int) -> None:
         with db_session() as db:
@@ -119,42 +336,80 @@ def create_app() -> FastAPI:
     @app.get("/api/bootstrap", response_model=BootstrapResponse)
     def bootstrap() -> BootstrapResponse:
         return BootstrapResponse(
-            service_name="GraphRAG 中文小说工作台",
+            service_name="中文小说工作台",
             graph_engine="GraphRAG + Neo4j",
             auth_enabled=True,
             writer_model=settings.writer_model,
             utility_model=settings.utility_model,
+            embedding_model=settings.embedding_model,
+            embedding_provider=settings.embedding_provider_label,
+            embedding_base_url=settings.embedding_base_url,
             punctuation_rule="普通对话使用「」，嵌套引号使用『』。",
             query_methods=["local", "global", "drift", "basic"],
         )
 
+    @app.get("/api/auth/captcha", response_model=CaptchaChallenge)
+    def auth_captcha() -> CaptchaChallenge:
+        return CaptchaChallenge(**create_captcha())
+
     @app.post("/api/auth/register", response_model=AuthResponse)
     def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthResponse:
-        exists = db.scalar(select(User).where(User.email == payload.email))
+        if not verify_captcha(payload.captcha_answer, payload.captcha_token):
+            raise HTTPException(status_code=400, detail="验证码错误或已过期。")
+
+        username = payload.username.strip()
+        exists = db.scalar(select(User).where(User.display_name == username))
         if exists is not None:
-            raise HTTPException(status_code=409, detail="该邮箱已注册。")
+            raise HTTPException(status_code=409, detail="用户名已存在。")
+
         password_hash, password_salt = hash_password(payload.password)
         user = User(
-            email=payload.email,
-            display_name=payload.display_name,
+            email=_username_to_internal_email(username),
+            display_name=username,
             password_hash=password_hash,
             password_salt=password_salt,
         )
         db.add(user)
         db.commit()
         db.refresh(user)
-        return AuthResponse(token=issue_token(user.id), user=UserOut.model_validate(user))
+        return AuthResponse(token=issue_token(user.id), user=_user_out(user))
 
     @app.post("/api/auth/login", response_model=AuthResponse)
     def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
-        user = db.scalar(select(User).where(User.email == payload.email))
+        username = payload.username.strip()
+        user = db.scalar(select(User).where(User.display_name == username))
         if user is None or not verify_password(payload.password, user.password_hash, user.password_salt):
-            raise HTTPException(status_code=401, detail="邮箱或密码错误。")
-        return AuthResponse(token=issue_token(user.id), user=UserOut.model_validate(user))
+            raise HTTPException(status_code=401, detail="用户名或密码错误。")
+        return AuthResponse(token=issue_token(user.id), user=_user_out(user))
 
     @app.get("/api/auth/me", response_model=UserOut)
     def me(current_user: User = Depends(get_current_user)) -> UserOut:
-        return UserOut.model_validate(current_user)
+        return _user_out(current_user)
+
+    @app.get("/api/me/profile", response_model=UserProfileOut)
+    def my_profile(current_user: User = Depends(get_current_user)) -> UserProfileOut:
+        profile = current_user.profile
+        if profile is None:
+            return UserProfileOut(bio="", email=None, phone=None)
+        return UserProfileOut(bio=profile.bio, email=profile.email, phone=profile.phone)
+
+    @app.put("/api/me/profile", response_model=UserProfileOut)
+    def update_my_profile(
+        payload: UserProfileUpdateRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> UserProfileOut:
+        profile = current_user.profile
+        if profile is None:
+            profile = UserProfile(user=current_user, bio="", email=None, phone=None)
+            db.add(profile)
+
+        profile.bio = payload.bio.strip()
+        profile.email = payload.email.strip() if payload.email and payload.email.strip() else None
+        profile.phone = payload.phone.strip() if payload.phone and payload.phone.strip() else None
+        db.commit()
+        db.refresh(profile)
+        return UserProfileOut(bio=profile.bio, email=profile.email, phone=profile.phone)
 
     @app.get("/api/projects", response_model=list[ProjectOut])
     def list_projects(
@@ -193,9 +448,7 @@ def create_app() -> FastAPI:
     ) -> ProjectDetailResponse:
         project = _project_or_404(db, current_user.id, project_id)
         generations = db.scalars(
-            select(GenerationRun)
-            .where(GenerationRun.project_id == project.id)
-            .order_by(GenerationRun.created_at.desc())
+            select(GenerationRun).where(GenerationRun.project_id == project.id).order_by(GenerationRun.created_at.desc())
         ).all()
         return ProjectDetailResponse(
             project=ProjectOut.model_validate(project),
@@ -203,6 +456,285 @@ def create_app() -> FastAPI:
             sources=[SourceOut.model_validate(item) for item in project.source_documents],
             generations=[GenerationOut.model_validate(item) for item in generations],
         )
+
+    @app.get("/api/novels", response_model=list[NovelCardOut])
+    def list_novels(
+        db: Session = Depends(get_db),
+        current_user: User | None = Depends(get_optional_user),
+    ) -> list[NovelCardOut]:
+        novels = db.scalars(
+            select(Novel)
+            .options(
+                selectinload(Novel.owner),
+                selectinload(Novel.chapters),
+                selectinload(Novel.likes),
+                selectinload(Novel.favorites),
+                selectinload(Novel.comments),
+            )
+            .where(Novel.visibility == "public")
+            .order_by(Novel.updated_at.desc())
+        ).unique().all()
+        current_user_id = current_user.id if current_user is not None else None
+        return [_novel_card_out(item, current_user_id=current_user_id) for item in novels]
+
+    @app.get("/api/novels/{novel_id}", response_model=NovelDetailOut)
+    def novel_detail(
+        novel_id: int,
+        db: Session = Depends(get_db),
+        current_user: User | None = Depends(get_optional_user),
+    ) -> NovelDetailOut:
+        current_user_id = current_user.id if current_user is not None else None
+        novel = _novel_viewable_or_404(db, novel_id, current_user_id=current_user_id)
+        return _novel_detail_out(novel, current_user_id=current_user_id)
+
+    @app.get("/api/me/favorites", response_model=list[NovelCardOut])
+    def my_favorites(
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> list[NovelCardOut]:
+        favorites = db.scalars(
+            select(NovelFavorite)
+            .options(
+                selectinload(NovelFavorite.novel).selectinload(Novel.owner),
+                selectinload(NovelFavorite.novel).selectinload(Novel.chapters),
+                selectinload(NovelFavorite.novel).selectinload(Novel.likes),
+                selectinload(NovelFavorite.novel).selectinload(Novel.favorites),
+                selectinload(NovelFavorite.novel).selectinload(Novel.comments),
+            )
+            .where(NovelFavorite.user_id == current_user.id)
+            .order_by(NovelFavorite.created_at.desc())
+        ).all()
+        novels = [item.novel for item in favorites if item.novel.visibility == "public"]
+        return [_novel_card_out(item, current_user_id=current_user.id) for item in novels]
+
+    @app.get("/api/me/novels", response_model=list[NovelCardOut])
+    def my_novels(
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> list[NovelCardOut]:
+        novels = db.scalars(
+            select(Novel)
+            .options(
+                selectinload(Novel.owner),
+                selectinload(Novel.chapters),
+                selectinload(Novel.likes),
+                selectinload(Novel.favorites),
+                selectinload(Novel.comments),
+            )
+            .where(Novel.owner_id == current_user.id)
+            .order_by(Novel.updated_at.desc())
+        ).unique().all()
+        return [_novel_card_out(item, current_user_id=current_user.id) for item in novels]
+
+    @app.post("/api/novels/{novel_id}/favorite", response_model=FavoriteToggleResponse)
+    def create_favorite(
+        novel_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> FavoriteToggleResponse:
+        novel = db.get(Novel, novel_id)
+        if novel is None or novel.visibility != "public":
+            raise HTTPException(status_code=404, detail="作品不存在。")
+        exists = db.scalar(
+            select(NovelFavorite).where(NovelFavorite.novel_id == novel_id, NovelFavorite.user_id == current_user.id)
+        )
+        if exists is None:
+            db.add(NovelFavorite(novel=novel, user=current_user))
+            db.commit()
+            db.refresh(novel)
+        return FavoriteToggleResponse(
+            favorited=True,
+            novel_id=novel.id,
+            favorites_count=len(novel.favorites),
+        )
+
+    @app.delete("/api/novels/{novel_id}/favorite", response_model=FavoriteToggleResponse)
+    def delete_favorite(
+        novel_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> FavoriteToggleResponse:
+        novel = db.get(Novel, novel_id)
+        if novel is None or novel.visibility != "public":
+            raise HTTPException(status_code=404, detail="作品不存在。")
+        favorite = db.scalar(
+            select(NovelFavorite).where(NovelFavorite.novel_id == novel_id, NovelFavorite.user_id == current_user.id)
+        )
+        if favorite is not None:
+            db.delete(favorite)
+            db.commit()
+            db.refresh(novel)
+        return FavoriteToggleResponse(
+            favorited=False,
+            novel_id=novel.id,
+            favorites_count=len(novel.favorites),
+        )
+
+    @app.post("/api/novels/{novel_id}/like", response_model=LikeToggleResponse)
+    def create_like(
+        novel_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> LikeToggleResponse:
+        novel = db.get(Novel, novel_id)
+        if novel is None or novel.visibility != "public":
+            raise HTTPException(status_code=404, detail="作品不存在。")
+        exists = db.scalar(select(NovelLike).where(NovelLike.novel_id == novel_id, NovelLike.user_id == current_user.id))
+        if exists is None:
+            db.add(NovelLike(novel=novel, user=current_user))
+            db.commit()
+            db.refresh(novel)
+        return LikeToggleResponse(
+            liked=True,
+            novel_id=novel.id,
+            likes_count=len(novel.likes),
+        )
+
+    @app.delete("/api/novels/{novel_id}/like", response_model=LikeToggleResponse)
+    def delete_like(
+        novel_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> LikeToggleResponse:
+        novel = db.get(Novel, novel_id)
+        if novel is None or novel.visibility != "public":
+            raise HTTPException(status_code=404, detail="作品不存在。")
+        like = db.scalar(select(NovelLike).where(NovelLike.novel_id == novel_id, NovelLike.user_id == current_user.id))
+        if like is not None:
+            db.delete(like)
+            db.commit()
+            db.refresh(novel)
+        return LikeToggleResponse(
+            liked=False,
+            novel_id=novel.id,
+            likes_count=len(novel.likes),
+        )
+
+    @app.get("/api/novels/{novel_id}/comments", response_model=list[NovelCommentOut])
+    def list_novel_comments(
+        novel_id: int,
+        db: Session = Depends(get_db),
+        current_user: User | None = Depends(get_optional_user),
+    ) -> list[NovelCommentOut]:
+        current_user_id = current_user.id if current_user is not None else None
+        _novel_viewable_or_404(db, novel_id, current_user_id=current_user_id)
+        comments = db.scalars(
+            select(NovelComment)
+            .options(selectinload(NovelComment.user))
+            .where(NovelComment.novel_id == novel_id)
+            .order_by(NovelComment.created_at.desc())
+        ).all()
+        return [_novel_comment_out(item) for item in comments]
+
+    @app.post("/api/novels/{novel_id}/comments", response_model=NovelCommentOut)
+    def create_novel_comment(
+        novel_id: int,
+        payload: NovelCommentCreateRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> NovelCommentOut:
+        novel = _novel_viewable_or_404(db, novel_id, current_user_id=current_user.id)
+        comment = NovelComment(
+            novel=novel,
+            user=current_user,
+            content=payload.content.strip(),
+        )
+        db.add(comment)
+        db.commit()
+        db.refresh(comment)
+        db.refresh(novel)
+        return _novel_comment_out(comment)
+
+    @app.post("/api/novels/from-generation", response_model=NovelDetailOut)
+    def publish_novel_from_generation(
+        payload: PublishNovelRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> NovelDetailOut:
+        project = _project_or_404(db, current_user.id, payload.project_id)
+        generation = _generation_or_404(db, project.id, payload.generation_id)
+
+        novel = Novel(
+            owner=current_user,
+            author_name=payload.author_name.strip(),
+            title=payload.title.strip(),
+            summary=payload.summary.strip() or generation.summary,
+            genre=project.genre,
+            tagline=payload.tagline.strip(),
+            status="published",
+            visibility=payload.visibility,
+        )
+        db.add(novel)
+        db.flush()
+
+        chapter_title = generation.title.strip() or "第一章"
+        db.add(
+            NovelChapter(
+                novel=novel,
+                title=chapter_title,
+                summary=generation.summary,
+                content=generation.content,
+                chapter_no=1,
+            )
+        )
+        db.commit()
+
+        created = db.scalar(
+            select(Novel)
+            .options(
+                selectinload(Novel.owner),
+                selectinload(Novel.chapters),
+                selectinload(Novel.likes),
+                selectinload(Novel.favorites),
+                selectinload(Novel.comments),
+            )
+            .where(Novel.id == novel.id)
+        )
+        if created is None:
+            raise HTTPException(status_code=500, detail="作品发布失败。")
+        return _novel_detail_out(created, current_user_id=current_user.id)
+
+    @app.put("/api/novels/{novel_id}", response_model=NovelDetailOut)
+    def update_novel(
+        novel_id: int,
+        payload: UpdateNovelRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> NovelDetailOut:
+        novel = _novel_owned_or_404(db, current_user.id, novel_id)
+        novel.title = payload.title.strip()
+        novel.author_name = payload.author_name.strip()
+        novel.summary = payload.summary.strip()
+        novel.tagline = payload.tagline.strip()
+        novel.visibility = payload.visibility
+        db.commit()
+        db.refresh(novel)
+        return _novel_detail_out(novel, current_user_id=current_user.id)
+
+    @app.post("/api/novels/{novel_id}/chapters/from-generation", response_model=NovelDetailOut)
+    def append_novel_chapter_from_generation(
+        novel_id: int,
+        payload: AppendNovelChapterRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> NovelDetailOut:
+        novel = _novel_owned_or_404(db, current_user.id, novel_id)
+        project = _project_or_404(db, current_user.id, payload.project_id)
+        generation = _generation_or_404(db, project.id, payload.generation_id)
+        next_chapter_no = max((item.chapter_no for item in novel.chapters), default=0) + 1
+
+        db.add(
+            NovelChapter(
+                novel=novel,
+                title=payload.title.strip() or generation.title.strip() or f"第{next_chapter_no}章",
+                summary=generation.summary,
+                content=generation.content,
+                chapter_no=next_chapter_no,
+            )
+        )
+        db.commit()
+        db.refresh(novel)
+        return _novel_detail_out(novel, current_user_id=current_user.id)
 
     @app.post("/api/projects/{project_id}/memories", response_model=MemoryOut)
     def create_memory(

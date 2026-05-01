@@ -28,6 +28,21 @@ class User(Base, TimestampMixin):
     password_salt: Mapped[bytes] = mapped_column(LargeBinary(16), nullable=False)
 
     projects: Mapped[list["Project"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
+    profile: Mapped["UserProfile | None"] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    owned_novels: Mapped[list["Novel"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
+    novel_likes: Mapped[list["NovelLike"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    novel_favorites: Mapped[list["NovelFavorite"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    novel_comments: Mapped[list["NovelComment"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 
 class Project(Base, TimestampMixin):
@@ -116,3 +131,87 @@ class GenerationRun(Base, TimestampMixin):
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
 
     project: Mapped["Project"] = relationship(back_populates="generations")
+
+
+class UserProfile(Base, TimestampMixin):
+    __tablename__ = "user_profiles"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_user_profiles_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    bio: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(60), nullable=True)
+
+    user: Mapped["User"] = relationship(back_populates="profile")
+
+
+class Novel(Base, TimestampMixin):
+    __tablename__ = "novels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    author_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    genre: Mapped[str] = mapped_column(String(100), nullable=False)
+    tagline: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    cover_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="draft", nullable=False)
+    visibility: Mapped[str] = mapped_column(String(40), default="private", nullable=False)
+
+    owner: Mapped["User"] = relationship(back_populates="owned_novels")
+    chapters: Mapped[list["NovelChapter"]] = relationship(back_populates="novel", cascade="all, delete-orphan")
+    likes: Mapped[list["NovelLike"]] = relationship(back_populates="novel", cascade="all, delete-orphan")
+    favorites: Mapped[list["NovelFavorite"]] = relationship(back_populates="novel", cascade="all, delete-orphan")
+    comments: Mapped[list["NovelComment"]] = relationship(back_populates="novel", cascade="all, delete-orphan")
+
+
+class NovelChapter(Base, TimestampMixin):
+    __tablename__ = "novel_chapters"
+    __table_args__ = (UniqueConstraint("novel_id", "chapter_no", name="uq_novel_chapters_novel_chapter_no"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    novel_id: Mapped[int] = mapped_column(ForeignKey("novels.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    chapter_no: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    novel: Mapped["Novel"] = relationship(back_populates="chapters")
+
+
+class NovelLike(Base, TimestampMixin):
+    __tablename__ = "novel_likes"
+    __table_args__ = (UniqueConstraint("novel_id", "user_id", name="uq_novel_likes_novel_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    novel_id: Mapped[int] = mapped_column(ForeignKey("novels.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    novel: Mapped["Novel"] = relationship(back_populates="likes")
+    user: Mapped["User"] = relationship(back_populates="novel_likes")
+
+
+class NovelFavorite(Base, TimestampMixin):
+    __tablename__ = "novel_favorites"
+    __table_args__ = (UniqueConstraint("novel_id", "user_id", name="uq_novel_favorites_novel_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    novel_id: Mapped[int] = mapped_column(ForeignKey("novels.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    novel: Mapped["Novel"] = relationship(back_populates="favorites")
+    user: Mapped["User"] = relationship(back_populates="novel_favorites")
+
+
+class NovelComment(Base, TimestampMixin):
+    __tablename__ = "novel_comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    novel_id: Mapped[int] = mapped_column(ForeignKey("novels.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    novel: Mapped["Novel"] = relationship(back_populates="comments")
+    user: Mapped["User"] = relationship(back_populates="novel_comments")
