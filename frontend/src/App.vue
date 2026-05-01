@@ -360,8 +360,8 @@ watch(
   <div class="shell">
     <header class="topbar">
       <div class="brand">
-        <p class="eyebrow">PinkShelf Stories</p>
-        <h1>{{ bootstrap?.service_name ?? "中文小说工作台" }}</h1>
+        <p class="eyebrow">ChenFlow Workbench</p>
+        <h1>{{ bootstrap?.service_name ?? "晨流写作台" }}</h1>
       </div>
 
       <nav class="topnav" aria-label="Primary">

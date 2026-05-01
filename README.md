@@ -1,185 +1,169 @@
-# GraphRAG Novel Workbench
+# 晨流写作台 · ChenFlow Workbench
 
-一个面向中文小说创作的工作台。
+一个面向中文小说创作的本地工作台。
 
-它把项目资料、长期记忆和参考文本整理进 GraphRAG 索引，再结合 MySQL、Neo4j 和真实模型接口，提供一套可操作的写作流程。
+`晨流写作台（ChenFlow Workbench）` 用来把小说项目设定、长期记忆、参考资料、生成结果和作品发布串成一条完整创作链路。
 
-## 功能
-
-- 用户注册、登录
-- 小说项目创建与管理
-- 长期记忆录入
-- 参考资料录入
-- GraphRAG 索引
-- 基于检索结果生成正文
-- 生成历史查看
-- Neo4j 图谱投影
-
-## 技术栈
-
-- 后端：FastAPI、SQLAlchemy、PyMySQL
-- 前端：Vue 3、TypeScript、Pinia、Vite
-- 检索：Microsoft GraphRAG
-- 数据库：MySQL 8、Neo4j 5
+它把项目设定、长期记忆和参考资料整理起来，再围绕当前写作目标生成标题、摘要和正文。
 
 ## 运行前准备
 
-需要本机具备：
+本机需要先安装：
 
 - Python 3.11
 - Node.js 18+
 - Docker Desktop
+- Ollama
 
-## 快速开始
-
-1. 安装后端依赖
-
-```powershell
-python -m pip install -r requirements.txt
-```
-
-2. 安装前端依赖
+并提前拉取本地 embedding 模型：
 
 ```powershell
-cd frontend
-npm install
-cd ..
+ollama pull bge-m3
 ```
 
-3. 准备环境变量
+## 一键启动
 
-把 [`.env.example`](./.env.example) 复制为 `.env`，再按你的环境填写。
+推荐直接双击项目根目录里的 [start-workbench.bat](E:\Computer\Wyc_Xc\MVP\start-workbench.bat)。
 
-至少需要确认这些项：
+也可以在命令行运行：
 
-```dotenv
-OPENAI_API_KEY=your-api-key
-OPENAI_BASE_URL=https://api.openai.com/v1
-
-MYSQL_HOST=127.0.0.1
-MYSQL_PORT=3307
-MYSQL_USER=graph_user
-MYSQL_PASSWORD=graph_password
-MYSQL_DATABASE=graphrag_novel
-
-NEO4J_URI=neo4j://127.0.0.1:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=graphrag-password
-NEO4J_DATABASE=neo4j
-
-AUTH_SECRET=replace-this-with-a-long-random-secret
+```bat
+cd /d E:\Computer\Wyc_Xc\MVP
+start-workbench.bat
 ```
 
-4. 启动基础服务
+这个启动脚本会自动：
+
+1. 检查 `Docker`、`Python`、`npm`、`Ollama` 是否可用
+2. 检查本地 Ollama 里是否已有 `bge-m3`
+3. 启动 `mysql` 和 `neo4j`
+4. 如有需要自动执行前端 `npm install`
+5. 构建前端
+6. 启动后端服务
+
+启动成功后直接打开：
+
+- `http://127.0.0.1:8000`
+- 健康检查：`http://127.0.0.1:8000/api/bootstrap`
+- Neo4j Browser：`http://127.0.0.1:7474`
+
+## 手动启动
+
+如果你想分步调试，也可以手动启动。
+
+1. 启动基础服务
 
 ```powershell
 docker compose up -d mysql neo4j
 ```
 
-5. 启动后端
+2. 启动后端
 
 ```powershell
 python -m app.api
 ```
 
-6. 启动前端开发服务器
+3. 前端开发模式
 
 ```powershell
 cd frontend
+npm install
 npm run dev
 ```
 
-然后打开：
+前端开发地址：
 
-- 前端：`http://127.0.0.1:5173`
-- 后端：`http://127.0.0.1:8000`
-- 启动检查：`http://127.0.0.1:8000/api/bootstrap`
-- Neo4j Browser：`http://127.0.0.1:7474`
+- `http://127.0.0.1:5173`
 
-## 默认配置说明
+## 默认配置
 
-项目默认更偏向开发联调，而不是大规模生产运行。
-
-关键默认值：
-
-- `GRAPH_MVP_GRAPHRAG_INDEX_METHOD=fast`
-- `GRAPH_MVP_GRAPHRAG_RESPONSE_TYPE=Multiple Paragraphs`
-- `GRAPH_MVP_LOCAL_EMBEDDINGS=true`
-
-说明：
-
-- `fast` 索引更适合开发时快速验证主链
-- `GRAPH_MVP_LOCAL_EMBEDDINGS=true` 会为 GraphRAG CLI 启用项目内的本地 fallback embeddings
-- 这样做的目的，是避免某些 OpenAI 兼容接口不提供 embeddings 时，索引过程长期卡在重试
-
-如果你的模型服务本身支持真实 embeddings，可以把：
+默认 embedding 配置使用本地 Ollama：
 
 ```dotenv
+GRAPH_MVP_EMBEDDING_MODEL=bge-m3
+GRAPH_MVP_EMBEDDING_API_KEY=ollama
+GRAPH_MVP_EMBEDDING_BASE_URL=http://127.0.0.1:11434/v1
 GRAPH_MVP_LOCAL_EMBEDDINGS=false
 ```
 
-## 推荐使用流程
+说明：
+
+- `OPENAI_*` 仍然用于写作模型
+- `GRAPH_MVP_EMBEDDING_*` 单独用于本地 embedding
+- `GRAPH_MVP_LOCAL_EMBEDDINGS=false` 表示真正调用 Ollama，而不是项目内 fallback
+
+## 可选：Docker 里的 BGE-M3
+
+如果你不想使用本地 Ollama，也可以切到 `docker-compose.yml` 里的 `bge-m3` 服务：
+
+```powershell
+docker compose up -d bge-m3
+```
+
+对应配置：
+
+```dotenv
+GRAPH_MVP_EMBEDDING_MODEL=BAAI/bge-m3
+GRAPH_MVP_EMBEDDING_API_KEY=dummy
+GRAPH_MVP_EMBEDDING_BASE_URL=http://127.0.0.1:8090/v1
+GRAPH_MVP_LOCAL_EMBEDDINGS=false
+```
+
+## 用户使用流程
 
 1. 注册并登录
-2. 创建一个小说项目
-3. 填写项目前提、世界设定、写作规则
-4. 添加记忆和参考资料
-5. 触发 GraphRAG 索引
-6. 等待项目状态变为 `ready`
-7. 发起生成请求
-8. 查看生成历史与检索上下文
+2. 创建小说项目
+3. 填写故事前提、世界设定、写作规则
+4. 添加长期记忆和参考资料
+5. 点击“整理资料并开始准备”
+6. 等待项目进入可写作状态
+7. 输入当前场景目标
+8. 点击“生成正文”
+9. 将生成结果发布到书城
+10. 在详情页继续管理作品、作者名、评论与章节追加
 
-## 项目结构
+## 目录
 
 ```text
 MVP/
-  app/                后端服务与 GraphRAG 集成
-  frontend/           Vue 工作台
-  scripts/            启动脚本
-  workspace/          GraphRAG workspace
-  output/             运行输出
-  docker-compose.yml  MySQL / Neo4j
-  requirements.txt
+  app/                  后端服务
+  frontend/             前端界面
+  scripts/              辅助启动脚本
+  workspace/            项目工作区
+  output/               运行输出
+  docker-compose.yml    MySQL / Neo4j / 可选 bge-m3
+  start-workbench.bat   Windows 一键启动入口
 ```
 
 ## 常见问题
 
-### 1. 点击索引后一直是 `indexing`
+### 启动脚本提示没有 `bge-m3`
+
+先执行：
+
+```powershell
+ollama pull bge-m3
+```
+
+### 页面打不开
 
 优先检查：
 
-- `.env` 里的模型接口是否可用
-- Docker 里的 MySQL、Neo4j 是否正常运行
-- 后端日志和 `workspace/graphrag_projects/.../logs/indexing-engine.log`
+- Docker Desktop 是否已经启动
+- `ollama` 是否正在运行
+- `mysql` 和 `neo4j` 容器是否正常启动
+- 当前窗口里后端是否还在运行
 
-### 2. OpenAI 兼容接口可以聊天，但索引失败
+### 想确认当前是不是走本地 Ollama
 
-这通常说明：
+访问：
 
-- chat 接口可用
-- embedding 接口不可用
+```text
+GET /api/bootstrap
+```
 
-当前项目默认已经提供本地 fallback embeddings，用于降低这类问题对联调的影响。
+返回里会包含：
 
-### 3. MySQL 端口冲突
-
-项目默认映射：
-
-- MySQL：`3307`
-
-如果本机已有 MySQL，通常不需要改动；只要保证 `.env` 和 `docker-compose.yml` 一致即可。
-
-## 说明
-
-这个仓库当前更适合：
-
-- 本地开发
-- 产品原型验证
-- GraphRAG 写作流程实验
-
-如果要走生产环境，还需要继续加强：
-
-- 后台任务管理
-- 失败重试策略
-- 更清晰的索引进度展示
-- 更稳定的模型与 embedding provider
+- `embedding_model`
+- `embedding_provider`
+- `embedding_base_url`

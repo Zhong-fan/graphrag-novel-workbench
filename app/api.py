@@ -280,9 +280,9 @@ def _ensure_seed_novels(db: Session) -> None:
 def create_app() -> FastAPI:
     settings = load_settings()
     app = FastAPI(
-        title="GraphRAG 小说工作台",
+        title="晨流写作台",
         version="1.0.0",
-        description="GraphRAG + MySQL + Neo4j + Vue 的中文小说工作台。",
+        description="ChenFlow Workbench：基于 GraphRAG + MySQL + Neo4j + Vue 的中文小说创作工作台。",
     )
     app.add_middleware(
         CORSMiddleware,
@@ -336,7 +336,7 @@ def create_app() -> FastAPI:
     @app.get("/api/bootstrap", response_model=BootstrapResponse)
     def bootstrap() -> BootstrapResponse:
         return BootstrapResponse(
-            service_name="中文小说工作台",
+            service_name="晨流写作台",
             graph_engine="GraphRAG + Neo4j",
             auth_enabled=True,
             writer_model=settings.writer_model,
