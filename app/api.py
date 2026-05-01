@@ -58,7 +58,7 @@ from .contracts import (
 )
 from .db import db_session, get_db, init_db
 from .evolution_service import EvolutionService
-from .graphrag_service import GraphRAGService
+from .graphrag_service import GraphRAGService, QueryResult
 from .models import (
     CharacterStateUpdate,
     GenerationRun,
@@ -905,13 +905,20 @@ def create_app() -> FastAPI:
         current_user: User = Depends(get_current_user),
     ) -> GenerationOut:
         project = _project_or_404(db, current_user.id, project_id)
-        if project.indexing_status != "ready":
-            raise HTTPException(status_code=400, detail="项目尚未完成 GraphRAG 索引。")
 
         graphrag = GraphRAGService(settings)
-        local_result = graphrag.query(project, payload.prompt, payload.search_method, payload.response_type)
+        can_use_retrieval = project.indexing_status == "ready"
+        local_result = (
+            graphrag.query(project, payload.prompt, payload.search_method, payload.response_type)
+            if can_use_retrieval
+            else QueryResult(
+                method="direct",
+                response_type=payload.response_type,
+                text="资料库尚未整理，本次仅根据项目设定和用户输入直接创作。",
+            )
+        )
         global_result = None
-        if payload.use_global_search:
+        if payload.use_global_search and can_use_retrieval:
             global_result = graphrag.query(project, payload.prompt, "global", payload.response_type)
         recent_character_updates = db.scalars(
             select(CharacterStateUpdate)
@@ -981,7 +988,6 @@ def create_app() -> FastAPI:
             world_brief=project.world_brief,
             writing_rules=project.writing_rules,
             style_profile=project.style_profile,
-            punctuation_rule=project.punctuation_rule,
             user_prompt=payload.prompt,
             scene_card=scene_card,
             memories=[

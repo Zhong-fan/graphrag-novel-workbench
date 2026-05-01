@@ -4,16 +4,20 @@ import { storeToRefs } from "pinia";
 
 import { useWorkbenchStore } from "./stores/workbench";
 
-type ViewKey = "home" | "store" | "detail" | "shelf" | "studio" | "profile";
+type ViewKey = "home" | "store" | "detail" | "shelf" | "studio" | "workshop" | "profile" | "auth";
 
 const store = useWorkbenchStore();
 const { bootstrap, captcha, currentUser, projects, novels, favoriteNovels, myNovels, profile, currentNovel, novelComments, activeProject, currentGeneration, loading, error, success, isAuthenticated } =
   storeToRefs(store);
 
 const currentView = ref<ViewKey>("home");
-const authPanelOpen = ref(false);
 const authMode = ref<"register" | "login">("register");
 const featurePanelOpen = ref(false);
+const authError = ref("");
+const showRegisterPassword = ref(false);
+const showLoginPassword = ref(false);
+const writingMode = ref<"auto" | "advanced">("auto");
+let feedbackTimer: number | null = null;
 
 const loginForm = reactive({
   username: "",
@@ -23,6 +27,7 @@ const loginForm = reactive({
 const registerForm = reactive({
   username: "",
   password: "",
+  confirmPassword: "",
   captcha_answer: "",
 });
 
@@ -31,8 +36,12 @@ const projectForm = reactive({
   genre: "现代都市轻小说",
   premise: "",
   world_brief: "",
-  writing_rules: "对白使用「」，嵌套引号使用『』。人物情绪先通过环境和动作呈现，再落到对白。",
+  writing_rules: "",
   style_profile: "light_novel",
+});
+
+const quickProjectForm = reactive({
+  idea: "",
 });
 
 const memoryForm = reactive({
@@ -56,6 +65,10 @@ const generationForm = reactive({
   use_scene_card: true,
   use_refiner: true,
   write_evolution: true,
+});
+
+const autoGenerationForm = reactive({
+  idea: "",
 });
 
 const profileForm = reactive({
@@ -108,7 +121,7 @@ const currentStep = computed(() => {
     return "去“我的小说”里创建一个项目，先确定故事方向。";
   }
   if (memoryCount.value === 0 && sourceCount.value === 0) {
-    return "先补充人物记忆和参考资料，生成会更稳定。";
+    return "可以直接让 AI 先写一版；有更多想法时，再补充角色、世界观或参考内容。";
   }
   if (latestProject.value?.indexing_status !== "ready") {
     return "点击“整理资料并开始准备”，等待项目进入可写作状态。";
@@ -165,11 +178,7 @@ function openGeneration(id: number) {
 
 function openAuthPanel(mode: "register" | "login") {
   authMode.value = mode;
-  authPanelOpen.value = true;
-}
-
-function closeAuthPanel() {
-  authPanelOpen.value = false;
+  currentView.value = "auth";
 }
 
 function openFeaturePanel() {
@@ -184,6 +193,11 @@ function goToView(view: ViewKey) {
   currentView.value = view;
 }
 
+function clearToasts() {
+  authError.value = "";
+  store.clearFeedback();
+}
+
 async function openNovelDetail(novelId: number) {
   await store.openNovel(novelId);
   if (!error.value) {
@@ -195,6 +209,13 @@ async function openNovelDetail(novelId: number) {
       manageNovelForm.visibility = currentNovel.value.visibility as "public" | "private";
     }
     currentView.value = "detail";
+  }
+}
+
+async function openWorkshop(projectId: number) {
+  await store.selectProject(projectId);
+  if (!error.value) {
+    currentView.value = "workshop";
   }
 }
 
@@ -256,6 +277,11 @@ async function toggleSaveNovel(novelId: number, event?: MouseEvent) {
 }
 
 async function submitRegister() {
+  authError.value = "";
+  if (registerForm.password !== registerForm.confirmPassword) {
+    authError.value = "两次输入的密码不一致。";
+    return;
+  }
   if (!captcha.value) {
     await store.refreshCaptcha();
     return;
@@ -266,14 +292,67 @@ async function submitRegister() {
     captcha_answer: registerForm.captcha_answer,
     captcha_token: captcha.value.token,
   });
-  authPanelOpen.value = false;
-  currentView.value = "studio";
+  if (isAuthenticated.value) {
+    registerForm.password = "";
+    registerForm.confirmPassword = "";
+    registerForm.captcha_answer = "";
+    currentView.value = "studio";
+  }
 }
 
 async function submitLogin() {
+  authError.value = "";
   await store.login(loginForm);
-  authPanelOpen.value = false;
-  currentView.value = "studio";
+  if (isAuthenticated.value) {
+    loginForm.password = "";
+    currentView.value = "studio";
+  }
+}
+
+async function submitCreateProject() {
+  await store.createProject(projectForm);
+  if (!error.value && activeProject.value?.project) {
+    currentView.value = "workshop";
+  }
+}
+
+async function submitQuickProject() {
+  const idea = quickProjectForm.idea.trim();
+  if (idea.length < 12) {
+    authError.value = "请至少写 12 个字，让 AI 知道你想写什么。";
+    return;
+  }
+  const firstLine = idea.split(/\r?\n/).find((line) => line.trim())?.trim() ?? idea;
+  await store.createProject({
+    title: firstLine.slice(0, 28),
+    genre: "AI 自动创作",
+    premise: idea,
+    world_brief: "",
+    writing_rules: "",
+    style_profile: "light_novel",
+  });
+  if (!error.value && activeProject.value?.project) {
+    autoGenerationForm.idea = idea;
+    writingMode.value = "auto";
+    currentView.value = "workshop";
+  }
+}
+
+async function submitAutoGenerate() {
+  const idea = autoGenerationForm.idea.trim();
+  if (!idea) {
+    authError.value = "先写下你的想法，再让 AI 生成。";
+    return;
+  }
+  await store.generate({
+    prompt: `请根据下面这段想法，自动理解人物、场景、冲突和情绪走向，写成一段完整的小说正文。可以自行补足合理细节，但不要偏离原意。\n\n${idea}`,
+    search_method: "local",
+    response_type: "Multiple Paragraphs",
+    use_global_search: false,
+    use_scene_card: true,
+    use_refiner: true,
+    write_evolution: true,
+  });
 }
 
 async function submitComment() {
@@ -368,6 +447,22 @@ watch(
   },
   { immediate: true },
 );
+
+watch(
+  () => [authError.value, error.value, success.value],
+  ([nextAuthError, nextError, nextSuccess]) => {
+    if (feedbackTimer !== null) {
+      window.clearTimeout(feedbackTimer);
+      feedbackTimer = null;
+    }
+    if (nextAuthError || nextError || nextSuccess) {
+      feedbackTimer = window.setTimeout(() => {
+        clearToasts();
+        feedbackTimer = null;
+      }, 4200);
+    }
+  },
+);
 </script>
 
 <template>
@@ -390,7 +485,7 @@ watch(
         </button>
         <button
           class="topnav__item"
-          :class="{ 'topnav__item--active': currentView === 'studio' }"
+          :class="{ 'topnav__item--active': currentView === 'studio' || currentView === 'workshop' }"
           @click="requireAuth('studio')"
         >
           我的小说
@@ -417,10 +512,160 @@ watch(
       </div>
     </header>
 
-    <div class="feedback error" v-if="error">{{ error }}</div>
-    <div class="feedback success" v-if="success">{{ success }}</div>
+    <div class="toast-stack" v-if="authError || error || success" aria-live="polite">
+      <div class="toast toast--error" v-if="authError || error">
+        <span>{{ authError || error }}</span>
+        <button type="button" aria-label="关闭提示" @click="clearToasts()">×</button>
+      </div>
+      <div class="toast toast--success" v-else-if="success">
+        <span>{{ success }}</span>
+        <button type="button" aria-label="关闭提示" @click="clearToasts()">×</button>
+      </div>
+    </div>
 
-    <template v-if="currentView === 'home'">
+    <template v-if="currentView === 'auth'">
+      <section class="auth-page">
+        <section class="auth-modal auth-modal--page panel" :class="{ 'panel--warm': authMode === 'register' }">
+          <div class="panel-heading">
+            <div>
+              <p class="panel-heading__kicker">{{ authMode === "register" ? "创建账号" : "登录" }}</p>
+              <h2>{{ authMode === "register" ? "创建你的写作空间" : "回到你的项目" }}</h2>
+            </div>
+          </div>
+
+          <div class="auth-tabs">
+            <button
+              class="auth-tab"
+              :class="{ 'auth-tab--active': authMode === 'register' }"
+              type="button"
+              @click="openAuthPanel('register')"
+            >
+              注册
+            </button>
+            <button
+              class="auth-tab"
+              :class="{ 'auth-tab--active': authMode === 'login' }"
+              type="button"
+              @click="openAuthPanel('login')"
+            >
+              登录
+            </button>
+          </div>
+
+          <form v-if="authMode === 'register'" class="form-stack" @submit.prevent="submitRegister()">
+            <label class="field">
+              <span>用户名</span>
+              <input v-model.trim="registerForm.username" type="text" autocomplete="username" />
+              <small class="field-hint">2-100 个字符。</small>
+            </label>
+            <label class="field">
+              <span>密码</span>
+              <div class="password-field">
+                <input
+                  v-model="registerForm.password"
+                  :type="showRegisterPassword ? 'text' : 'password'"
+                  autocomplete="new-password"
+                />
+                <button
+                  class="password-toggle"
+                  type="button"
+                  :aria-label="showRegisterPassword ? '隐藏密码' : '显示密码'"
+                  :title="showRegisterPassword ? '隐藏密码' : '显示密码'"
+                  @click="showRegisterPassword = !showRegisterPassword"
+                >
+                  <svg v-if="showRegisterPassword" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M3 3l18 18" />
+                    <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" />
+                    <path d="M9.5 5.3A9.6 9.6 0 0 1 12 5c5 0 8.5 4.4 9.5 7a12.2 12.2 0 0 1-2.6 3.8" />
+                    <path d="M6.4 6.5A12.3 12.3 0 0 0 2.5 12c1 2.6 4.5 7 9.5 7a9.7 9.7 0 0 0 4.2-.9" />
+                  </svg>
+                  <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M2.5 12S6 5 12 5s9.5 7 9.5 7S18 19 12 19s-9.5-7-9.5-7Z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                </button>
+              </div>
+              <small class="field-hint">8-120 个字符。</small>
+            </label>
+            <label class="field">
+              <span>确认密码</span>
+              <div class="password-field">
+                <input
+                  v-model="registerForm.confirmPassword"
+                  :type="showRegisterPassword ? 'text' : 'password'"
+                  autocomplete="new-password"
+                />
+                <button
+                  class="password-toggle"
+                  type="button"
+                  :aria-label="showRegisterPassword ? '隐藏密码' : '显示密码'"
+                  :title="showRegisterPassword ? '隐藏密码' : '显示密码'"
+                  @click="showRegisterPassword = !showRegisterPassword"
+                >
+                  <svg v-if="showRegisterPassword" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M3 3l18 18" />
+                    <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" />
+                    <path d="M9.5 5.3A9.6 9.6 0 0 1 12 5c5 0 8.5 4.4 9.5 7a12.2 12.2 0 0 1-2.6 3.8" />
+                    <path d="M6.4 6.5A12.3 12.3 0 0 0 2.5 12c1 2.6 4.5 7 9.5 7a9.7 9.7 0 0 0 4.2-.9" />
+                  </svg>
+                  <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M2.5 12S6 5 12 5s9.5 7 9.5 7S18 19 12 19s-9.5-7-9.5-7Z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                </button>
+              </div>
+            </label>
+            <label class="field">
+              <span>验证码</span>
+              <div class="captcha-row">
+                <div class="captcha-box">{{ captcha?.challenge ?? "正在生成..." }}</div>
+                <button class="ghost-button ghost-button--small" type="button" @click="store.refreshCaptcha()">换一个</button>
+              </div>
+              <input v-model.trim="registerForm.captcha_answer" type="text" inputmode="numeric" />
+            </label>
+            <button class="primary-button" :disabled="loading">{{ loading ? "正在注册..." : "注册并登录" }}</button>
+          </form>
+
+          <form v-else class="form-stack" @submit.prevent="submitLogin()">
+            <label class="field">
+              <span>用户名</span>
+              <input v-model.trim="loginForm.username" type="text" autocomplete="username" />
+            </label>
+            <label class="field">
+              <span>密码</span>
+              <div class="password-field">
+                <input
+                  v-model="loginForm.password"
+                  :type="showLoginPassword ? 'text' : 'password'"
+                  autocomplete="current-password"
+                />
+                <button
+                  class="password-toggle"
+                  type="button"
+                  :aria-label="showLoginPassword ? '隐藏密码' : '显示密码'"
+                  :title="showLoginPassword ? '隐藏密码' : '显示密码'"
+                  @click="showLoginPassword = !showLoginPassword"
+                >
+                  <svg v-if="showLoginPassword" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M3 3l18 18" />
+                    <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" />
+                    <path d="M9.5 5.3A9.6 9.6 0 0 1 12 5c5 0 8.5 4.4 9.5 7a12.2 12.2 0 0 1-2.6 3.8" />
+                    <path d="M6.4 6.5A12.3 12.3 0 0 0 2.5 12c1 2.6 4.5 7 9.5 7a9.7 9.7 0 0 0 4.2-.9" />
+                  </svg>
+                  <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M2.5 12S6 5 12 5s9.5 7 9.5 7S18 19 12 19s-9.5-7-9.5-7Z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                </button>
+              </div>
+            </label>
+            <button class="primary-button" :disabled="loading">{{ loading ? "正在登录..." : "登录" }}</button>
+          </form>
+        </section>
+      </section>
+    </template>
+
+    <template v-else-if="currentView === 'home'">
       <section class="hero hero--showcase">
         <div class="hero__main">
           <p class="hero__label">首页推荐</p>
@@ -440,7 +685,7 @@ watch(
         </div>
       </section>
 
-      <section class="content-grid">
+      <section class="content-grid content-grid--home-hot">
         <section class="panel panel--paper">
           <div class="section-head">
             <div>
@@ -764,7 +1009,148 @@ watch(
     </template>
 
     <template v-else-if="currentView === 'studio'">
-      <main v-if="isAuthenticated" class="workspace">
+      <main v-if="isAuthenticated" class="library-dashboard">
+        <section class="section-banner panel panel--paper">
+          <div>
+            <p class="panel-heading__kicker">我的小说</p>
+            <h2>管理你的项目和已发布作品。</h2>
+          </div>
+          <p class="project-copy">项目负责制作，发布作品负责展示。点进项目后会进入“创作工坊”。</p>
+        </section>
+
+        <section class="library-grid">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="panel-heading__kicker">制作项目</p>
+                <h2>正在写的小说</h2>
+              </div>
+            </div>
+            <div class="project-list" v-if="projects.length">
+              <button
+                v-for="project in projects"
+                :key="project.id"
+                class="project-item"
+                :class="{ 'project-item--active': activeProject?.project.id === project.id }"
+                @click="openWorkshop(project.id)"
+              >
+                <strong>{{ project.title }}</strong>
+                <span>{{ project.genre }}</span>
+                <em>{{ projectStatusLabel(project.indexing_status) }} · {{ formatDateTime(project.updated_at) }}</em>
+              </button>
+            </div>
+            <p v-else class="empty-text">还没有制作项目。先在右侧创建一部新小说。</p>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="panel-heading__kicker">快速开始</p>
+                <h2>只写一段想法</h2>
+              </div>
+            </div>
+            <form class="form-stack" @submit.prevent="submitQuickProject()">
+              <label class="field">
+                <span>你的小说想法</span>
+                <textarea
+                  v-model="quickProjectForm.idea"
+                  rows="8"
+                  placeholder="例：我想写一个雨夜便利店的故事。男主是夜班店员，女主每周三凌晨都会来买同一种饮料，但她每次都像第一次见到他。故事要有一点暧昧，也有一点悬疑。"
+                />
+                <small class="field-hint">至少 12 个字。AI 会先用这段话创建项目，进入工坊后可以直接生成正文。</small>
+              </label>
+              <button class="primary-button" :disabled="loading">用这段想法开始</button>
+            </form>
+
+            <div class="detail-divider" />
+
+            <details class="advanced-create">
+              <summary>我想自己填写更多信息</summary>
+              <form class="form-stack" @submit.prevent="submitCreateProject()">
+              <label class="field">
+                <span>项目标题</span>
+                <input v-model="projectForm.title" type="text" maxlength="255" placeholder="例：雨季便利店" />
+                <small class="field-hint">2-255 个字符。写作品名或项目代号都可以。</small>
+              </label>
+              <label class="field">
+                <span>题材类型</span>
+                <input v-model="projectForm.genre" type="text" maxlength="100" placeholder="例：现代都市轻小说 / 校园悬疑 / 奇幻冒险" />
+                <small class="field-hint">2-100 个字符。用于帮助模型判断故事气质。</small>
+              </label>
+              <label class="field">
+                <span>故事前提</span>
+                <textarea
+                  v-model="projectForm.premise"
+                  rows="4"
+                  maxlength="2000"
+                  placeholder="例：一个总在雨夜值班的便利店店员，发现每周三凌晨都会有同一个陌生女孩来买同一种饮料，但她似乎不记得前几次见过他。"
+                />
+                <small class="field-hint">12-2000 个字符。写清主角、冲突或故事钩子即可。</small>
+              </label>
+              <label class="field">
+                <span>世界设定（可选）</span>
+                <textarea
+                  v-model="projectForm.world_brief"
+                  rows="4"
+                  maxlength="4000"
+                  placeholder="例：故事发生在沿海小城。雨季持续三个月，城市里有一条旧电车线，很多重要场景都围绕便利店、电车站和旧书店展开。"
+                />
+                <small class="field-hint">0-4000 个字符。没有特殊世界观可以先留空。</small>
+              </label>
+              <label class="field">
+                <span>自定义偏好（可选）</span>
+                <textarea
+                  v-model="projectForm.writing_rules"
+                  rows="4"
+                  maxlength="2000"
+                  placeholder="例：第三人称有限视角；节奏偏轻；不要突然加入超自然设定；感情线慢热。"
+                />
+                <small class="field-hint">0-2000 个字符。只写这个项目特别需要的偏好。</small>
+              </label>
+              <label class="field">
+                <span>文风预设</span>
+                <select v-model="projectForm.style_profile">
+                  <option value="light_novel">轻小说</option>
+                  <option value="lyrical_restrained">抒情克制</option>
+                </select>
+                <small class="field-hint">不确定就选轻小说；想要更细腻、更克制时选抒情克制。</small>
+              </label>
+              <button class="primary-button" :disabled="loading">创建并进入工坊</button>
+              </form>
+            </details>
+          </section>
+
+          <section class="panel panel--paper library-grid__published">
+            <div class="panel-heading">
+              <div>
+                <p class="panel-heading__kicker">已发布作品</p>
+                <h2>书城展示中的小说</h2>
+              </div>
+            </div>
+            <div class="novel-grid" v-if="myNovels.length">
+              <article v-for="novel in myNovels" :key="novel.id" class="novel-card novel-card--saved">
+                <p class="novel-card__genre">{{ novel.genre }}</p>
+                <h3>{{ novel.title }}</h3>
+                <p class="novel-card__author">{{ novel.author }} · {{ novel.visibility === "public" ? "公开" : "私密" }}</p>
+                <p class="novel-card__timestamps">更新于 {{ formatDateTime(novel.updated_at) }}</p>
+                <p class="novel-card__text">{{ novel.latest_excerpt }}</p>
+                <button class="ghost-button ghost-button--small" type="button" @click="openNovelDetail(novel.id)">管理详情</button>
+              </article>
+            </div>
+            <p v-else class="empty-text">还没有发布到书城的作品。进入创作工坊生成正文后，可以再发布。</p>
+          </section>
+        </section>
+      </main>
+
+      <section v-else class="panel empty-state">
+        <p class="panel-heading__kicker">我的小说</p>
+        <h2>登录后再管理你的小说。</h2>
+        <button class="primary-button primary-button--compact" @click="openAuthPanel('register')">创建账号</button>
+      </section>
+    </template>
+
+    <template v-else-if="currentView === 'workshop'">
+      <main v-if="isAuthenticated && hasProject" class="workspace workspace--workshop">
         <section class="workspace__column">
           <section class="panel">
             <div class="panel-heading">
@@ -818,26 +1204,46 @@ watch(
                 <h2>开始一部新小说</h2>
               </div>
             </div>
-            <form class="form-stack" @submit.prevent="store.createProject(projectForm)">
+            <form class="form-stack" @submit.prevent="submitCreateProject()">
               <label class="field">
                 <span>项目标题</span>
-                <input v-model="projectForm.title" type="text" />
+                <input v-model="projectForm.title" type="text" maxlength="255" placeholder="例：雨季便利店" />
+                <small class="field-hint">2-255 个字符。写作品名或项目代号都可以。</small>
               </label>
               <label class="field">
                 <span>题材类型</span>
-                <input v-model="projectForm.genre" type="text" />
+                <input v-model="projectForm.genre" type="text" maxlength="100" placeholder="例：现代都市轻小说 / 校园悬疑 / 奇幻冒险" />
+                <small class="field-hint">2-100 个字符。用于帮助模型判断故事气质。</small>
               </label>
               <label class="field">
                 <span>故事前提</span>
-                <textarea v-model="projectForm.premise" rows="4" />
+                <textarea
+                  v-model="projectForm.premise"
+                  rows="4"
+                  maxlength="2000"
+                  placeholder="例：一个总在雨夜值班的便利店店员，发现每周三凌晨都会有同一个陌生女孩来买同一种饮料，但她似乎不记得前几次见过他。"
+                />
+                <small class="field-hint">12-2000 个字符。写清主角、冲突或故事钩子即可。</small>
               </label>
               <label class="field">
-                <span>世界设定</span>
-                <textarea v-model="projectForm.world_brief" rows="4" />
+                <span>世界设定（可选）</span>
+                <textarea
+                  v-model="projectForm.world_brief"
+                  rows="4"
+                  maxlength="4000"
+                  placeholder="例：故事发生在沿海小城。雨季持续三个月，城市里有一条旧电车线，很多重要场景都围绕便利店、电车站和旧书店展开。"
+                />
+                <small class="field-hint">0-4000 个字符。没有特殊世界观可以先留空。</small>
               </label>
               <label class="field">
-                <span>写作规则</span>
-                <textarea v-model="projectForm.writing_rules" rows="4" />
+                <span>自定义偏好（可选）</span>
+                <textarea
+                  v-model="projectForm.writing_rules"
+                  rows="4"
+                  maxlength="2000"
+                  placeholder="例：第三人称有限视角；节奏偏轻；不要突然加入超自然设定；感情线慢热。"
+                />
+                <small class="field-hint">0-2000 个字符。只写这个项目特别需要的偏好。</small>
               </label>
               <label class="field">
                 <span>文风预设</span>
@@ -845,8 +1251,9 @@ watch(
                   <option value="light_novel">轻小说</option>
                   <option value="lyrical_restrained">抒情克制</option>
                 </select>
+                <small class="field-hint">不确定就选轻小说；想要更细腻、更克制时选抒情克制。</small>
               </label>
-              <button class="primary-button" :disabled="loading">创建项目</button>
+              <button class="primary-button" :disabled="loading">创建并进入工坊</button>
             </form>
           </section>
         </section>
@@ -869,44 +1276,102 @@ watch(
                 <span>状态</span>
                 <strong>{{ projectStatusLabel(activeProject?.project.indexing_status) }}</strong>
               </div>
-              <div>
-                <span>写作规则</span>
-                <strong>{{ activeProject?.project.punctuation_rule }}</strong>
-              </div>
             </div>
             <p class="project-copy"><strong>故事前提：</strong>{{ activeProject?.project.premise }}</p>
             <p class="project-copy"><strong>世界设定：</strong>{{ activeProject?.project.world_brief }}</p>
-            <p class="project-copy"><strong>风格约束：</strong>{{ activeProject?.project.writing_rules }}</p>
+            <p class="project-copy" v-if="activeProject?.project.writing_rules"><strong>自定义偏好：</strong>{{ activeProject?.project.writing_rules }}</p>
           </section>
 
-          <section class="dual-grid">
+          <section class="panel panel--paper">
+            <div class="panel-heading">
+              <div>
+                <p class="panel-heading__kicker">写作模式</p>
+                <h2>{{ writingMode === "auto" ? "AI 自动创作" : "精细控制" }}</h2>
+              </div>
+              <div class="mode-switch" role="tablist" aria-label="写作模式">
+                <button type="button" :class="{ 'mode-switch__item--active': writingMode === 'auto' }" @click="writingMode = 'auto'">
+                  AI 自动创作
+                </button>
+                <button type="button" :class="{ 'mode-switch__item--active': writingMode === 'advanced' }" @click="writingMode = 'advanced'">
+                  精细控制
+                </button>
+              </div>
+            </div>
+
+            <form v-if="writingMode === 'auto'" class="form-stack" @submit.prevent="submitAutoGenerate()">
+              <label class="field">
+                <span>把你的想法都写在这里</span>
+                <textarea
+                  v-model="autoGenerationForm.idea"
+                  rows="10"
+                  placeholder="例：我想写一个雨夜便利店的故事。男主是夜班店员，女主每周三凌晨都会来买同一种饮料。她看起来很疲惫，但每次都像第一次见到男主。希望这一段写他们第一次真正聊起来，气氛有点暧昧，也有一点不安。"
+                />
+                <small class="field-hint">不用拆成设定、资料或规则。把人物、场景、氛围、想发生的事写成一大段就行。</small>
+              </label>
+              <button class="primary-button" :disabled="loading">{{ loading ? "AI 正在写..." : "让 AI 自动写一段" }}</button>
+            </form>
+
+            <form v-else class="form-stack" @submit.prevent="store.generate(generationForm)">
+              <label class="field">
+                <span>这一段你想怎么写</span>
+                <textarea
+                  v-model="generationForm.prompt"
+                  rows="6"
+                  placeholder="例如：写一段两人在深夜河岸对话的场景，让情绪逐步升级，但不要马上和解。"
+                />
+              </label>
+              <div class="inline-row">
+                <label class="field">
+                  <span>参考范围</span>
+                  <select v-model="generationForm.search_method">
+                    <option value="local">只参考最相关内容</option>
+                    <option value="global">参考更多全局信息</option>
+                    <option value="drift">自由联想更多线索</option>
+                    <option value="basic">基础参考</option>
+                  </select>
+                  <small class="field-hint">不确定就用“只参考最相关内容”。</small>
+                </label>
+                <label class="field">
+                  <span>正文长度和形式</span>
+                  <input v-model="generationForm.response_type" type="text" placeholder="Multiple Paragraphs" />
+                  <small class="field-hint">可以写“短段落”“多段落”“长章节”等。</small>
+                </label>
+              </div>
+              <div class="hero__actions">
+                <button class="ghost-button ghost-button--small" type="button" @click="openFeaturePanel()">更多开关</button>
+              </div>
+              <button class="primary-button" :disabled="loading">按精细设置生成</button>
+            </form>
+          </section>
+
+          <section v-if="writingMode === 'advanced'" class="dual-grid">
             <section class="panel">
               <div class="panel-heading">
                 <div>
-                  <p class="panel-heading__kicker">补充内容</p>
-                  <h2>长期设定</h2>
+                  <p class="panel-heading__kicker">给 AI 记住</p>
+                  <h2>角色和故事信息</h2>
                 </div>
               </div>
               <form class="form-stack" @submit.prevent="store.addMemory(memoryForm)">
                 <label class="field">
-                  <span>设定标题</span>
-                  <input v-model="memoryForm.title" type="text" />
+                  <span>这条信息的名字</span>
+                  <input v-model="memoryForm.title" type="text" placeholder="例：女主的秘密" />
                 </label>
                 <label class="field">
-                  <span>设定内容</span>
-                  <textarea v-model="memoryForm.content" rows="4" />
+                  <span>具体内容</span>
+                  <textarea v-model="memoryForm.content" rows="4" placeholder="例：她每周三凌晨都会失去一段记忆，但会下意识来到同一家便利店。" />
                 </label>
                 <div class="inline-row">
                   <label class="field">
-                    <span>归属范围</span>
-                    <input v-model="memoryForm.memory_scope" type="text" />
+                    <span>属于哪部分</span>
+                    <input v-model="memoryForm.memory_scope" type="text" placeholder="story / character / world" />
                   </label>
                   <label class="field">
-                    <span>重要程度</span>
+                    <span>AI 要多重视它（1-5）</span>
                     <input v-model.number="memoryForm.importance" type="number" min="1" max="5" />
                   </label>
                 </div>
-                <button class="ghost-button" :disabled="loading">保存设定</button>
+                <button class="ghost-button" :disabled="loading">保存给 AI 记住</button>
               </form>
               <div class="card-list">
                 <article v-for="memory in activeProject?.memories" :key="memory.id" class="memory-card">
@@ -920,22 +1385,22 @@ watch(
             <section class="panel">
               <div class="panel-heading">
                 <div>
-                  <p class="panel-heading__kicker">补充内容</p>
-                  <h2>参考资料</h2>
+                  <p class="panel-heading__kicker">给 AI 参考</p>
+                  <h2>外部资料或片段</h2>
                 </div>
               </div>
               <form class="form-stack" @submit.prevent="store.addSource(sourceForm)">
                 <label class="field">
-                  <span>资料标题</span>
-                  <input v-model="sourceForm.title" type="text" />
+                  <span>资料名称</span>
+                  <input v-model="sourceForm.title" type="text" placeholder="例：旧电车站描写" />
                 </label>
                 <label class="field">
                   <span>资料内容</span>
-                  <textarea v-model="sourceForm.content" rows="4" />
+                  <textarea v-model="sourceForm.content" rows="4" placeholder="可以粘贴你写过的片段、世界观、角色小传或想模仿的结构。" />
                 </label>
                 <label class="field">
                   <span>资料类型</span>
-                  <input v-model="sourceForm.source_kind" type="text" />
+                  <input v-model="sourceForm.source_kind" type="text" placeholder="reference / outline / draft" />
                 </label>
                 <button class="ghost-button" :disabled="loading">保存资料</button>
               </form>
@@ -949,49 +1414,13 @@ watch(
             </section>
           </section>
 
-          <section class="panel panel--paper">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">写作请求</p>
-                <h2>输入这一段的写作目标</h2>
-              </div>
-            </div>
-            <form class="form-stack" @submit.prevent="store.generate(generationForm)">
-              <label class="field">
-                <span>你希望这一段写什么</span>
-                <textarea
-                  v-model="generationForm.prompt"
-                  rows="6"
-                  placeholder="例如：写一段两人在深夜河岸对话的场景，让情绪逐步升级，但不要马上和解。"
-                />
-              </label>
-              <div class="inline-row">
-                <label class="field">
-                  <span>检索视角</span>
-                  <select v-model="generationForm.search_method">
-                    <option v-for="item in bootstrap?.query_methods ?? []" :key="item" :value="item">
-                      {{ item }}
-                    </option>
-                  </select>
-                </label>
-                <label class="field">
-                  <span>输出形式</span>
-                  <input v-model="generationForm.response_type" type="text" />
-                </label>
-              </div>
-              <div class="hero__actions">
-                <button class="ghost-button ghost-button--small" type="button" @click="openFeaturePanel()">功能调整</button>
-              </div>
-              <button class="primary-button" :disabled="loading">生成正文</button>
-            </form>
-          </section>
         </section>
 
         <section class="workspace__column" v-if="hasProject">
           <section class="panel panel--warm guide-card">
             <p class="panel-heading__kicker">下一步</p>
             <h2>{{ currentStep }}</h2>
-            <p class="guide-card__copy">先把资料和设定补齐，再发起写作请求，生成结果会更稳。</p>
+            <p class="guide-card__copy">普通模式可以直接写；精细控制适合你已经有角色、世界观或章节计划的时候。</p>
           </section>
 
           <section class="panel" v-if="currentGeneration">
@@ -1032,18 +1461,18 @@ watch(
           <section class="panel panel--paper">
             <div class="panel-heading">
               <div>
-                <p class="panel-heading__kicker">当前结果</p>
+                <p class="panel-heading__kicker">AI 写出的正文</p>
                 <h2>{{ currentGeneration?.title ?? "还没有生成内容" }}</h2>
               </div>
             </div>
             <p class="project-copy" v-if="currentGeneration"><strong>摘要：</strong>{{ currentGeneration.summary }}</p>
-            <pre class="story-output">{{ currentGeneration?.content ?? "准备好资料后，在中间区域输入你的写作目标，这里会显示生成结果。" }}</pre>
+            <pre class="story-output">{{ currentGeneration?.content ?? "在左侧写下你的想法，点击生成后，这里会显示 AI 写出的正文。" }}</pre>
           </section>
 
           <section class="panel">
             <div class="panel-heading">
               <div>
-                <p class="panel-heading__kicker">最近生成</p>
+                <p class="panel-heading__kicker">写过的版本</p>
                 <h2>历史记录</h2>
               </div>
             </div>
@@ -1059,44 +1488,44 @@ watch(
                 <em>{{ item.search_method }} / {{ item.response_type }}</em>
               </button>
             </div>
-            <p v-else class="empty-text">还没有生成历史。先完成一次写作请求。</p>
+            <p v-else class="empty-text">还没有生成历史。先让 AI 写一段。</p>
           </section>
 
-          <section class="panel">
+          <section class="panel" v-if="writingMode === 'advanced'">
             <div class="panel-heading">
               <div>
-                <p class="panel-heading__kicker">创作依据</p>
+                <p class="panel-heading__kicker">AI 参考了什么</p>
                 <h2>本次参考内容</h2>
               </div>
             </div>
             <pre class="context-output">{{ currentGeneration?.retrieval_context ?? "这里会显示这次写作时参考到的资料内容。" }}</pre>
           </section>
 
-          <section class="panel">
+          <section class="panel" v-if="writingMode === 'advanced'">
             <div class="panel-heading">
               <div>
-                <p class="panel-heading__kicker">写作上下文卡</p>
-                <h2>本次真正送进写作器的整理结果</h2>
+                <p class="panel-heading__kicker">AI 写作前的整理</p>
+                <h2>本次整理结果</h2>
               </div>
             </div>
-            <pre class="context-output">{{ currentGeneration?.scene_card ?? "这里会显示本次生成前整理出来的角色、关系、事件与连续性上下文卡。" }}</pre>
+            <pre class="context-output">{{ currentGeneration?.scene_card ?? "这里会显示本次生成前整理出来的角色、关系、事件与连续性信息。" }}</pre>
           </section>
 
-          <section class="panel">
+          <section class="panel" v-if="writingMode === 'advanced'">
             <div class="panel-heading">
               <div>
-                <p class="panel-heading__kicker">演化快照</p>
-                <h2>本章提取出的结构化变化</h2>
+                <p class="panel-heading__kicker">本章变化摘要</p>
+                <h2>AI 记录到的新变化</h2>
               </div>
             </div>
             <pre class="context-output">{{ currentGeneration?.evolution_snapshot ?? "这里会显示本章生成后自动提取出的角色、关系、事件和外界认知变化。" }}</pre>
           </section>
 
-          <section class="panel">
+          <section class="panel" v-if="writingMode === 'advanced'">
             <div class="panel-heading">
               <div>
-                <p class="panel-heading__kicker">演化状态</p>
-                <h2>最近写回的角色与关系变化</h2>
+                <p class="panel-heading__kicker">连续性记录</p>
+                <h2>角色和关系的变化</h2>
               </div>
             </div>
 
@@ -1144,9 +1573,10 @@ watch(
       </main>
 
       <section v-else class="panel empty-state">
-        <p class="panel-heading__kicker">我的小说</p>
-        <h2>登录后再开始你的创作项目。</h2>
-        <button class="primary-button primary-button--compact" @click="openAuthPanel('register')">创建账号</button>
+        <p class="panel-heading__kicker">创作工坊</p>
+        <h2>{{ isAuthenticated ? "先选择或创建一个小说项目。" : "登录后再进入创作工坊。" }}</h2>
+        <button v-if="isAuthenticated" class="primary-button primary-button--compact" @click="goToView('studio')">回到我的小说</button>
+        <button v-else class="primary-button primary-button--compact" @click="openAuthPanel('register')">创建账号</button>
       </section>
     </template>
 
@@ -1211,75 +1641,12 @@ watch(
       </section>
     </template>
 
-    <div v-if="!isAuthenticated && authPanelOpen" class="auth-overlay" @click.self="closeAuthPanel()">
-      <section class="auth-modal panel" :class="{ 'panel--warm': authMode === 'register' }">
-        <div class="panel-heading">
-          <div>
-            <p class="panel-heading__kicker">{{ authMode === "register" ? "创建账号" : "登录" }}</p>
-            <h2>{{ authMode === "register" ? "开始你的写作空间" : "回到你的项目" }}</h2>
-          </div>
-          <button class="ghost-button ghost-button--small" type="button" @click="closeAuthPanel()">关闭</button>
-        </div>
-
-        <div class="auth-tabs">
-          <button
-            class="auth-tab"
-            :class="{ 'auth-tab--active': authMode === 'register' }"
-            type="button"
-            @click="openAuthPanel('register')"
-          >
-            注册
-          </button>
-          <button
-            class="auth-tab"
-            :class="{ 'auth-tab--active': authMode === 'login' }"
-            type="button"
-            @click="openAuthPanel('login')"
-          >
-            登录
-          </button>
-        </div>
-
-        <form v-if="authMode === 'register'" class="form-stack" @submit.prevent="submitRegister()">
-          <label class="field">
-            <span>用户名</span>
-            <input v-model="registerForm.username" type="text" autocomplete="username" />
-          </label>
-          <label class="field">
-            <span>密码</span>
-            <input v-model="registerForm.password" type="password" autocomplete="new-password" />
-          </label>
-          <label class="field">
-            <span>验证码</span>
-            <div class="captcha-row">
-              <div class="captcha-box">{{ captcha?.challenge ?? "正在生成..." }}</div>
-              <button class="ghost-button ghost-button--small" type="button" @click="store.refreshCaptcha()">换一个</button>
-            </div>
-            <input v-model="registerForm.captcha_answer" type="text" inputmode="numeric" />
-          </label>
-          <button class="primary-button" :disabled="loading">注册并登录</button>
-        </form>
-
-        <form v-else class="form-stack" @submit.prevent="submitLogin()">
-          <label class="field">
-            <span>用户名</span>
-            <input v-model="loginForm.username" type="text" autocomplete="username" />
-          </label>
-          <label class="field">
-            <span>密码</span>
-            <input v-model="loginForm.password" type="password" autocomplete="current-password" />
-          </label>
-          <button class="primary-button" :disabled="loading">登录</button>
-        </form>
-      </section>
-    </div>
-
     <div v-if="featurePanelOpen" class="auth-overlay" @click.self="closeFeaturePanel()">
       <section class="feature-modal panel">
         <div class="panel-heading">
           <div>
-            <p class="panel-heading__kicker">功能调整</p>
-            <h2>控制本次生成会启用哪些能力</h2>
+            <p class="panel-heading__kicker">更多开关</p>
+            <h2>控制这次写作要不要参考更多信息</h2>
           </div>
           <button class="ghost-button ghost-button--small" type="button" @click="closeFeaturePanel()">关闭</button>
         </div>
@@ -1289,40 +1656,40 @@ watch(
             <label class="field">
               <span class="feature-toggle-label">
                 <input v-model="generationForm.use_global_search" type="checkbox" />
-                使用全局检索
+                参考整个项目的更多内容
               </span>
             </label>
-            <span>除了当前场景附近的信息，再额外查一次更大范围的剧情和设定。更稳，但更慢。</span>
+            <span>除了当前段落最相关的信息，再多看一些整体剧情和设定。更稳，但会更慢。</span>
           </article>
 
           <article class="journey-card">
             <label class="field">
               <span class="feature-toggle-label">
                 <input v-model="generationForm.use_scene_card" type="checkbox" />
-                使用写作上下文卡
+                写作前先帮我整理一遍
               </span>
             </label>
-            <span>先把角色变化、关系变化、关键事件和检索结果整理成结构化卡片，再交给模型写。</span>
+            <span>先把角色、关系、关键事件和参考内容整理清楚，再交给 AI 写。</span>
           </article>
 
           <article class="journey-card">
             <label class="field">
               <span class="feature-toggle-label">
                 <input v-model="generationForm.use_refiner" type="checkbox" />
-                使用轻量润色
+                生成后自动润色
               </span>
             </label>
-            <span>正文生成后再做一轮减重和润色，让语言更轻、更顺，但会更耗时。</span>
+            <span>正文生成后再顺一遍语言，让它更轻、更自然，但会更耗时。</span>
           </article>
 
           <article class="journey-card">
             <label class="field">
               <span class="feature-toggle-label">
                 <input v-model="generationForm.write_evolution" type="checkbox" />
-                写回演化状态
+                记住这章发生的变化
               </span>
             </label>
-            <span>自动提取本章的角色状态、关系、事件和外界看法变化，供后续章节继续继承。</span>
+            <span>自动记录本章里角色、关系和事件的变化，后面继续写时可以接上。</span>
           </article>
         </div>
       </section>

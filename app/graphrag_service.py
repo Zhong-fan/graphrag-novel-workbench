@@ -76,8 +76,7 @@ class GraphRAGService:
                         f"类型：{project.genre}",
                         f"核心前提：{project.premise}",
                         f"世界设定：{project.world_brief}",
-                        f"写作规则：{project.writing_rules}",
-                        f"标点规则：{project.punctuation_rule}",
+                        f"用户自定义偏好：{project.writing_rules or '无'}",
                     ]
                 ),
             )

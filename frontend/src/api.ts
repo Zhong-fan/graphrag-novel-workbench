@@ -24,6 +24,73 @@ type RequestOptions = RequestInit & {
   token?: string | null;
 };
 
+const fieldLabels: Record<string, string> = {
+  username: "用户名",
+  password: "密码",
+  captcha_answer: "验证码",
+  captcha_token: "验证码",
+};
+
+function localizeValidationMessage(message: string): string {
+  const minLengthMatch = message.match(/at least (\d+) characters/i);
+  if (minLengthMatch) {
+    return `至少需要 ${minLengthMatch[1]} 个字符`;
+  }
+  const maxLengthMatch = message.match(/at most (\d+) characters/i);
+  if (maxLengthMatch) {
+    return `不能超过 ${maxLengthMatch[1]} 个字符`;
+  }
+  if (/field required/i.test(message)) {
+    return "不能为空";
+  }
+  return message;
+}
+
+function formatErrorDetail(detail: unknown): string {
+  if (typeof detail === "string") {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+        if (item && typeof item === "object") {
+          const record = item as { loc?: unknown; msg?: unknown; message?: unknown };
+          const message = typeof record.msg === "string" ? record.msg : typeof record.message === "string" ? record.message : "";
+          if (!message) {
+            return JSON.stringify(item);
+          }
+          const path = Array.isArray(record.loc) ? record.loc.filter((part) => part !== "body") : [];
+          const field = path.length ? String(path[path.length - 1]) : "";
+          const label = fieldLabels[field] ?? field;
+          const readableMessage = localizeValidationMessage(message);
+          return label ? `${label}: ${readableMessage}` : readableMessage;
+        }
+        return String(item);
+      })
+      .join("；");
+  }
+
+  if (detail && typeof detail === "object") {
+    const record = detail as { msg?: unknown; message?: unknown; error?: unknown };
+    if (typeof record.msg === "string") {
+      return record.msg;
+    }
+    if (typeof record.message === "string") {
+      return record.message;
+    }
+    if (typeof record.error === "string") {
+      return record.error;
+    }
+    return JSON.stringify(detail);
+  }
+
+  return String(detail);
+}
+
 async function request<T>(input: RequestInfo, init: RequestOptions = {}): Promise<T> {
   const headers = new Headers(init.headers ?? {});
   headers.set("Content-Type", "application/json");
@@ -41,7 +108,7 @@ async function request<T>(input: RequestInfo, init: RequestOptions = {}): Promis
     try {
       const payload = await response.json();
       if (payload?.detail) {
-        message = String(payload.detail);
+        message = formatErrorDetail(payload.detail);
       }
     } catch {
       // ignore

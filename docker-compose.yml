@@ -32,7 +32,21 @@ services:
       - neo4j_data:/data
       - neo4j_logs:/logs
 
+  bge-m3:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    container_name: graph-mvp-bge-m3
+    restart: unless-stopped
+    ports:
+      - "8090:80"
+    command:
+      - --model-id
+      - BAAI/bge-m3
+      - --auto-truncate
+    volumes:
+      - tei_data:/data
+
 volumes:
   mysql_data:
   neo4j_data:
   neo4j_logs:
+  tei_data:

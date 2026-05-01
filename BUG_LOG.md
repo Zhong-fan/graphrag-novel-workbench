@@ -138,3 +138,60 @@
 
 - 如果你需要稳定地改写第三方 CLI 的运行时行为，最稳的是包一层显式 wrapper。
 - 启动钩子适合做轻量全局配置，不适合承载关键业务修复。
+
+## 2026-04-30 改用 Ollama 作为 embedding provider
+
+**症状**
+
+- 远端 OpenAI 兼容接口可以处理 chat，但所有常见 embedding 模型都返回 `503 model_not_found`。
+- GraphRAG 索引会长时间停在重试，最终无法完成。
+
+**根因**
+
+- 当前远端服务没有开放 embeddings 通道。
+- GraphRAG 的 chat 和 embedding 之前共用同一套 `OPENAI_BASE_URL` 配置，导致 embeddings 也被错误地发往这个不支持的接口。
+
+**修复**
+
+- 将项目配置拆成两条链：
+  - chat / writer 继续走远端 OpenAI 兼容接口
+  - embeddings 单独走本机 Ollama
+- 新增独立配置：
+  - `GRAPH_MVP_EMBEDDING_MODEL`
+  - `GRAPH_MVP_EMBEDDING_API_KEY`
+  - `GRAPH_MVP_EMBEDDING_BASE_URL`
+- 本机已验证：
+  - `Ollama 0.20.2`
+  - `nomic-embed-text`
+  - `http://127.0.0.1:11434/v1/embeddings`
+
+**教训**
+
+- 不要假设一个 OpenAI 兼容接口“既支持 chat 也支持 embeddings”。
+- chat provider 和 embedding provider 在工程上应该允许分离配置。
+- 本地 Ollama 很适合拿来补 embedding 能力缺口。
+
+## 2026-04-30 改成 Docker 里的 BGE-M3 embedding provider
+
+**症状**
+
+- 用户希望 embedding provider 不依赖手工本地部署，最好直接跟项目其他基础设施一起启动。
+
+**根因**
+
+- Ollama 方案能用，但仍然要求本机提前准备模型。
+- 对项目使用者来说，`docker compose up` 一把起服务的体验更统一。
+
+**修复**
+
+- 在 `docker-compose.yml` 中新增 `bge-m3` 服务。
+- 使用 Hugging Face Text Embeddings Inference CPU 镜像承载 `BAAI/bge-m3`。
+- 默认 embedding 配置切换为：
+  - `GRAPH_MVP_EMBEDDING_MODEL=BAAI/bge-m3`
+  - `GRAPH_MVP_EMBEDDING_BASE_URL=http://127.0.0.1:8090/v1`
+  - `GRAPH_MVP_LOCAL_EMBEDDINGS=false`
+
+**教训**
+
+- 面向用户的默认方案应优先选择“一条命令即可启动”的路径。
+- embedding provider 和数据库一样，适合收进 `docker-compose` 统一管理。

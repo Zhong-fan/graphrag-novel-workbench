@@ -51,9 +51,9 @@ class CaptchaChallenge(BaseModel):
 class ProjectCreateRequest(BaseModel):
     title: str = Field(..., min_length=2, max_length=255)
     genre: str = Field(..., min_length=2, max_length=100)
-    premise: str = Field(..., min_length=12)
-    world_brief: str = Field(default="")
-    writing_rules: str = Field(default="")
+    premise: str = Field(..., min_length=12, max_length=2000)
+    world_brief: str = Field(default="", max_length=4000)
+    writing_rules: str = Field(default="", max_length=2000)
     style_profile: str = Field(default="light_novel", pattern="^(light_novel|lyrical_restrained)$")
 
 

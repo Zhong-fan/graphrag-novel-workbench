@@ -351,6 +351,11 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
+  function clearFeedback() {
+    error.value = "";
+    success.value = "";
+  }
+
   async function addMemory(payload: { title: string; content: string; memory_scope: string; importance: number }) {
     if (!token.value || !activeProject.value) {
       return;
@@ -618,6 +623,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     submitNovelComment,
     selectProject,
     createProject,
+    clearFeedback,
     addMemory,
     addSource,
     indexProject,

@@ -1,378 +1,280 @@
-# Handoff
+# Frontend Product Roadmap
 
-## 2026-04-30 关机前最新状态
+## 当前状态
 
-这部分是本次联调结束前新增的最新记忆，优先看这里。
+目前前端已经完成了第一轮产品化改版，但有一部分内容还是“展示型界面”，还没有和真实后端数据完全打通。
 
-### 这次已经完成的新增改动
+已经完成：
 
-- 修复了 `GraphRAGService.query()` 的 CLI 参数错误：
-  - 现在使用 `--query`
-  - 不再把 prompt 当位置参数传
-- 修复了 GraphRAG workspace 文件编码问题：
-  - `.env`
-  - `settings.yaml`
-  - input 文本
-  - 统一改成无 BOM 的 `utf-8`
-- 后端索引接口已经改成后台任务：
-  - `/api/projects/{project_id}/index` 不再同步阻塞
-  - 项目状态会进入 `indexing`
-- 前端 store 已经重写索引状态流：
-  - 会轮询项目状态
-  - 避免重复触发索引
-  - `ready` 后自动更新提示
-- GraphRAG 调用入口已经从：
-  - `python -m graphrag`
-  - 改成
-  - `python -m app.graphrag_cli`
-- 新增了本地 fallback embeddings 代码：
-  - [app/graphrag_local_embeddings.py](E:\Computer\Wyc_Xc\MVP\app\graphrag_local_embeddings.py)
-  - [app/graphrag_cli.py](E:\Computer\Wyc_Xc\MVP\app\graphrag_cli.py)
-- 新增了 bug 记录文档：
-  - [BUG_LOG.md](E:\Computer\Wyc_Xc\MVP\BUG_LOG.md)
+- 顶部导航改成 `首页 / 书城 / 书架 / 我的小说 / 我的`
+- 登录 / 注册改成右上角独立入口
+- 注册简化成 `用户名 + 密码 + 验证码`
+- “我的小说”里保留了现有创作工作台
+- 首页、书城、书架、我的 这些页面结构已经搭起来了
 
-### GitHub 状态
+还没有完成：
 
-仓库已经推到：
+- 首页推荐小说是前端写死的示例数据
+- 书城小说列表是前端写死的示例数据
+- 点赞 / 收藏 / 评论目前只是前端交互，没有真实持久化
+- 书架数据目前来自前端临时状态，不是后端用户收藏
+- “我的”里的邮箱 / 手机号 / 简介还没有真实保存
+- “我的小说”生成出来的内容，还没有发布到“书城”展示
 
-- `https://github.com/Zhong-fan/graphrag-novel-workbench.git`
+## 总目标
 
-当前远端分支：
+把当前项目从“创作后台 + 假前台”补成：
 
-- `main`
+1. 有真实前台小说展示站
+2. 有真实用户书架
+3. 有真实互动系统
+4. 有作者后台
+5. 有作品发布链路
 
-之前确认过的提交：
+---
 
-- `4f62d1c`
-- `f0c6070`
+## 建议实施顺序
 
-注意：
+不要一起做，按下面顺序推进。
 
-- 本轮最后新增的 `BUG_LOG.md`
-- 以及 fallback wrapper 相关修复
-- 还没有再确认是否已经提交并推送
+### 第 1 步：先把“书城作品”数据结构补出来
 
-下次开机后先执行：
+目标：
 
-- `git status`
-- `git log --oneline -n 5`
+- 后端有真实的“作品”表
+- 前端书城不再读假数据
 
-确认最后这轮本地改动是否还在未提交状态。
+建议新增实体：
 
-### 真实联调现在卡在哪里
+- `Novel`
+- `NovelChapter`
+- `NovelLike`
+- `NovelFavorite`
+- `NovelComment`
+- `UserProfile`
 
-已经验证过：
+建议最小字段：
 
-1. `register`
-2. `create project`
-3. `add memory`
-4. `add source`
-5. `index` 接口已能提交后台任务
+`Novel`
 
-当前还没有打通的是：
+- `id`
+- `author_id`
+- `title`
+- `summary`
+- `genre`
+- `tagline`
+- `cover_url` 可选
+- `status` 例如 `draft / published`
+- `visibility` 例如 `private / public`
+- `created_at`
+- `updated_at`
 
-6. `index project -> ready`
-7. `generate`
+`NovelChapter`
 
-### 已经确认过的两个真实根因
+- `id`
+- `novel_id`
+- `title`
+- `summary`
+- `content`
+- `chapter_no`
+- `created_at`
 
-#### 根因 1：远端 OpenAI 兼容接口不支持 embeddings
+`NovelLike`
 
-已实际验证以下模型都会失败：
+- `id`
+- `novel_id`
+- `user_id`
 
-- `text-embedding-3-small`
-- `text-embedding-3-large`
-- `text-embedding-ada-002`
+`NovelFavorite`
 
-错误形态是：
+- `id`
+- `novel_id`
+- `user_id`
 
-- `503`
-- `model_not_found`
+`NovelComment`
 
-所以之前项目长时间停在 `indexing`，不是单纯“GraphRAG 慢”，而是：
+- `id`
+- `novel_id`
+- `user_id`
+- `content`
+- `created_at`
 
-- GraphRAG 在 embedding 步骤反复指数退避重试
+`UserProfile`
 
-#### 根因 2：切到本地 fallback embeddings 后，又卡在 GraphRAG fast NLP 抽图步骤
+- `id`
+- `user_id`
+- `bio`
+- `email`
+- `phone`
 
-最新一次真实失败项目是：
+### 第 2 步：把“我的小说”生成结果接成可发布作品
 
-- `project_4`
-- workspace:
-  - `E:\Computer\Wyc_Xc\MVP\workspace\graphrag_projects\project_4`
+目标：
 
-后端日志已经明确记录：
+- 用户在“我的小说”里生成的内容，能真正变成一部小说或章节
 
-- `Background GraphRAG index failed for project_id=4`
+建议做法：
 
-真正失败点见：
+- 先把 `Project` 和 `GenerationRun` 保留
+- 增加“发布为作品”动作
+- 允许把某次生成结果写入 `Novel` + `NovelChapter`
 
-- [workspace/graphrag_projects/project_4/logs/indexing-engine.log](E:\Computer\Wyc_Xc\MVP\workspace\graphrag_projects\project_4\logs\indexing-engine.log)
+建议新增接口：
 
-关键错误是：
+- `POST /api/novels/from-generation`
+- 入参：
+  - `project_id`
+  - `generation_id`
+  - `title` 可覆盖
+  - `summary` 可覆盖
+  - `visibility`
 
-- workflow: `extract_graph_nlp`
-- exception:
-  - `ValueError: Columns must be same length as key`
+这样可以先不改动现有生成主链，只在后面加“发布”。
 
-也就是说，现在 embedding 问题已经绕过了一层，但 `fast` 模式的 NLP noun-graph 构建又在中文/当前输入下炸了。
+### 第 3 步：把书城页面接真实 API
 
-### 当前推断
+目标：
 
-现在最可能的正确方向，不是继续盲跑，而是二选一：
+- 首页推荐
+- 书城列表
+- 小说详情
 
-#### 方向 A：保留官方 GraphRAG，但不要再用 `fast`
+建议新增接口：
 
-改成：
+- `GET /api/novels`
+- `GET /api/novels/{novel_id}`
+- `GET /api/home/feed`
 
-- `standard`
+建议前端替换：
 
-前提是：
+- 把 `App.vue` 里写死的 `novels` 移到 store
+- 从 API 拉取
+- 首页推荐区改成后端返回
 
-- 必须有可用 embedding provider
+### 第 4 步：把书架做成真实收藏
 
-否则还是会死在 embeddings。
+目标：
 
-#### 方向 B：继续保留本地 fallback embeddings，但改掉 `fast` 的 `extract_graph_nlp`
+- 收藏是真收藏
+- 换设备 / 刷新页面后仍然存在
 
-这条更贴近当前代码状态。
+建议接口：
 
-可能做法：
+- `POST /api/novels/{novel_id}/favorite`
+- `DELETE /api/novels/{novel_id}/favorite`
+- `GET /api/me/favorites`
 
-- 研究 GraphRAG `standard` 在本地 fallback embeddings 下是否可跑
-- 或者 patch `fast` 配置 / 输入，让 `extract_graph_nlp` 不触发当前 pandas 异常
+前端改动：
 
-### 下次开机后推荐第一步
+- “书架”页面只展示 `GET /api/me/favorites`
+- 收藏按钮直接调接口
 
-直接按这个顺序做：
+### 第 5 步：把点赞和评论做成真实互动
 
-1. 启动容器
-   - `docker compose up -d mysql neo4j`
-2. 启动后端
-   - `python -m app.api`
-3. 先确认本地改动状态
-   - `git status`
-4. 先看 bug 文档
-   - `BUG_LOG.md`
-5. 优先复现 `project_4` 的 `extract_graph_nlp` 失败
-6. 不要再先怀疑 embedding，那个问题已经定位清楚
-7. 现在的主攻点是：
-   - `fast` 模式 `extract_graph_nlp` 为什么在当前输入上构边失败
+目标：
 
-### 一句话版本
+- 点赞数、评论数真实可用
 
-> 当前主链已经推进到“后台索引真实运行并能快速失败”的阶段；embedding provider 不可用的问题已定位，最新阻塞点已经前移到 GraphRAG `fast` 模式的 `extract_graph_nlp` / pandas 构边异常。
+建议接口：
 
-## 当前目标
+- `POST /api/novels/{novel_id}/like`
+- `DELETE /api/novels/{novel_id}/like`
+- `GET /api/novels/{novel_id}/comments`
+- `POST /api/novels/{novel_id}/comments`
 
-把项目彻底重构为这条正式路线：
+前端注意：
 
-- `GraphRAG` 负责官方索引与查询
-- `MySQL` 负责登录、用户、项目、记忆、资料、生成历史
-- `Neo4j` 负责图谱同步与图关系投影
-- `Vue 3 + TypeScript` 负责前端工作台
-- 写作模型走真实接口，不走 mock
+- 点赞要做“当前用户是否已点赞”
+- 评论列表最好分页
 
-## 这次已经完成的事
+### 第 6 步：补“我的”页面真实资料设置
 
-### 架构方向已切换
+目标：
 
-旧的“自定义图检索 + 固定 seed 世界 + 命令行多章节生成”已经不是主路线。
+- 邮箱、手机号、简介可保存
 
-现在主路线已经切到：
+建议接口：
 
-- 用户登录
-- 项目创建
-- 长期记忆管理
-- 参考资料管理
-- GraphRAG workspace
-- GraphRAG `init / index / query`
-- Neo4j 同步
-- Vue 工作台
+- `GET /api/me/profile`
+- `PUT /api/me/profile`
 
-### 后端新模块
+前端改动：
 
-已新增或重写：
+- 进入“我的”时拉资料
+- 点击保存时提交
 
-- [app/config.py](E:\Computer\Wyc_Xc\MVP\app\config.py)
-- [app/db.py](E:\Computer\Wyc_Xc\MVP\app\db.py)
-- [app/models.py](E:\Computer\Wyc_Xc\MVP\app\models.py)
-- [app/auth.py](E:\Computer\Wyc_Xc\MVP\app\auth.py)
-- [app/contracts.py](E:\Computer\Wyc_Xc\MVP\app\contracts.py)
-- [app/graphrag_service.py](E:\Computer\Wyc_Xc\MVP\app\graphrag_service.py)
-- [app/story_service.py](E:\Computer\Wyc_Xc\MVP\app\story_service.py)
-- [app/api.py](E:\Computer\Wyc_Xc\MVP\app\api.py)
-- [app/llm.py](E:\Computer\Wyc_Xc\MVP\app\llm.py)
+### 第 7 步：再做小说详情页
 
-### 前端新结构
+当前还缺一个关键页面：
 
-已重写：
+- 小说详情页
 
-- [frontend/src/App.vue](E:\Computer\Wyc_Xc\MVP\frontend\src\App.vue)
-- [frontend/src/api.ts](E:\Computer\Wyc_Xc\MVP\frontend\src\api.ts)
-- [frontend/src/types.ts](E:\Computer\Wyc_Xc\MVP\frontend\src\types.ts)
-- [frontend/src/stores/workbench.ts](E:\Computer\Wyc_Xc\MVP\frontend\src\stores\workbench.ts)
-- [frontend/src/style.css](E:\Computer\Wyc_Xc\MVP\frontend\src\style.css)
+应该包含：
 
-前端现在围绕这些功能组织：
+- 作品信息
+- 章节列表
+- 点赞 / 收藏 / 评论
+- 作者信息
+- 推荐作品
 
-- 登录 / 注册
-- 项目列表
-- 项目创建
-- 记忆录入
-- 资料录入
-- GraphRAG 索引
-- 生成请求
-- 生成历史
-- 检索上下文显示
+建议前端后续拆页面，而不是继续把所有内容都塞进一个 `App.vue`。
 
-### 基础设施
+---
 
-已改好：
+## 技术债
 
-- [docker-compose.yml](E:\Computer\Wyc_Xc\MVP\docker-compose.yml)
-- [.env](E:\Computer\Wyc_Xc\MVP\.env)
-- [scripts/start-workbench.ps1](E:\Computer\Wyc_Xc\MVP\scripts\start-workbench.ps1)
+当前前端为了快速出结构，很多内容还在一个文件里。
 
-当前容器规划：
+后续建议拆分：
 
-- `mysql`
-- `neo4j`
+- `pages/HomePage.vue`
+- `pages/StorePage.vue`
+- `pages/ShelfPage.vue`
+- `pages/StudioPage.vue`
+- `pages/ProfilePage.vue`
+- `components/AuthModal.vue`
+- `components/NovelCard.vue`
+- `components/ProjectCard.vue`
 
-重要配置：
+Pinia 也建议拆 store：
 
-- 项目自己的 MySQL 端口改成了 `3307`
-- Neo4j 仍是 `7687 / 7474`
+- `authStore`
+- `novelStore`
+- `shelfStore`
+- `studioStore`
+- `profileStore`
 
-## 当前确认过的事实
+---
 
-### GraphRAG 依赖
+## 数据迁移注意点
 
-`graphrag==2.7.2` 已安装并可调用。
+因为现在用户表还是：
 
-### GraphRAG workspace
+- `display_name` 实际充当用户名
+- `email` 目前是内部占位邮箱
 
-`GraphRAGService.ensure_workspace()` 已验证可用：
+以后如果要做真邮箱资料：
 
-- 能创建 workspace
-- 能生成 `.env`
-- 能生成 `settings.yaml`
-- 我已经看过官方 `settings.yaml` 结构
-- 当前补丁逻辑是按真实结构在改
+1. 不要把现有 `email` 直接当用户真实邮箱使用
+2. 最好新增 `UserProfile.email`
+3. 或者单独做一次迁移，把占位邮箱与真实邮箱机制分开
 
-### 编译/构建状态
+---
 
-已通过：
+## 推荐下一次开工顺序
 
-- `python -m compileall app`
-- `cd frontend && npm run build`
-- `python -m app.api` 启动后 `GET /api/bootstrap` 返回 `200`
+你回来后，建议按这个顺序继续：
 
-### 没有保留测试业务数据
+1. 先做 `Novel / NovelChapter / Favorite / Comment / Profile` 后端模型
+2. 再做 `GET /api/novels` 和 `GET /api/me/favorites`
+3. 把前端书城、书架从假数据切到真数据
+4. 再做“从生成结果发布到书城”
+5. 最后补点赞、评论、个人资料保存
 
-注意：
+---
 
-- 我没有保留测试项目、测试用户、测试记忆、测试正文
-- 我创建过的临时 GraphRAG inspection workspace 已清理
+## 一句话结论
 
-## 写作规则记忆
+现在前端已经有了产品外壳，但前台小说展示和社区交互还主要是假的。
 
-这个规则要保留，后续不能丢：
-
-- 普通对话使用 `「」`
-- 嵌套引号使用 `『』`
-
-这条规则已经进入：
-
-- 项目说明
-- 写作服务约束
-- 前端说明
-
-## 现在还没完成的关键部分
-
-下面这些才是下一步真正要做的，不要再偏回旧 MVP 路线。
-
-### 1. 打通真实业务主链
-
-优先打通：
-
-1. `register/login`
-2. `create project`
-3. `add memory`
-4. `add source`
-5. `index project`
-6. `generate`
-
-### 2. 验证 GraphRAG query 命令参数
-
-需要做一次最小真实验证，确认当前版本 `graphrag query` 的参数组合和 `GraphRAGService.query()` 完全一致。
-
-重点看：
-
-- `--method`
-- `--response-type`
-- prompt 位置
-
-### 3. 验证 GraphRAG index 输出与 Neo4j 映射
-
-需要确认 `entities.parquet` 和 `relationships.parquet` 的真实字段名。
-
-当前 `sync_to_neo4j()` 已经写了兼容式取值，但还需要实际索引结果验证：
-
-- `id / entity_id / title / name`
-- `source / src_id / source_title`
-- `target / tgt_id / target_title`
-
-### 4. 清理旧模块
-
-这些旧模块现在已经不是主路径，后面要考虑移除或降级：
-
-- `app/agents.py`
-- `app/pipeline.py`
-- `app/retriever.py`
-- `app/runtime.py`
-- `app/neo4j_store.py`
-- `app/graph_store.py`
-- `app/graph_backend.py`
-- `app/schema.py`
-- `app/cli.py`
-
-但现在先不要急着删，等新主链确认跑通再清理。
-
-### 5. 修正中文显示问题
-
-PowerShell 里有中文乱码现象。
-
-这是控制台编码问题，不是文件坏了，但后续仍可统一再检查：
-
-- 终端显示
-- FastAPI 返回
-- Vue 页面渲染
-- markdown 落盘
-
-## 下次开机后第一步该做什么
-
-直接按这个顺序继续：
-
-1. 启动容器
-   - `docker compose up -d mysql neo4j`
-2. 启动后端
-   - `python -m app.api`
-3. 启动前端开发模式或直接看构建产物
-   - `cd frontend`
-   - `npm run dev`
-4. 不创建演示小说内容
-5. 只做最小真实业务验证：
-   - 注册
-   - 建项目
-   - 加一条记忆
-   - 加一条资料
-   - 跑一次索引
-   - 跑一次生成
-6. 盯住 GraphRAG query/index 和 Neo4j sync 的真实输出
-
-## 下一步工作重点
-
-一句话版本：
-
-> 先把 `MySQL + GraphRAG + Neo4j + Vue` 的真实主链跑通，再清理旧 MVP 模块，不要再把精力放在示例章节和演示数据上。
+后续应先补真实作品数据层，再补发布链路，再补书架 / 点赞 / 评论 / 个人资料，按顺序推进，不要一起动。

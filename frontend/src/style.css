@@ -49,6 +49,11 @@ body,
   min-height: 100%;
 }
 
+#app {
+  position: relative;
+  isolation: isolate;
+}
+
 html {
   font-size: 15px;
 }
@@ -57,11 +62,67 @@ body {
   margin: 0;
   color: var(--ink);
   font-family: var(--font-body);
+  overflow-x: hidden;
   background:
     radial-gradient(circle at top left, color-mix(in oklab, white 48%, var(--rose)), transparent 34%),
     radial-gradient(circle at 88% 12%, color-mix(in oklab, white 62%, var(--pink-cloud)), transparent 23%),
     radial-gradient(circle at 100% 0%, color-mix(in oklab, white 80%, var(--blue-soft)), transparent 18%),
     linear-gradient(180deg, #fff8fb 0%, #fff2f7 54%, #fdeef4 100%);
+}
+
+#app::before,
+#app::after {
+  content: "";
+  position: fixed;
+  inset: -20%;
+  z-index: -1;
+  pointer-events: none;
+}
+
+#app::before {
+  background:
+    radial-gradient(ellipse 42% 28% at 18% 22%, rgba(132, 188, 220, 0.26) 0%, rgba(132, 188, 220, 0.1) 42%, transparent 72%),
+    radial-gradient(ellipse 34% 24% at 82% 18%, rgba(248, 186, 214, 0.3) 0%, rgba(248, 186, 214, 0.1) 44%, transparent 74%),
+    radial-gradient(ellipse 46% 30% at 50% 82%, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.16) 40%, transparent 76%);
+  filter: blur(18px);
+  opacity: 0.9;
+  animation: water-drift 16s ease-in-out infinite alternate;
+}
+
+#app::after {
+  background:
+    radial-gradient(ellipse 28% 18% at 28% 36%, rgba(255, 255, 255, 0.22) 0%, transparent 68%),
+    radial-gradient(ellipse 22% 16% at 68% 30%, rgba(108, 158, 196, 0.12) 0%, transparent 70%),
+    radial-gradient(ellipse 32% 18% at 58% 70%, rgba(255, 255, 255, 0.18) 0%, transparent 72%),
+    linear-gradient(120deg, transparent 8%, rgba(255, 255, 255, 0.14) 38%, transparent 64%);
+  filter: blur(20px);
+  opacity: 0.72;
+  transform: scale(1.08);
+  animation: water-caustic 13s ease-in-out infinite alternate;
+}
+
+@keyframes water-drift {
+  from {
+    transform: translate3d(-1.5%, -1%, 0) scale(1);
+    background-position: 0% 0%, 100% 0%, 50% 100%;
+  }
+
+  to {
+    transform: translate3d(1.5%, 1%, 0) scale(1.035);
+    background-position: 6% 4%, 94% 6%, 54% 94%;
+  }
+}
+
+@keyframes water-caustic {
+  from {
+    transform: translate3d(-1%, 0.5%, 0) scale(1.08) rotate(-1deg);
+    background-position: 18% 30%, 72% 24%, 52% 76%, 0% 0%;
+  }
+
+  to {
+    transform: translate3d(1%, -0.6%, 0) scale(1.12) rotate(1deg);
+    background-position: 34% 42%, 60% 38%, 64% 64%, 100% 0%;
+  }
 }
 
 button,
@@ -283,6 +344,54 @@ button {
   color: color-mix(in oklab, var(--success) 72%, var(--ink));
 }
 
+.toast-stack {
+  position: fixed;
+  top: 22px;
+  right: 22px;
+  z-index: 50;
+  display: grid;
+  gap: 10px;
+  width: min(380px, calc(100vw - 32px));
+}
+
+.toast {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 0.9rem 1rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(14px);
+}
+
+.toast span {
+  line-height: 1.55;
+}
+
+.toast button {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  color: currentColor;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.toast--error {
+  background: color-mix(in oklab, white 82%, var(--danger));
+  border-color: color-mix(in oklab, white 62%, var(--danger));
+  color: color-mix(in oklab, var(--danger) 76%, var(--ink));
+}
+
+.toast--success {
+  background: color-mix(in oklab, white 84%, var(--success));
+  border-color: color-mix(in oklab, white 64%, var(--success));
+  color: color-mix(in oklab, var(--success) 74%, var(--ink));
+}
+
 .content-grid,
 .landing__grid,
 .workspace,
@@ -295,6 +404,10 @@ button {
 
 .content-grid {
   grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.85fr);
+}
+
+.content-grid--home-hot {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .content-grid--profile {
@@ -363,6 +476,21 @@ button {
   );
 }
 
+.advanced-create {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.advanced-create summary {
+  cursor: pointer;
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.advanced-create[open] summary {
+  color: var(--ink);
+}
+
 .comment-list {
   display: grid;
   gap: var(--space-3);
@@ -395,9 +523,78 @@ button {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.library-dashboard {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.library-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.25fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.library-grid__published {
+  grid-column: 1 / -1;
+}
+
+.library-grid__published .novel-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mode-switch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 5px;
+  background: color-mix(in oklab, white 76%, var(--paper-soft));
+  border: 1px solid color-mix(in oklab, var(--line) 92%, white);
+  border-radius: 999px;
+}
+
+.mode-switch button {
+  padding: 0.62rem 0.92rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.mode-switch__item--active {
+  background: color-mix(in oklab, white 60%, var(--blue-soft)) !important;
+  color: var(--ink) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--line) 86%, white);
+}
+
 .workspace {
   grid-template-columns: minmax(290px, 0.92fr) minmax(0, 1.2fr) minmax(310px, 0.92fr);
   align-items: start;
+}
+
+.workspace--workshop {
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
+}
+
+.workspace--workshop > .workspace__column:first-child {
+  display: none;
+}
+
+.workspace--starter {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workspace--starter .workspace__column {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(340px, 1.45fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.workspace--starter .workspace__column > .panel:nth-child(3) {
+  grid-column: 2;
+  grid-row: 1 / span 2;
 }
 
 .workspace__column {
@@ -556,6 +753,12 @@ button {
   color: var(--ink-soft);
 }
 
+.field-hint {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: color-mix(in oklab, var(--ink-soft) 86%, white);
+}
+
 .field input,
 .field textarea,
 .field select {
@@ -574,6 +777,43 @@ button {
   border-color: color-mix(in oklab, var(--blue) 34%, var(--line-strong));
   background: white;
   box-shadow: 0 0 0 4px color-mix(in oklab, var(--blue) 12%, white);
+}
+
+.password-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+}
+
+.password-field input {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.password-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-left: 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: color-mix(in oklab, white 78%, var(--blue-soft));
+  color: var(--ink-soft);
+}
+
+.password-toggle:hover {
+  background: color-mix(in oklab, white 66%, var(--blue-soft));
+  color: var(--ink);
+}
+
+.password-toggle svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .field textarea {
@@ -803,6 +1043,21 @@ button {
   box-shadow: var(--shadow-md);
 }
 
+.auth-page {
+  display: grid;
+  place-items: center;
+  min-height: min(640px, calc(100vh - 180px));
+  padding: var(--space-5) 0;
+}
+
+.auth-modal--page {
+  width: min(520px, 100%);
+}
+
+.auth-modal .feedback {
+  margin-bottom: 0;
+}
+
 .feature-modal {
   width: min(560px, calc(100vw - 32px));
   box-shadow: var(--shadow-md);
@@ -938,8 +1193,26 @@ button {
 
   .workspace,
   .content-grid,
-  .content-grid--profile {
+  .content-grid--profile,
+  .library-grid {
     grid-template-columns: 1fr;
+  }
+
+  .library-grid__published {
+    grid-column: auto;
+  }
+
+  .library-grid__published .novel-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace--starter .workspace__column {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace--starter .workspace__column > .panel:nth-child(3) {
+    grid-column: auto;
+    grid-row: auto;
   }
 }
 

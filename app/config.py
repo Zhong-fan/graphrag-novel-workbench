@@ -4,6 +4,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+DEFAULT_OLLAMA_EMBEDDING_MODEL = "bge-m3"
+DEFAULT_OLLAMA_EMBEDDING_BASE_URL = "http://127.0.0.1:11434/v1"
+DEFAULT_TEI_EMBEDDING_MODEL = "BAAI/bge-m3"
+DEFAULT_TEI_EMBEDDING_BASE_URL = "http://127.0.0.1:8090/v1"
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -17,6 +22,8 @@ class Settings:
     embedding_model: str
     openai_api_key: str | None
     openai_base_url: str
+    embedding_api_key: str | None
+    embedding_base_url: str
     mysql_host: str
     mysql_port: int
     mysql_user: str
@@ -39,6 +46,16 @@ class Settings:
             f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}?charset=utf8mb4"
         )
 
+    @property
+    def embedding_provider_label(self) -> str:
+        if self.graphrag_local_embeddings:
+            return "local-fallback"
+        if "127.0.0.1:11434" in self.embedding_base_url or "localhost:11434" in self.embedding_base_url:
+            return "ollama"
+        if "127.0.0.1:8090" in self.embedding_base_url or "localhost:8090" in self.embedding_base_url:
+            return "tei-bge-m3"
+        return "remote-compatible-api"
+
 
 def _normalize_base_url(url: str) -> str:
     stripped = url.rstrip("/")
@@ -53,6 +70,14 @@ def _normalize_index_method(method: str) -> str:
     if normalized in allowed:
         return normalized
     return "fast"
+
+
+def _is_ollama_base_url(url: str) -> bool:
+    return "127.0.0.1:11434" in url or "localhost:11434" in url
+
+
+def _is_tei_base_url(url: str) -> bool:
+    return "127.0.0.1:8090" in url or "localhost:8090" in url
 
 
 def _parse_bool(value: str | None, default: bool = False) -> bool:
@@ -79,6 +104,34 @@ def _resolve(name: str, dotenv_values: dict[str, str], default: str | None = Non
     return dotenv_values.get(name) or os.getenv(name) or default
 
 
+def _resolve_embedding_settings(
+    dotenv_values: dict[str, str],
+    openai_api_key: str | None,
+    openai_base_url: str,
+) -> tuple[str, str | None, str]:
+    embedding_base_url = _normalize_base_url(
+        _resolve("GRAPH_MVP_EMBEDDING_BASE_URL", dotenv_values, DEFAULT_OLLAMA_EMBEDDING_BASE_URL)
+        or DEFAULT_OLLAMA_EMBEDDING_BASE_URL
+    )
+
+    if _is_ollama_base_url(embedding_base_url):
+        default_model = DEFAULT_OLLAMA_EMBEDDING_MODEL
+        default_api_key = "ollama"
+    elif _is_tei_base_url(embedding_base_url):
+        default_model = DEFAULT_TEI_EMBEDDING_MODEL
+        default_api_key = "dummy"
+    elif embedding_base_url == openai_base_url:
+        default_model = "text-embedding-3-large"
+        default_api_key = openai_api_key or "ollama"
+    else:
+        default_model = "text-embedding-3-large"
+        default_api_key = openai_api_key
+
+    embedding_model = _resolve("GRAPH_MVP_EMBEDDING_MODEL", dotenv_values, default_model) or default_model
+    embedding_api_key = _resolve("GRAPH_MVP_EMBEDDING_API_KEY", dotenv_values, default_api_key)
+    return embedding_model, embedding_api_key, embedding_base_url
+
+
 def load_settings() -> Settings:
     root_dir = Path(__file__).resolve().parent.parent
     env_path = root_dir / ".env"
@@ -87,6 +140,11 @@ def load_settings() -> Settings:
     openai_api_key = _resolve("OPENAI_API_KEY", dotenv_values)
     openai_base_url = _normalize_base_url(
         _resolve("OPENAI_BASE_URL", dotenv_values, "https://api.openai.com/v1") or "https://api.openai.com/v1"
+    )
+    embedding_model, embedding_api_key, embedding_base_url = _resolve_embedding_settings(
+        dotenv_values,
+        openai_api_key,
+        openai_base_url,
     )
 
     return Settings(
@@ -97,10 +155,11 @@ def load_settings() -> Settings:
         llm_mode=(_resolve("GRAPH_MVP_LLM_MODE", dotenv_values, "openai") or "openai").strip().lower(),
         writer_model=_resolve("GRAPH_MVP_WRITER_MODEL", dotenv_values, "gpt-5.5") or "gpt-5.5",
         utility_model=_resolve("GRAPH_MVP_UTILITY_MODEL", dotenv_values, "gpt-5.4-mini") or "gpt-5.4-mini",
-        embedding_model=_resolve("GRAPH_MVP_EMBEDDING_MODEL", dotenv_values, "text-embedding-3-large")
-        or "text-embedding-3-large",
+        embedding_model=embedding_model,
         openai_api_key=openai_api_key,
         openai_base_url=openai_base_url,
+        embedding_api_key=embedding_api_key,
+        embedding_base_url=embedding_base_url,
         mysql_host=_resolve("MYSQL_HOST", dotenv_values, "127.0.0.1") or "127.0.0.1",
         mysql_port=int(_resolve("MYSQL_PORT", dotenv_values, "3306") or "3306"),
         mysql_user=_resolve("MYSQL_USER", dotenv_values, "graph_user") or "graph_user",
@@ -118,7 +177,7 @@ def load_settings() -> Settings:
             _resolve("GRAPH_MVP_GRAPHRAG_INDEX_METHOD", dotenv_values, "fast") or "fast"
         ),
         graphrag_local_embeddings=_parse_bool(
-            _resolve("GRAPH_MVP_LOCAL_EMBEDDINGS", dotenv_values, "true"),
-            default=True,
+            _resolve("GRAPH_MVP_LOCAL_EMBEDDINGS", dotenv_values, "false"),
+            default=False,
         ),
     )
