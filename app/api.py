@@ -25,6 +25,9 @@ from .contracts import (
     AuthResponse,
     BootstrapResponse,
     CaptchaChallenge,
+    CharacterCardCreateRequest,
+    CharacterCardOut,
+    CharacterCardUpdateRequest,
     CharacterStateUpdateOut,
     FavoriteToggleResponse,
     GenerateRequest,
@@ -45,10 +48,12 @@ from .contracts import (
     ProjectCreateRequest,
     ProjectDetailResponse,
     ProjectOut,
+    ProjectUpdateRequest,
     RegisterRequest,
     SourceCreateRequest,
     SourceOut,
     StoryEventOut,
+    UpdateNovelChapterRequest,
     UpdateNovelRequest,
     UserOut,
     UserProfileOut,
@@ -60,6 +65,7 @@ from .db import db_session, get_db, init_db
 from .evolution_service import EvolutionService
 from .graphrag_service import GraphRAGService, QueryResult
 from .models import (
+    CharacterCard,
     CharacterStateUpdate,
     GenerationRun,
     GraphWorkspace,
@@ -108,6 +114,13 @@ def _mark_project_stale(project: Project) -> None:
     project.indexing_status = "stale"
     if project.graph_workspace is not None:
         project.graph_workspace.neo4j_sync_status = "stale"
+
+
+def _character_card_or_404(db: Session, project_id: int, card_id: int) -> CharacterCard:
+    card = db.scalar(select(CharacterCard).where(CharacterCard.project_id == project_id, CharacterCard.id == card_id))
+    if card is None:
+        raise HTTPException(status_code=404, detail="人物卡不存在。")
+    return card
 
 
 def _user_out(user: User) -> UserOut:
@@ -381,6 +394,7 @@ def create_app() -> FastAPI:
                     list(project.memories),
                     list(project.source_documents),
                     record,
+                    character_cards=list(project.character_cards),
                     character_updates=list(project.character_state_updates),
                     relationship_updates=list(project.relationship_state_updates),
                     story_events=list(project.story_events),
@@ -514,6 +528,25 @@ def create_app() -> FastAPI:
         db.refresh(project)
         return ProjectOut.model_validate(project)
 
+    @app.put("/api/projects/{project_id}", response_model=ProjectOut)
+    def update_project(
+        project_id: int,
+        payload: ProjectUpdateRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> ProjectOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        project.title = payload.title.strip()
+        project.genre = payload.genre.strip()
+        project.premise = payload.premise.strip()
+        project.world_brief = payload.world_brief.strip()
+        project.writing_rules = payload.writing_rules.strip()
+        project.style_profile = payload.style_profile
+        _mark_project_stale(project)
+        db.commit()
+        db.refresh(project)
+        return ProjectOut.model_validate(project)
+
     @app.get("/api/projects/{project_id}", response_model=ProjectDetailResponse)
     def project_detail(
         project_id: int,
@@ -545,6 +578,7 @@ def create_app() -> FastAPI:
         return ProjectDetailResponse(
             project=ProjectOut.model_validate(project),
             memories=[MemoryOut.model_validate(item) for item in project.memories],
+            character_cards=[CharacterCardOut.model_validate(item) for item in project.character_cards],
             sources=[SourceOut.model_validate(item) for item in project.source_documents],
             generations=[GenerationOut.model_validate(item) for item in generations],
             character_state_updates=[_character_state_out(item) for item in character_updates[:20]],
@@ -763,14 +797,16 @@ def create_app() -> FastAPI:
         db.add(novel)
         db.flush()
 
-        chapter_title = generation.title.strip() or "第一章"
+        chapter_title = payload.chapter_title.strip() or generation.title.strip() or "第一章"
+        chapter_summary = payload.chapter_summary.strip() or generation.summary
+        chapter_content = payload.chapter_content.strip() or generation.content
         db.add(
             NovelChapter(
                 novel=novel,
                 title=chapter_title,
-                summary=generation.summary,
-                content=generation.content,
-                chapter_no=1,
+                summary=chapter_summary,
+                content=chapter_content,
+                chapter_no=payload.chapter_no,
             )
         )
         db.commit()
@@ -817,17 +853,42 @@ def create_app() -> FastAPI:
         novel = _novel_owned_or_404(db, current_user.id, novel_id)
         project = _project_or_404(db, current_user.id, payload.project_id)
         generation = _generation_or_404(db, project.id, payload.generation_id)
-        next_chapter_no = max((item.chapter_no for item in novel.chapters), default=0) + 1
+        next_chapter_no = payload.chapter_no or max((item.chapter_no for item in novel.chapters), default=0) + 1
+        if any(item.chapter_no == next_chapter_no for item in novel.chapters):
+            raise HTTPException(status_code=409, detail=f"第 {next_chapter_no} 章已经存在。")
 
         db.add(
             NovelChapter(
                 novel=novel,
                 title=payload.title.strip() or generation.title.strip() or f"第{next_chapter_no}章",
-                summary=generation.summary,
-                content=generation.content,
+                summary=payload.summary.strip() or generation.summary,
+                content=payload.content.strip() or generation.content,
                 chapter_no=next_chapter_no,
             )
         )
+        db.commit()
+        db.refresh(novel)
+        return _novel_detail_out(novel, current_user_id=current_user.id)
+
+    @app.put("/api/novels/{novel_id}/chapters/{chapter_id}", response_model=NovelDetailOut)
+    def update_novel_chapter(
+        novel_id: int,
+        chapter_id: int,
+        payload: UpdateNovelChapterRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> NovelDetailOut:
+        novel = _novel_owned_or_404(db, current_user.id, novel_id)
+        chapter = next((item for item in novel.chapters if item.id == chapter_id), None)
+        if chapter is None:
+            raise HTTPException(status_code=404, detail="章节不存在。")
+        if any(item.id != chapter_id and item.chapter_no == payload.chapter_no for item in novel.chapters):
+            raise HTTPException(status_code=409, detail=f"第 {payload.chapter_no} 章已经存在。")
+
+        chapter.title = payload.title.strip()
+        chapter.summary = payload.summary.strip()
+        chapter.content = payload.content.strip()
+        chapter.chapter_no = payload.chapter_no
         db.commit()
         db.refresh(novel)
         return _novel_detail_out(novel, current_user_id=current_user.id)
@@ -852,6 +913,50 @@ def create_app() -> FastAPI:
         db.commit()
         db.refresh(memory)
         return MemoryOut.model_validate(memory)
+
+    @app.post("/api/projects/{project_id}/character-cards", response_model=CharacterCardOut)
+    def create_character_card(
+        project_id: int,
+        payload: CharacterCardCreateRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> CharacterCardOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        card = CharacterCard(
+            project=project,
+            name=payload.name.strip(),
+            age=payload.age.strip(),
+            gender=payload.gender.strip(),
+            personality=payload.personality.strip(),
+            story_role=payload.story_role.strip(),
+            background=payload.background.strip(),
+        )
+        db.add(card)
+        _mark_project_stale(project)
+        db.commit()
+        db.refresh(card)
+        return CharacterCardOut.model_validate(card)
+
+    @app.put("/api/projects/{project_id}/character-cards/{card_id}", response_model=CharacterCardOut)
+    def update_character_card(
+        project_id: int,
+        card_id: int,
+        payload: CharacterCardUpdateRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> CharacterCardOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        card = _character_card_or_404(db, project.id, card_id)
+        card.name = payload.name.strip()
+        card.age = payload.age.strip()
+        card.gender = payload.gender.strip()
+        card.personality = payload.personality.strip()
+        card.story_role = payload.story_role.strip()
+        card.background = payload.background.strip()
+        _mark_project_stale(project)
+        db.commit()
+        db.refresh(card)
+        return CharacterCardOut.model_validate(card)
 
     @app.post("/api/projects/{project_id}/sources", response_model=SourceOut)
     def create_source(

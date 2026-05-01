@@ -3,35 +3,58 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 
 import { useWorkbenchStore } from "./stores/workbench";
+import type { CharacterCard, NovelCard, ProjectPayload } from "./types";
 
-type ViewKey = "home" | "store" | "detail" | "shelf" | "studio" | "workshop" | "profile" | "auth";
+type ViewKey =
+  | "home"
+  | "store"
+  | "detail"
+  | "reader"
+  | "shelf"
+  | "studio"
+  | "projectCreate"
+  | "projectSettings"
+  | "characters"
+  | "workshop"
+  | "novelEditor"
+  | "profile"
+  | "auth";
 
 const store = useWorkbenchStore();
-const { bootstrap, captcha, currentUser, projects, novels, favoriteNovels, myNovels, profile, currentNovel, novelComments, activeProject, currentGeneration, loading, error, success, isAuthenticated } =
-  storeToRefs(store);
+const {
+  bootstrap,
+  captcha,
+  currentUser,
+  projects,
+  novels,
+  favoriteNovels,
+  myNovels,
+  profile,
+  currentNovel,
+  novelComments,
+  activeProject,
+  currentGeneration,
+  loading,
+  error,
+  success,
+  isAuthenticated,
+} = storeToRefs(store);
 
 const currentView = ref<ViewKey>("home");
 const authMode = ref<"register" | "login">("register");
-const featurePanelOpen = ref(false);
 const authError = ref("");
 const showRegisterPassword = ref(false);
 const showLoginPassword = ref(false);
 const writingMode = ref<"auto" | "advanced">("auto");
+const shelfTab = ref<"liked" | "favorited">("favorited");
+const novelLayout = ref<"grid" | "list">("grid");
+const novelSearch = ref("");
 let feedbackTimer: number | null = null;
 
-const loginForm = reactive({
-  username: "",
-  password: "",
-});
+const loginForm = reactive({ username: "", password: "" });
+const registerForm = reactive({ username: "", password: "", confirmPassword: "", captcha_answer: "" });
 
-const registerForm = reactive({
-  username: "",
-  password: "",
-  confirmPassword: "",
-  captcha_answer: "",
-});
-
-const projectForm = reactive({
+const emptyProject = (): ProjectPayload => ({
   title: "",
   genre: "现代都市轻小说",
   premise: "",
@@ -40,22 +63,22 @@ const projectForm = reactive({
   style_profile: "light_novel",
 });
 
-const quickProjectForm = reactive({
-  idea: "",
-});
+const projectForm = reactive<ProjectPayload>(emptyProject());
+const projectSettingsForm = reactive<ProjectPayload>(emptyProject());
+const quickProjectForm = reactive({ idea: "" });
 
-const memoryForm = reactive({
-  title: "",
-  content: "",
-  memory_scope: "story",
-  importance: 3,
+const characterForm = reactive({
+  name: "",
+  age: "",
+  gender: "",
+  personality: "",
+  story_role: "",
+  background: "",
 });
+const editingCharacterId = ref<number | null>(null);
 
-const sourceForm = reactive({
-  title: "",
-  content: "",
-  source_kind: "reference",
-});
+const memoryForm = reactive({ title: "", content: "", memory_scope: "story", importance: 3 });
+const sourceForm = reactive({ title: "", content: "", source_kind: "reference" });
 
 const generationForm = reactive({
   prompt: "",
@@ -66,20 +89,14 @@ const generationForm = reactive({
   use_refiner: true,
   write_evolution: true,
 });
-
-const autoGenerationForm = reactive({
-  idea: "",
-});
+const autoGenerationForm = reactive({ idea: "" });
 
 const profileForm = reactive({
   bio: "偏爱都市、青春与细腻情绪流动的故事。",
   email: "",
   phone: "",
 });
-
-const commentForm = reactive({
-  content: "",
-});
+const commentForm = reactive({ content: "" });
 
 const publishForm = reactive({
   title: "",
@@ -88,7 +105,6 @@ const publishForm = reactive({
   tagline: "",
   visibility: "public" as "public" | "private",
 });
-
 const manageNovelForm = reactive({
   title: "",
   author_name: "",
@@ -96,36 +112,58 @@ const manageNovelForm = reactive({
   tagline: "",
   visibility: "public" as "public" | "private",
 });
+const appendChapterForm = reactive({ title: "", chapter_no: 1 });
+const draftForm = reactive({ title: "", summary: "", content: "", chapter_no: 1 });
+const chapterEditForm = reactive({ title: "", summary: "", content: "", chapter_no: 1 });
 
-const appendChapterForm = reactive({
-  title: "",
-});
+const selectedChapterId = ref<number | null>(null);
+const chapterJumpNo = ref(1);
 
 const featuredNovel = computed(() => novels.value[0] ?? null);
-const bookshelfNovels = computed(() => favoriteNovels.value);
 const hasProject = computed(() => Boolean(activeProject.value));
+const likedNovels = computed(() => novels.value.filter((novel) => novel.is_liked));
+const shelfDisplayNovels = computed(() => {
+  const keyword = novelSearch.value.trim().toLowerCase();
+  const source = shelfTab.value === "favorited" ? favoriteNovels.value : likedNovels.value;
+  return keyword ? source.filter((novel) => matchesNovelSearch(novel, keyword)) : source;
+});
+const searchedNovels = computed(() => {
+  const keyword = novelSearch.value.trim().toLowerCase();
+  return keyword ? novels.value.filter((novel) => matchesNovelSearch(novel, keyword)) : novels.value;
+});
+
+function matchesNovelSearch(novel: NovelCard, keyword: string) {
+  return [novel.title, novel.author, novel.genre, novel.tagline, novel.summary, novel.latest_excerpt]
+    .join(" ")
+    .toLowerCase()
+    .includes(keyword);
+}
+
 const isManagingCurrentNovel = computed(() =>
   Boolean(currentNovel.value && myNovels.value.some((item) => item.id === currentNovel.value?.id)),
 );
-const latestProject = computed(() => activeProject.value?.project ?? null);
-const projectCount = computed(() => projects.value.length);
-const memoryCount = computed(() => activeProject.value?.memories.length ?? 0);
-const sourceCount = computed(() => activeProject.value?.sources.length ?? 0);
-const generationCount = computed(() => activeProject.value?.generations.length ?? 0);
+const sortedChapters = computed(() => [...(currentNovel.value?.chapters ?? [])].sort((a, b) => a.chapter_no - b.chapter_no));
+const selectedChapter = computed(() => {
+  if (!sortedChapters.value.length) return null;
+  return sortedChapters.value.find((chapter) => chapter.id === selectedChapterId.value) ?? sortedChapters.value[0] ?? null;
+});
+const selectedChapterIndex = computed(() => sortedChapters.value.findIndex((chapter) => chapter.id === selectedChapter.value?.id));
+const previousChapter = computed(() => (selectedChapterIndex.value > 0 ? sortedChapters.value[selectedChapterIndex.value - 1] : null));
+const nextChapter = computed(() =>
+  selectedChapterIndex.value >= 0 && selectedChapterIndex.value < sortedChapters.value.length - 1
+    ? sortedChapters.value[selectedChapterIndex.value + 1]
+    : null,
+);
+const hasChapterNavigation = computed(() => sortedChapters.value.length > 1);
+const nextNovelChapterNo = computed(() =>
+  currentNovel.value ? Math.max(0, ...currentNovel.value.chapters.map((chapter) => chapter.chapter_no)) + 1 : 1,
+);
 
 const currentStep = computed(() => {
-  if (!isAuthenticated.value) {
-    return "先创建账号，再把喜欢的作品加入书架，随后开始自己的创作。";
-  }
-  if (!hasProject.value) {
-    return "去“我的小说”里创建一个项目，先确定故事方向。";
-  }
-  if (memoryCount.value === 0 && sourceCount.value === 0) {
-    return "可以直接让 AI 先写一版；有更多想法时，再补充角色、世界观或参考内容。";
-  }
-  if (latestProject.value?.indexing_status !== "ready") {
-    return "点击“整理资料并开始准备”，等待项目进入可写作状态。";
-  }
+  if (!isAuthenticated.value) return "先创建账号，再开始写自己的小说。";
+  if (!hasProject.value) return "先新建项目，确定标题、题材和故事方向。";
+  if (!(activeProject.value?.character_cards.length ?? 0)) return "先添加主要人物卡，再进入写作。";
+  if (activeProject.value?.project.indexing_status !== "ready") return "整理资料后，项目会进入可写作状态。";
   return "输入当前场景目标，开始生成正文。";
 });
 
@@ -135,29 +173,8 @@ const publishDefaults = computed(() => ({
   author_name: currentUser.value?.username || "",
 }));
 
-function projectStatusLabel(status: string | undefined) {
-  if (!status) {
-    return "未开始";
-  }
-  if (status === "ready") {
-    return "可以写作";
-  }
-  if (status === "indexing") {
-    return "资料准备中";
-  }
-  if (status === "failed") {
-    return "准备失败";
-  }
-  if (status === "stale") {
-    return "资料待更新";
-  }
-  return status;
-}
-
 function formatDateTime(value: string | undefined) {
-  if (!value) {
-    return "-";
-  }
+  if (!value) return "-";
   return new Date(value).toLocaleString("zh-CN", {
     year: "numeric",
     month: "2-digit",
@@ -167,56 +184,17 @@ function formatDateTime(value: string | undefined) {
   });
 }
 
-function openGeneration(id: number) {
-  const found = activeProject.value?.generations.find((item) => item.id === id) ?? null;
-  currentGeneration.value = found;
-  if (found) {
-    publishForm.title = found.title || activeProject.value?.project.title || "";
-    publishForm.summary = found.summary || "";
-  }
-}
-
-function openAuthPanel(mode: "register" | "login") {
-  authMode.value = mode;
-  currentView.value = "auth";
-}
-
-function openFeaturePanel() {
-  featurePanelOpen.value = true;
-}
-
-function closeFeaturePanel() {
-  featurePanelOpen.value = false;
+function projectStatusLabel(status: string | undefined) {
+  if (!status) return "未开始";
+  if (status === "ready") return "可以写作";
+  if (status === "indexing") return "资料准备中";
+  if (status === "failed") return "准备失败";
+  if (status === "stale") return "资料待更新";
+  return status;
 }
 
 function goToView(view: ViewKey) {
   currentView.value = view;
-}
-
-function clearToasts() {
-  authError.value = "";
-  store.clearFeedback();
-}
-
-async function openNovelDetail(novelId: number) {
-  await store.openNovel(novelId);
-  if (!error.value) {
-    if (currentNovel.value) {
-      manageNovelForm.title = currentNovel.value.title;
-      manageNovelForm.author_name = currentNovel.value.author;
-      manageNovelForm.summary = currentNovel.value.summary;
-      manageNovelForm.tagline = currentNovel.value.tagline;
-      manageNovelForm.visibility = currentNovel.value.visibility as "public" | "private";
-    }
-    currentView.value = "detail";
-  }
-}
-
-async function openWorkshop(projectId: number) {
-  await store.selectProject(projectId);
-  if (!error.value) {
-    currentView.value = "workshop";
-  }
 }
 
 function requireAuth(nextView: ViewKey) {
@@ -227,52 +205,132 @@ function requireAuth(nextView: ViewKey) {
   currentView.value = nextView;
 }
 
-function animateToggleButton(event: MouseEvent, accent: "like" | "save") {
-  const button = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-  if (!button || typeof button.animate !== "function") {
+function openAuthPanel(mode: "register" | "login") {
+  authMode.value = mode;
+  currentView.value = "auth";
+}
+
+function clearToasts() {
+  authError.value = "";
+  store.clearFeedback();
+}
+
+function syncProjectSettingsForm() {
+  const project = activeProject.value?.project;
+  if (!project) return;
+  projectSettingsForm.title = project.title;
+  projectSettingsForm.genre = project.genre;
+  projectSettingsForm.premise = project.premise;
+  projectSettingsForm.world_brief = project.world_brief;
+  projectSettingsForm.writing_rules = project.writing_rules;
+  projectSettingsForm.style_profile = project.style_profile;
+}
+
+function syncNovelManageForm() {
+  if (!currentNovel.value) return;
+  manageNovelForm.title = currentNovel.value.title;
+  manageNovelForm.author_name = currentNovel.value.author;
+  manageNovelForm.summary = currentNovel.value.summary;
+  manageNovelForm.tagline = currentNovel.value.tagline;
+  manageNovelForm.visibility = currentNovel.value.visibility as "public" | "private";
+}
+
+function syncDraftFromGeneration(generation: typeof currentGeneration.value) {
+  if (!generation) {
+    draftForm.title = "";
+    draftForm.summary = "";
+    draftForm.content = "";
+    draftForm.chapter_no = 1;
     return;
   }
+  draftForm.title = generation.title || "";
+  draftForm.summary = generation.summary || "";
+  draftForm.content = generation.content || "";
+  draftForm.chapter_no = (activeProject.value?.generations.length ?? 0) + 1;
+  appendChapterForm.title = generation.title || "";
+  appendChapterForm.chapter_no = draftForm.chapter_no;
+}
 
-  const glow = accent === "like" ? "rgba(232, 74, 126, 0.24)" : "rgba(244, 191, 86, 0.26)";
-  button.animate(
-    [
-      { transform: "translateY(0) scale(1)", boxShadow: "0 0 0 rgba(0, 0, 0, 0)" },
-      { transform: "translateY(-2px) scale(1.04)", boxShadow: `0 10px 24px ${glow}` },
-      { transform: "translateY(0) scale(1)", boxShadow: "0 0 0 rgba(0, 0, 0, 0)" },
-    ],
-    {
-      duration: 320,
-      easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-    },
-  );
+function resetCharacterForm() {
+  editingCharacterId.value = null;
+  characterForm.name = "";
+  characterForm.age = "";
+  characterForm.gender = "";
+  characterForm.personality = "";
+  characterForm.story_role = "";
+  characterForm.background = "";
+}
 
-  const icon = button.querySelector(".novel-card__toggle-icon");
-  if (icon instanceof SVGElement || icon instanceof HTMLElement) {
-    icon.animate(
-      [
-        { transform: "scale(0.92) rotate(0deg)" },
-        { transform: "scale(1.16) rotate(-8deg)" },
-        { transform: "scale(1) rotate(0deg)" },
-      ],
-      {
-        duration: 360,
-        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-      },
-    );
+function editCharacterCard(card: CharacterCard) {
+  editingCharacterId.value = card.id;
+  characterForm.name = card.name;
+  characterForm.age = card.age;
+  characterForm.gender = card.gender;
+  characterForm.personality = card.personality;
+  characterForm.story_role = card.story_role;
+  characterForm.background = card.background;
+}
+
+function openProjectSettings() {
+  if (!isAuthenticated.value) return openAuthPanel("login");
+  syncProjectSettingsForm();
+  currentView.value = "projectSettings";
+}
+
+function openCharacters() {
+  if (!isAuthenticated.value) return openAuthPanel("login");
+  currentView.value = "characters";
+}
+
+function openReader(chapterId?: number) {
+  selectedChapterId.value = chapterId ?? selectedChapterId.value ?? sortedChapters.value[0]?.id ?? null;
+  currentView.value = "reader";
+}
+
+function openNovelEditor() {
+  if (!isAuthenticated.value) return openAuthPanel("login");
+  syncNovelManageForm();
+  currentView.value = "novelEditor";
+}
+
+async function openNovelDetail(novelId: number) {
+  await store.openNovel(novelId);
+  if (!error.value) {
+    selectedChapterId.value = sortedChapters.value[0]?.id ?? null;
+    syncNovelManageForm();
+    currentView.value = "detail";
   }
 }
 
-async function likeNovel(novelId: number, event?: MouseEvent) {
-  if (event) {
-    animateToggleButton(event, "like");
+async function openWorkshop(projectId: number) {
+  await store.selectProject(projectId);
+  if (!error.value) currentView.value = "workshop";
+}
+
+function selectChapterById(value: number | string) {
+  selectedChapterId.value = Number(value);
+}
+
+function jumpToChapterNo() {
+  const target = sortedChapters.value.find((chapter) => chapter.chapter_no === Number(chapterJumpNo.value));
+  if (target) selectedChapterId.value = target.id;
+}
+
+function openGeneration(id: number) {
+  const found = activeProject.value?.generations.find((item) => item.id === id) ?? null;
+  currentGeneration.value = found;
+  if (found) {
+    publishForm.title = found.title || activeProject.value?.project.title || "";
+    publishForm.summary = found.summary || "";
+    syncDraftFromGeneration(found);
   }
+}
+
+async function likeNovel(novelId: number) {
   await store.toggleLikeNovel(novelId);
 }
 
-async function toggleSaveNovel(novelId: number, event?: MouseEvent) {
-  if (event) {
-    animateToggleButton(event, "save");
-  }
+async function toggleSaveNovel(novelId: number) {
   await store.toggleFavoriteNovel(novelId);
 }
 
@@ -292,27 +350,21 @@ async function submitRegister() {
     captcha_answer: registerForm.captcha_answer,
     captcha_token: captcha.value.token,
   });
-  if (isAuthenticated.value) {
-    registerForm.password = "";
-    registerForm.confirmPassword = "";
-    registerForm.captcha_answer = "";
-    currentView.value = "studio";
-  }
+  if (isAuthenticated.value) currentView.value = "studio";
 }
 
 async function submitLogin() {
   authError.value = "";
   await store.login(loginForm);
-  if (isAuthenticated.value) {
-    loginForm.password = "";
-    currentView.value = "studio";
-  }
+  if (isAuthenticated.value) currentView.value = "studio";
 }
 
 async function submitCreateProject() {
   await store.createProject(projectForm);
   if (!error.value && activeProject.value?.project) {
-    currentView.value = "workshop";
+    Object.assign(projectForm, emptyProject());
+    syncProjectSettingsForm();
+    currentView.value = "characters";
   }
 }
 
@@ -333,9 +385,31 @@ async function submitQuickProject() {
   });
   if (!error.value && activeProject.value?.project) {
     autoGenerationForm.idea = idea;
-    writingMode.value = "auto";
-    currentView.value = "workshop";
+    currentView.value = "characters";
   }
+}
+
+async function submitUpdateProject() {
+  await store.updateProject(projectSettingsForm);
+  if (!error.value) syncProjectSettingsForm();
+}
+
+async function submitCharacterCard() {
+  const payload = {
+    name: characterForm.name.trim(),
+    age: characterForm.age.trim(),
+    gender: characterForm.gender.trim(),
+    personality: characterForm.personality.trim(),
+    story_role: characterForm.story_role.trim(),
+    background: characterForm.background.trim(),
+  };
+  if (!payload.name) {
+    authError.value = "人物姓名不能为空。";
+    return;
+  }
+  if (editingCharacterId.value) await store.updateCharacterCard(editingCharacterId.value, payload);
+  else await store.addCharacterCard(payload);
+  if (!error.value) resetCharacterForm();
 }
 
 async function submitAutoGenerate() {
@@ -345,7 +419,7 @@ async function submitAutoGenerate() {
     return;
   }
   await store.generate({
-    prompt: `请根据下面这段想法，自动理解人物、场景、冲突和情绪走向，写成一段完整的小说正文。可以自行补足合理细节，但不要偏离原意。\n\n${idea}`,
+    prompt: `请根据下面这段想法，自动理解人物、场景、冲突和情绪走向，写成一段完整的小说正文。\n\n${idea}`,
     search_method: "local",
     response_type: "Multiple Paragraphs",
     use_global_search: false,
@@ -357,152 +431,145 @@ async function submitAutoGenerate() {
 
 async function submitComment() {
   await store.submitNovelComment(commentForm.content);
-  if (!error.value) {
-    commentForm.content = "";
-  }
+  if (!error.value) commentForm.content = "";
 }
 
 async function submitPublishNovel() {
-  if (!activeProject.value?.project || !currentGeneration.value) {
-    return;
-  }
-
+  if (!activeProject.value?.project || !currentGeneration.value) return;
   const created = await store.publishNovelFromGeneration({
     project_id: activeProject.value.project.id,
     generation_id: currentGeneration.value.id,
     title: publishForm.title.trim(),
-    author_name: publishForm.author_name.trim() || currentUser.value?.username || "佚名",
+    author_name: publishForm.author_name.trim() || currentUser.value?.username || "匿名",
     summary: publishForm.summary.trim(),
     tagline: publishForm.tagline.trim(),
     visibility: publishForm.visibility,
+    chapter_title: draftForm.title.trim() || currentGeneration.value.title,
+    chapter_summary: draftForm.summary.trim() || currentGeneration.value.summary,
+    chapter_content: draftForm.content.trim() || currentGeneration.value.content,
+    chapter_no: draftForm.chapter_no,
   });
-
-  if (created) {
-    currentView.value = "detail";
-  }
-}
-
-async function submitProfile() {
-  await store.saveProfile({
-    bio: profileForm.bio,
-    email: profileForm.email,
-    phone: profileForm.phone,
-  });
+  if (created) currentView.value = "detail";
 }
 
 async function submitUpdateNovel() {
-  if (!currentNovel.value) {
-    return;
-  }
+  if (!currentNovel.value) return;
   await store.updatePublishedNovel(currentNovel.value.id, {
     title: manageNovelForm.title.trim(),
-    author_name: manageNovelForm.author_name.trim() || "佚名",
+    author_name: manageNovelForm.author_name.trim() || "匿名",
     summary: manageNovelForm.summary.trim(),
     tagline: manageNovelForm.tagline.trim(),
     visibility: manageNovelForm.visibility,
   });
+  syncNovelManageForm();
 }
 
 async function submitAppendChapter() {
-  if (!currentNovel.value || !activeProject.value?.project || !currentGeneration.value) {
-    return;
-  }
+  if (!currentNovel.value || !activeProject.value?.project || !currentGeneration.value) return;
   await store.appendNovelChapter(currentNovel.value.id, {
     project_id: activeProject.value.project.id,
     generation_id: currentGeneration.value.id,
-    title: appendChapterForm.title.trim(),
+    title: appendChapterForm.title.trim() || draftForm.title.trim(),
+    summary: draftForm.summary.trim(),
+    content: draftForm.content.trim(),
+    chapter_no: appendChapterForm.chapter_no || null,
   });
   appendChapterForm.title = "";
+  appendChapterForm.chapter_no = nextNovelChapterNo.value;
+}
+
+async function submitUpdateChapter() {
+  if (!currentNovel.value || !selectedChapter.value) return;
+  const chapterId = selectedChapter.value.id;
+  await store.updateNovelChapter(currentNovel.value.id, chapterId, {
+    title: chapterEditForm.title.trim(),
+    summary: chapterEditForm.summary.trim(),
+    content: chapterEditForm.content.trim(),
+    chapter_no: chapterEditForm.chapter_no,
+  });
+  selectedChapterId.value = chapterId;
+}
+
+async function submitProfile() {
+  await store.saveProfile(profileForm);
 }
 
 onMounted(() => {
   void store.initialize();
 });
 
-watch(
-  publishDefaults,
-  (next) => {
-    if (!publishForm.title.trim()) {
-      publishForm.title = next.title;
-    }
-    if (!publishForm.summary.trim()) {
-      publishForm.summary = next.summary;
-    }
-    if (!publishForm.author_name.trim()) {
-      publishForm.author_name = next.author_name;
-    }
-  },
-  { immediate: true },
-);
+watch(publishDefaults, (next) => {
+  if (!publishForm.title.trim()) publishForm.title = next.title;
+  if (!publishForm.summary.trim()) publishForm.summary = next.summary;
+  if (!publishForm.author_name.trim()) publishForm.author_name = next.author_name;
+}, { immediate: true });
 
-watch(
-  profile,
-  (next) => {
-    if (!next) {
-      return;
-    }
-    profileForm.bio = next.bio ?? "";
-    profileForm.email = next.email ?? "";
-    profileForm.phone = next.phone ?? "";
-  },
-  { immediate: true },
-);
+watch(currentGeneration, (next) => syncDraftFromGeneration(next), { immediate: true });
 
-watch(
-  () => [authError.value, error.value, success.value],
-  ([nextAuthError, nextError, nextSuccess]) => {
-    if (feedbackTimer !== null) {
-      window.clearTimeout(feedbackTimer);
+watch(nextNovelChapterNo, (next) => {
+  if (!appendChapterForm.chapter_no || appendChapterForm.chapter_no < 1) appendChapterForm.chapter_no = next;
+}, { immediate: true });
+
+watch(selectedChapter, (next) => {
+  if (!next) {
+    chapterEditForm.title = "";
+    chapterEditForm.summary = "";
+    chapterEditForm.content = "";
+    chapterEditForm.chapter_no = 1;
+    return;
+  }
+  chapterEditForm.title = next.title;
+  chapterEditForm.summary = next.summary;
+  chapterEditForm.content = next.content;
+  chapterEditForm.chapter_no = next.chapter_no;
+  chapterJumpNo.value = next.chapter_no;
+}, { immediate: true });
+
+watch(() => activeProject.value?.project.id, () => {
+  syncProjectSettingsForm();
+  resetCharacterForm();
+}, { immediate: true });
+
+watch(profile, (next) => {
+  if (!next) return;
+  profileForm.bio = next.bio ?? "";
+  profileForm.email = next.email ?? "";
+  profileForm.phone = next.phone ?? "";
+}, { immediate: true });
+
+watch(() => [authError.value, error.value, success.value], ([nextAuthError, nextError, nextSuccess]) => {
+  if (feedbackTimer !== null) window.clearTimeout(feedbackTimer);
+  if (nextAuthError || nextError || nextSuccess) {
+    feedbackTimer = window.setTimeout(() => {
+      clearToasts();
       feedbackTimer = null;
-    }
-    if (nextAuthError || nextError || nextSuccess) {
-      feedbackTimer = window.setTimeout(() => {
-        clearToasts();
-        feedbackTimer = null;
-      }, 4200);
-    }
-  },
-);
+    }, 4200);
+  }
+});
 </script>
 
 <template>
   <div class="shell">
     <header class="topbar">
       <div class="brand">
-        <p class="eyebrow">ChenFlow Workbench</p>
+        <p class="eyebrow">ChenFlow</p>
         <h1>{{ bootstrap?.service_name ?? "晨流写作台" }}</h1>
       </div>
-
       <nav class="topnav" aria-label="Primary">
-        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'home' }" @click="goToView('home')">
-          首页
-        </button>
-        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'store' }" @click="goToView('store')">
-          书城
-        </button>
-        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'shelf' }" @click="goToView('shelf')">
-          书架
-        </button>
-        <button
-          class="topnav__item"
-          :class="{ 'topnav__item--active': currentView === 'studio' || currentView === 'workshop' }"
-          @click="requireAuth('studio')"
-        >
-          我的小说
-        </button>
-        <button
-          class="topnav__item"
-          :class="{ 'topnav__item--active': currentView === 'profile' }"
-          @click="requireAuth('profile')"
-        >
-          我的
-        </button>
+        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'home' }" @click="goToView('home')">首页</button>
+        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'store' }" @click="goToView('store')">书城</button>
+        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'shelf' }" @click="goToView('shelf')">书架</button>
+        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'studio' }" @click="requireAuth('studio')">我的小说</button>
+        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'projectCreate' }" @click="requireAuth('projectCreate')">新建项目</button>
+        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'projectSettings' }" @click="openProjectSettings()">项目设定</button>
+        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'characters' }" @click="openCharacters()">人物卡</button>
+        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'workshop' }" @click="requireAuth('workshop')">写作</button>
+        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'novelEditor' }" @click="openNovelEditor()">作品编辑</button>
+        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'profile' }" @click="requireAuth('profile')">我的</button>
       </nav>
-
       <div class="topbar__side">
         <template v-if="isAuthenticated">
           <span class="topbar__user">{{ currentUser?.username }}</span>
-          <button class="ghost-button ghost-button--small" @click="goToView('profile')">个人中心</button>
           <button class="ghost-button ghost-button--small" @click="store.logout()">退出</button>
         </template>
         <template v-else>
@@ -515,148 +582,54 @@ watch(
     <div class="toast-stack" v-if="authError || error || success" aria-live="polite">
       <div class="toast toast--error" v-if="authError || error">
         <span>{{ authError || error }}</span>
-        <button type="button" aria-label="关闭提示" @click="clearToasts()">×</button>
+        <button type="button" aria-label="关闭提示" @click="clearToasts()">x</button>
       </div>
       <div class="toast toast--success" v-else-if="success">
         <span>{{ success }}</span>
-        <button type="button" aria-label="关闭提示" @click="clearToasts()">×</button>
+        <button type="button" aria-label="关闭提示" @click="clearToasts()">x</button>
       </div>
     </div>
 
     <template v-if="currentView === 'auth'">
       <section class="auth-page">
-        <section class="auth-modal auth-modal--page panel" :class="{ 'panel--warm': authMode === 'register' }">
+        <section class="auth-modal auth-modal--page panel">
           <div class="panel-heading">
             <div>
               <p class="panel-heading__kicker">{{ authMode === "register" ? "创建账号" : "登录" }}</p>
               <h2>{{ authMode === "register" ? "创建你的写作空间" : "回到你的项目" }}</h2>
             </div>
           </div>
-
           <div class="auth-tabs">
-            <button
-              class="auth-tab"
-              :class="{ 'auth-tab--active': authMode === 'register' }"
-              type="button"
-              @click="openAuthPanel('register')"
-            >
-              注册
-            </button>
-            <button
-              class="auth-tab"
-              :class="{ 'auth-tab--active': authMode === 'login' }"
-              type="button"
-              @click="openAuthPanel('login')"
-            >
-              登录
-            </button>
+            <button class="auth-tab" :class="{ 'auth-tab--active': authMode === 'register' }" type="button" @click="authMode = 'register'">注册</button>
+            <button class="auth-tab" :class="{ 'auth-tab--active': authMode === 'login' }" type="button" @click="authMode = 'login'">登录</button>
           </div>
-
           <form v-if="authMode === 'register'" class="form-stack" @submit.prevent="submitRegister()">
-            <label class="field">
-              <span>用户名</span>
-              <input v-model.trim="registerForm.username" type="text" autocomplete="username" />
-              <small class="field-hint">2-100 个字符。</small>
-            </label>
+            <label class="field"><span>用户名</span><input v-model.trim="registerForm.username" autocomplete="username" /></label>
             <label class="field">
               <span>密码</span>
               <div class="password-field">
-                <input
-                  v-model="registerForm.password"
-                  :type="showRegisterPassword ? 'text' : 'password'"
-                  autocomplete="new-password"
-                />
-                <button
-                  class="password-toggle"
-                  type="button"
-                  :aria-label="showRegisterPassword ? '隐藏密码' : '显示密码'"
-                  :title="showRegisterPassword ? '隐藏密码' : '显示密码'"
-                  @click="showRegisterPassword = !showRegisterPassword"
-                >
-                  <svg v-if="showRegisterPassword" viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M3 3l18 18" />
-                    <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" />
-                    <path d="M9.5 5.3A9.6 9.6 0 0 1 12 5c5 0 8.5 4.4 9.5 7a12.2 12.2 0 0 1-2.6 3.8" />
-                    <path d="M6.4 6.5A12.3 12.3 0 0 0 2.5 12c1 2.6 4.5 7 9.5 7a9.7 9.7 0 0 0 4.2-.9" />
-                  </svg>
-                  <svg v-else viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M2.5 12S6 5 12 5s9.5 7 9.5 7S18 19 12 19s-9.5-7-9.5-7Z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
-                </button>
-              </div>
-              <small class="field-hint">8-120 个字符。</small>
-            </label>
-            <label class="field">
-              <span>确认密码</span>
-              <div class="password-field">
-                <input
-                  v-model="registerForm.confirmPassword"
-                  :type="showRegisterPassword ? 'text' : 'password'"
-                  autocomplete="new-password"
-                />
-                <button
-                  class="password-toggle"
-                  type="button"
-                  :aria-label="showRegisterPassword ? '隐藏密码' : '显示密码'"
-                  :title="showRegisterPassword ? '隐藏密码' : '显示密码'"
-                  @click="showRegisterPassword = !showRegisterPassword"
-                >
-                  <svg v-if="showRegisterPassword" viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M3 3l18 18" />
-                    <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" />
-                    <path d="M9.5 5.3A9.6 9.6 0 0 1 12 5c5 0 8.5 4.4 9.5 7a12.2 12.2 0 0 1-2.6 3.8" />
-                    <path d="M6.4 6.5A12.3 12.3 0 0 0 2.5 12c1 2.6 4.5 7 9.5 7a9.7 9.7 0 0 0 4.2-.9" />
-                  </svg>
-                  <svg v-else viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M2.5 12S6 5 12 5s9.5 7 9.5 7S18 19 12 19s-9.5-7-9.5-7Z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
-                </button>
+                <input v-model="registerForm.password" :type="showRegisterPassword ? 'text' : 'password'" autocomplete="new-password" />
+                <button class="password-toggle" type="button" @click="showRegisterPassword = !showRegisterPassword">{{ showRegisterPassword ? "隐藏" : "显示" }}</button>
               </div>
             </label>
+            <label class="field"><span>确认密码</span><input v-model="registerForm.confirmPassword" :type="showRegisterPassword ? 'text' : 'password'" /></label>
             <label class="field">
               <span>验证码</span>
               <div class="captcha-row">
                 <div class="captcha-box">{{ captcha?.challenge ?? "正在生成..." }}</div>
                 <button class="ghost-button ghost-button--small" type="button" @click="store.refreshCaptcha()">换一个</button>
               </div>
-              <input v-model.trim="registerForm.captcha_answer" type="text" inputmode="numeric" />
+              <input v-model.trim="registerForm.captcha_answer" inputmode="numeric" />
             </label>
             <button class="primary-button" :disabled="loading">{{ loading ? "正在注册..." : "注册并登录" }}</button>
           </form>
-
           <form v-else class="form-stack" @submit.prevent="submitLogin()">
-            <label class="field">
-              <span>用户名</span>
-              <input v-model.trim="loginForm.username" type="text" autocomplete="username" />
-            </label>
+            <label class="field"><span>用户名</span><input v-model.trim="loginForm.username" autocomplete="username" /></label>
             <label class="field">
               <span>密码</span>
               <div class="password-field">
-                <input
-                  v-model="loginForm.password"
-                  :type="showLoginPassword ? 'text' : 'password'"
-                  autocomplete="current-password"
-                />
-                <button
-                  class="password-toggle"
-                  type="button"
-                  :aria-label="showLoginPassword ? '隐藏密码' : '显示密码'"
-                  :title="showLoginPassword ? '隐藏密码' : '显示密码'"
-                  @click="showLoginPassword = !showLoginPassword"
-                >
-                  <svg v-if="showLoginPassword" viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M3 3l18 18" />
-                    <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" />
-                    <path d="M9.5 5.3A9.6 9.6 0 0 1 12 5c5 0 8.5 4.4 9.5 7a12.2 12.2 0 0 1-2.6 3.8" />
-                    <path d="M6.4 6.5A12.3 12.3 0 0 0 2.5 12c1 2.6 4.5 7 9.5 7a9.7 9.7 0 0 0 4.2-.9" />
-                  </svg>
-                  <svg v-else viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M2.5 12S6 5 12 5s9.5 7 9.5 7S18 19 12 19s-9.5-7-9.5-7Z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
-                </button>
+                <input v-model="loginForm.password" :type="showLoginPassword ? 'text' : 'password'" autocomplete="current-password" />
+                <button class="password-toggle" type="button" @click="showLoginPassword = !showLoginPassword">{{ showLoginPassword ? "隐藏" : "显示" }}</button>
               </div>
             </label>
             <button class="primary-button" :disabled="loading">{{ loading ? "正在登录..." : "登录" }}</button>
@@ -670,103 +643,49 @@ watch(
         <div class="hero__main">
           <p class="hero__label">首页推荐</p>
           <h2>{{ featuredNovel?.title ?? "正在准备推荐小说" }}</h2>
-          <p class="hero__lede">{{ featuredNovel?.tagline ?? "书城真实作品接入后，这里会优先展示最近更新的公开小说。" }}</p>
-          <p class="hero__excerpt">{{ featuredNovel?.latest_excerpt ?? "完成接入后，首页推荐、书城列表和书架收藏都会从真实接口读取。" }}</p>
-          <div class="hero__stats">
-            <span>{{ featuredNovel?.genre ?? "公开作品" }}</span>
-            <span>{{ featuredNovel?.likes_count ?? 0 }} 点赞</span>
-            <span>{{ featuredNovel?.favorites_count ?? 0 }} 收藏</span>
-            <span>{{ featuredNovel?.comments_count ?? 0 }} 评论</span>
-          </div>
+          <p class="hero__lede">{{ featuredNovel?.tagline ?? "从书城发现作品，也从这里开始自己的小说。" }}</p>
+          <p class="hero__excerpt">{{ featuredNovel?.latest_excerpt ?? "创建项目、添加人物卡、设定世界观，然后进入写作。" }}</p>
           <div class="hero__actions">
-            <button class="primary-button" @click="goToView('store')">去书城看看</button>
-            <button class="ghost-button" @click="requireAuth('studio')">开始写我的小说</button>
+            <button class="primary-button" @click="goToView('store')">去书城</button>
+            <button class="ghost-button" @click="requireAuth('projectCreate')">新建项目</button>
           </div>
         </div>
       </section>
-
-      <section class="content-grid content-grid--home-hot">
-        <section class="panel panel--paper">
-          <div class="section-head">
-            <div>
-              <p class="panel-heading__kicker">今日热读</p>
-              <h2>正在被讨论的小说</h2>
-            </div>
+      <section class="panel panel--paper">
+        <div class="section-head">
+          <div><p class="panel-heading__kicker">正在阅读</p><h2>最近作品</h2></div>
+          <div class="mode-switch">
+            <button type="button" :class="{ 'mode-switch__item--active': novelLayout === 'grid' }" @click="novelLayout = 'grid'">卡片</button>
+            <button type="button" :class="{ 'mode-switch__item--active': novelLayout === 'list' }" @click="novelLayout = 'list'">列表</button>
           </div>
-          <div class="novel-grid">
-            <article v-for="novel in novels.slice(0, 3)" :key="novel.id" class="novel-card novel-card--featured">
-              <p class="novel-card__genre">{{ novel.genre }}</p>
-              <h3>{{ novel.title }}</h3>
-              <p class="novel-card__author">{{ novel.author }}</p>
-              <p class="novel-card__timestamps">更新于 {{ formatDateTime(novel.updated_at) }}</p>
-              <p class="novel-card__text">{{ novel.latest_excerpt }}</p>
-              <div class="novel-card__meta">
-                <span>{{ novel.likes_count }} 赞</span>
-                <span>{{ novel.favorites_count }} 收藏</span>
-                <span>{{ novel.comments_count }} 评</span>
-              </div>
-              <button class="ghost-button ghost-button--small" type="button" @click="openNovelDetail(novel.id)">查看详情</button>
-            </article>
-          </div>
-        </section>
-
+        </div>
+        <div class="novel-grid" :class="{ 'novel-grid--list': novelLayout === 'list' }">
+          <article v-for="novel in novels.slice(0, 6)" :key="novel.id" class="novel-card novel-card--clickable" @click="openNovelDetail(novel.id)">
+            <p class="novel-card__genre">{{ novel.genre }}</p>
+            <h3>{{ novel.title }}</h3>
+            <p class="novel-card__author">{{ novel.author }}</p>
+            <p class="novel-card__text">{{ novel.latest_excerpt }}</p>
+          </article>
+        </div>
       </section>
     </template>
 
     <template v-else-if="currentView === 'store'">
       <section class="section-banner panel panel--paper">
-        <div>
-          <p class="panel-heading__kicker">书城</p>
-          <h2>发现别人的小说，也让自己的作品被看见。</h2>
-        </div>
-        <p class="project-copy">先做展示层和交互感。点赞、收藏、评论当前是前端交互，后续可以接真实后端。</p>
+        <div><p class="panel-heading__kicker">书城</p><h2>发现别人的小说</h2></div>
+        <label class="field search-field"><span>搜索</span><input v-model="novelSearch" type="search" placeholder="标题、作者、简介或正文片段" /></label>
       </section>
-
-      <section class="novel-grid novel-grid--store">
-        <article v-for="novel in novels" :key="novel.id" class="novel-card">
+      <section class="novel-grid novel-grid--store" :class="{ 'novel-grid--list': novelLayout === 'list' }">
+        <article v-for="novel in searchedNovels" :key="novel.id" class="novel-card novel-card--clickable" @click="openNovelDetail(novel.id)">
           <p class="novel-card__genre">{{ novel.genre }}</p>
           <h3>{{ novel.title }}</h3>
           <p class="novel-card__author">{{ novel.author }}</p>
-          <p class="novel-card__timestamps">创建于 {{ formatDateTime(novel.created_at) }} · 更新于 {{ formatDateTime(novel.updated_at) }}</p>
           <p class="novel-card__tagline">{{ novel.tagline }}</p>
           <p class="novel-card__text">{{ novel.latest_excerpt }}</p>
-          <div class="novel-card__meta">
-            <span>{{ novel.likes_count }} 点赞</span>
-            <span>{{ novel.favorites_count }} 收藏</span>
-            <span>{{ novel.comments_count }} 评论</span>
-          </div>
+          <div class="novel-card__meta"><span>{{ novel.likes_count }} 赞</span><span>{{ novel.favorites_count }} 收藏</span><span>{{ novel.comments_count }} 评论</span></div>
           <div class="novel-card__actions novel-card__actions--iconic">
-            <button class="ghost-button ghost-button--small" type="button" @click="openNovelDetail(novel.id)">详情</button>
-            <button
-              class="novel-card__toggle novel-card__toggle--heart"
-              :class="{ 'novel-card__toggle--active': novel.is_liked }"
-              type="button"
-              :aria-pressed="novel.is_liked ? 'true' : 'false'"
-              :aria-label="novel.is_liked ? '取消点赞' : '点赞'"
-              @click="likeNovel(novel.id, $event)"
-            >
-              <svg class="novel-card__toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="M12 20.5 4.8 13.6a4.9 4.9 0 0 1 0-7 4.8 4.8 0 0 1 6.9 0L12 7l.3-.4a4.8 4.8 0 0 1 6.9 0 4.9 4.9 0 0 1 0 7Z"
-                />
-              </svg>
-              <span class="novel-card__toggle-text">{{ novel.likes_count }}</span>
-            </button>
-            <button
-              class="novel-card__toggle novel-card__toggle--star"
-              :class="{ 'novel-card__toggle--active': novel.is_favorited }"
-              type="button"
-              :aria-pressed="novel.is_favorited ? 'true' : 'false'"
-              :aria-label="novel.is_favorited ? '取消收藏' : '收藏'"
-              @click="toggleSaveNovel(novel.id, $event)"
-            >
-              <svg class="novel-card__toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="m12 3.8 2.5 5.1 5.7.8-4.1 4 1 5.7-5.1-2.7-5.1 2.7 1-5.7-4.1-4 5.7-.8Z"
-                />
-              </svg>
-              <span class="novel-card__toggle-text">{{ novel.favorites_count }}</span>
-            </button>
+            <button class="novel-card__toggle novel-card__toggle--heart" :class="{ 'novel-card__toggle--active': novel.is_liked }" type="button" @click.stop="likeNovel(novel.id)">♥ {{ novel.likes_count }}</button>
+            <button class="novel-card__toggle novel-card__toggle--star" :class="{ 'novel-card__toggle--active': novel.is_favorited }" type="button" @click.stop="toggleSaveNovel(novel.id)">★ {{ novel.favorites_count }}</button>
           </div>
         </article>
       </section>
@@ -776,923 +695,331 @@ watch(
       <section v-if="currentNovel" class="novel-detail">
         <section class="panel panel--paper novel-detail__hero">
           <div class="section-head">
-            <div>
-              <p class="panel-heading__kicker">小说详情</p>
-              <h2>{{ currentNovel.title }}</h2>
-            </div>
+            <div><p class="panel-heading__kicker">作品</p><h2>{{ currentNovel.title }}</h2></div>
             <button class="ghost-button ghost-button--small" type="button" @click="goToView('store')">返回书城</button>
           </div>
-
           <div class="novel-detail__meta">
-            <div>
-              <span>作者</span>
-              <strong>{{ currentNovel.author }}</strong>
-            </div>
-            <div>
-              <span>题材</span>
-              <strong>{{ currentNovel.genre }}</strong>
-            </div>
-            <div>
-              <span>章节数</span>
-              <strong>{{ currentNovel.chapters_count }}</strong>
-            </div>
-            <div>
-              <span>创建时间</span>
-              <strong>{{ formatDateTime(currentNovel.created_at) }}</strong>
-            </div>
-            <div>
-              <span>更新时间</span>
-              <strong>{{ formatDateTime(currentNovel.updated_at) }}</strong>
-            </div>
+            <div><span>作者</span><strong>{{ currentNovel.author }}</strong></div>
+            <div><span>题材</span><strong>{{ currentNovel.genre }}</strong></div>
+            <div><span>章节</span><strong>{{ currentNovel.chapters_count }}</strong></div>
+            <div><span>创建</span><strong>{{ formatDateTime(currentNovel.created_at) }}</strong></div>
+            <div><span>更新</span><strong>{{ formatDateTime(currentNovel.updated_at) }}</strong></div>
           </div>
-
           <p class="novel-detail__tagline">{{ currentNovel.tagline }}</p>
           <p class="project-copy">{{ currentNovel.summary }}</p>
-
           <div class="novel-detail__actions">
-            <button
-              class="novel-card__toggle novel-card__toggle--heart"
-              :class="{ 'novel-card__toggle--active': currentNovel.is_liked }"
-              type="button"
-              :aria-pressed="currentNovel.is_liked ? 'true' : 'false'"
-              :aria-label="currentNovel.is_liked ? '取消点赞' : '点赞'"
-              @click="likeNovel(currentNovel.id, $event)"
-            >
-              <svg class="novel-card__toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 20.5 4.8 13.6a4.9 4.9 0 0 1 0-7 4.8 4.8 0 0 1 6.9 0L12 7l.3-.4a4.8 4.8 0 0 1 6.9 0 4.9 4.9 0 0 1 0 7Z" />
-              </svg>
-              <span class="novel-card__toggle-text">{{ currentNovel.likes_count }}</span>
-            </button>
-            <button
-              class="novel-card__toggle novel-card__toggle--star"
-              :class="{ 'novel-card__toggle--active': currentNovel.is_favorited }"
-              type="button"
-              :aria-pressed="currentNovel.is_favorited ? 'true' : 'false'"
-              :aria-label="currentNovel.is_favorited ? '取消收藏' : '收藏'"
-              @click="toggleSaveNovel(currentNovel.id, $event)"
-            >
-              <svg class="novel-card__toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="m12 3.8 2.5 5.1 5.7.8-4.1 4 1 5.7-5.1-2.7-5.1 2.7 1-5.7-4.1-4 5.7-.8Z" />
-              </svg>
-              <span class="novel-card__toggle-text">{{ currentNovel.favorites_count }}</span>
-            </button>
-            <span class="novel-detail__stat">{{ currentNovel.comments_count }} 条评论</span>
+            <button class="novel-card__toggle novel-card__toggle--heart" :class="{ 'novel-card__toggle--active': currentNovel.is_liked }" @click="likeNovel(currentNovel.id)">♥ {{ currentNovel.likes_count }}</button>
+            <button class="novel-card__toggle novel-card__toggle--star" :class="{ 'novel-card__toggle--active': currentNovel.is_favorited }" @click="toggleSaveNovel(currentNovel.id)">★ {{ currentNovel.favorites_count }}</button>
+            <button v-if="isManagingCurrentNovel" class="ghost-button ghost-button--small" type="button" @click="openNovelEditor()">编辑作品</button>
           </div>
         </section>
-
-        <section class="content-grid novel-detail__body">
-          <section class="panel">
-            <div class="section-head">
-              <div>
-                <p class="panel-heading__kicker">章节列表</p>
-                <h2>正文章节</h2>
-              </div>
-            </div>
-
-            <div class="card-list" v-if="currentNovel.chapters.length">
-              <article v-for="chapter in currentNovel.chapters" :key="chapter.id" class="memory-card">
-                <strong>第 {{ chapter.chapter_no }} 章 · {{ chapter.title }}</strong>
-                <span>{{ chapter.summary || chapter.content.slice(0, 120) }}</span>
-              </article>
-            </div>
-            <p v-else class="empty-text">这篇作品还没有公开章节。</p>
-          </section>
-
-          <section class="panel" v-if="isManagingCurrentNovel">
-            <div class="section-head">
-              <div>
-                <p class="panel-heading__kicker">作品管理</p>
-                <h2>编辑书城展示信息</h2>
-              </div>
-            </div>
-
-            <form class="form-stack" @submit.prevent="submitUpdateNovel()">
-              <label class="field">
-                <span>作品标题</span>
-                <input v-model="manageNovelForm.title" type="text" />
-              </label>
-              <label class="field">
-                <span>作者名</span>
-                <input v-model="manageNovelForm.author_name" type="text" />
-              </label>
-              <label class="field">
-                <span>宣传语</span>
-                <input v-model="manageNovelForm.tagline" type="text" />
-              </label>
-              <label class="field">
-                <span>作品简介</span>
-                <textarea v-model="manageNovelForm.summary" rows="4" />
-              </label>
-              <label class="field">
-                <span>可见性</span>
-                <select v-model="manageNovelForm.visibility">
-                  <option value="public">公开</option>
-                  <option value="private">仅自己可见</option>
-                </select>
-              </label>
-              <button class="primary-button" :disabled="loading">保存作品信息</button>
-            </form>
-
-            <div class="detail-divider" />
-
-            <div class="section-head">
-              <div>
-                <p class="panel-heading__kicker">追加章节</p>
-                <h2>把当前生成结果续到这本小说里</h2>
-              </div>
-            </div>
-            <form class="form-stack" @submit.prevent="submitAppendChapter()">
-              <label class="field">
-                <span>章节标题</span>
-                <input v-model="appendChapterForm.title" type="text" :placeholder="currentGeneration?.title ?? '先在我的小说中生成内容'" />
-              </label>
-              <button class="primary-button" :disabled="loading || !currentGeneration">追加为新章节</button>
-            </form>
-          </section>
-
-          <section class="panel panel--paper">
-            <div class="section-head">
-              <div>
-                <p class="panel-heading__kicker">评论区</p>
-                <h2>读者讨论</h2>
-              </div>
-            </div>
-
-            <form class="form-stack" @submit.prevent="submitComment()">
-              <label class="field">
-                <span>写下你的评论</span>
-                <textarea v-model="commentForm.content" rows="4" placeholder="说说你对这篇小说的看法。" />
-              </label>
-              <button class="primary-button" :disabled="loading">发表评论</button>
-            </form>
-
-            <div class="comment-list" v-if="novelComments.length">
-              <article v-for="comment in novelComments" :key="comment.id" class="comment-card">
-                <div class="comment-card__head">
-                  <strong>{{ comment.username }}</strong>
-                  <span>{{ new Date(comment.created_at).toLocaleString("zh-CN") }}</span>
-                </div>
-                <p>{{ comment.content }}</p>
-              </article>
-            </div>
-            <p v-else class="empty-text">还没有评论，来留下第一条吧。</p>
-          </section>
+        <section class="panel panel--paper chapter-index" v-if="sortedChapters.length">
+          <div class="section-head">
+            <div><p class="panel-heading__kicker">章节目录</p><h2>选择章节开始阅读</h2></div>
+            <button class="primary-button primary-button--compact" type="button" @click="openReader()">开始阅读</button>
+          </div>
+          <div class="chapter-index__list">
+            <button v-for="chapter in sortedChapters" :key="chapter.id" class="chapter-index__item" type="button" @click="openReader(chapter.id)">
+              <span>第 {{ chapter.chapter_no }} 章</span>
+              <strong>{{ chapter.title }}</strong>
+              <small v-if="chapter.summary">{{ chapter.summary }}</small>
+            </button>
+          </div>
+        </section>
+        <section v-else class="panel empty-state"><h2>这篇作品还没有公开章节。</h2></section>
+        <section class="panel panel--paper">
+          <div class="section-head"><div><p class="panel-heading__kicker">评论</p><h2>读者讨论</h2></div></div>
+          <form class="form-stack" @submit.prevent="submitComment()">
+            <label class="field"><span>写下你的评论</span><textarea v-model="commentForm.content" rows="4" /></label>
+            <button class="primary-button" :disabled="loading">发表评论</button>
+          </form>
+          <div class="comment-list" v-if="novelComments.length">
+            <article v-for="comment in novelComments" :key="comment.id" class="comment-card">
+              <div class="comment-card__head"><strong>{{ comment.username }}</strong><span>{{ formatDateTime(comment.created_at) }}</span></div>
+              <p>{{ comment.content }}</p>
+            </article>
+          </div>
+          <p v-else class="empty-text">还没有评论。</p>
         </section>
       </section>
+      <section v-else class="panel empty-state"><h2>没有找到这篇作品。</h2></section>
+    </template>
 
-      <section v-else class="panel empty-state">
-        <p class="panel-heading__kicker">小说详情</p>
-        <h2>没有找到这篇作品。</h2>
-        <button class="primary-button primary-button--compact" @click="goToView('store')">返回书城</button>
+    <template v-else-if="currentView === 'reader'">
+      <section v-if="currentNovel && selectedChapter" class="reader-page">
+        <section class="panel panel--paper novel-reader">
+          <div class="reader-page__bar">
+            <button class="ghost-button ghost-button--small" type="button" @click="goToView('detail')">返回作品</button>
+            <button v-if="isManagingCurrentNovel" class="ghost-button ghost-button--small" type="button" @click="openNovelEditor()">编辑作品</button>
+          </div>
+          <div class="chapter-nav" v-if="hasChapterNavigation">
+            <button v-if="previousChapter" class="ghost-button ghost-button--small" type="button" @click="selectedChapterId = previousChapter.id">上一章</button>
+            <label class="field chapter-nav__select"><span>选择章节</span><select :value="selectedChapter.id" @change="selectChapterById(($event.target as HTMLSelectElement).value)"><option v-for="chapter in sortedChapters" :key="chapter.id" :value="chapter.id">第 {{ chapter.chapter_no }} 章 · {{ chapter.title }}</option></select></label>
+            <form class="chapter-jump" @submit.prevent="jumpToChapterNo()"><label class="field"><span>跳到</span><input v-model.number="chapterJumpNo" type="number" min="1" /></label><button class="ghost-button ghost-button--small">跳转</button></form>
+            <button v-if="nextChapter" class="ghost-button ghost-button--small" type="button" @click="selectedChapterId = nextChapter.id">下一章</button>
+          </div>
+          <p class="panel-heading__kicker">{{ currentNovel.title }}</p>
+          <h2>第 {{ selectedChapter.chapter_no }} 章 · {{ selectedChapter.title }}</h2>
+          <p class="project-copy" v-if="selectedChapter.summary">{{ selectedChapter.summary }}</p>
+          <article class="novel-reader__content">{{ selectedChapter.content }}</article>
+          <div class="chapter-nav chapter-nav--bottom" v-if="hasChapterNavigation">
+            <button v-if="previousChapter" class="ghost-button ghost-button--small" type="button" @click="selectedChapterId = previousChapter.id">上一章</button>
+            <button v-if="nextChapter" class="ghost-button ghost-button--small" type="button" @click="selectedChapterId = nextChapter.id">下一章</button>
+          </div>
+        </section>
       </section>
+      <section v-else class="panel empty-state"><h2>先从作品页选择一个章节。</h2></section>
     </template>
 
     <template v-else-if="currentView === 'shelf'">
       <section class="section-banner panel">
-        <div>
-          <p class="panel-heading__kicker">书架</p>
-          <h2>把喜欢的书先放在这里，随时回来继续看。</h2>
+        <div><p class="panel-heading__kicker">书架</p><h2>{{ shelfTab === "favorited" ? "我的收藏" : "我的喜欢" }}</h2></div>
+        <div class="shelf-tools">
+          <div class="mode-switch">
+            <button type="button" :class="{ 'mode-switch__item--active': shelfTab === 'favorited' }" @click="shelfTab = 'favorited'">收藏</button>
+            <button type="button" :class="{ 'mode-switch__item--active': shelfTab === 'liked' }" @click="shelfTab = 'liked'">喜欢</button>
+          </div>
+          <label class="field search-field"><span>搜索</span><input v-model="novelSearch" type="search" /></label>
         </div>
       </section>
-
-      <div v-if="bookshelfNovels.length" class="novel-grid">
-        <article v-for="novel in bookshelfNovels" :key="novel.id" class="novel-card novel-card--saved">
+      <div v-if="shelfDisplayNovels.length" class="novel-grid" :class="{ 'novel-grid--list': novelLayout === 'list' }">
+        <article v-for="novel in shelfDisplayNovels" :key="novel.id" class="novel-card novel-card--saved novel-card--clickable" @click="openNovelDetail(novel.id)">
           <p class="novel-card__genre">{{ novel.genre }}</p>
           <h3>{{ novel.title }}</h3>
           <p class="novel-card__author">{{ novel.author }}</p>
-          <p class="novel-card__timestamps">更新于 {{ formatDateTime(novel.updated_at) }}</p>
           <p class="novel-card__text">{{ novel.latest_excerpt }}</p>
-          <div class="novel-card__meta">
-            <span>{{ novel.favorites_count }} 收藏</span>
-            <span>{{ novel.comments_count }} 评论</span>
-          </div>
-          <div class="novel-card__actions novel-card__actions--iconic">
-            <button class="ghost-button ghost-button--small" type="button" @click="openNovelDetail(novel.id)">详情</button>
-            <button
-              class="novel-card__toggle novel-card__toggle--heart"
-              :class="{ 'novel-card__toggle--active': novel.is_liked }"
-              type="button"
-              :aria-pressed="novel.is_liked ? 'true' : 'false'"
-              :aria-label="novel.is_liked ? '取消点赞' : '点赞'"
-              @click="likeNovel(novel.id, $event)"
-            >
-              <svg class="novel-card__toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="M12 20.5 4.8 13.6a4.9 4.9 0 0 1 0-7 4.8 4.8 0 0 1 6.9 0L12 7l.3-.4a4.8 4.8 0 0 1 6.9 0 4.9 4.9 0 0 1 0 7Z"
-                />
-              </svg>
-              <span class="novel-card__toggle-text">{{ novel.likes_count }}</span>
-            </button>
-            <button
-              class="novel-card__toggle novel-card__toggle--star"
-              :class="{ 'novel-card__toggle--active': novel.is_favorited }"
-              type="button"
-              :aria-pressed="novel.is_favorited ? 'true' : 'false'"
-              :aria-label="novel.is_favorited ? '取消收藏' : '收藏'"
-              @click="toggleSaveNovel(novel.id, $event)"
-            >
-              <svg class="novel-card__toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="m12 3.8 2.5 5.1 5.7.8-4.1 4 1 5.7-5.1-2.7-5.1 2.7 1-5.7-4.1-4 5.7-.8Z"
-                />
-              </svg>
-              <span class="novel-card__toggle-text">{{ novel.favorites_count }}</span>
-            </button>
-          </div>
         </article>
       </div>
-      <section v-else class="panel empty-state">
-        <p class="panel-heading__kicker">还没有收藏</p>
-        <h2>先去书城挑几本喜欢的小说。</h2>
-        <button class="primary-button primary-button--compact" @click="goToView('store')">去书城</button>
-      </section>
+      <section v-else class="panel empty-state"><h2>这里还没有作品。</h2></section>
     </template>
 
     <template v-else-if="currentView === 'studio'">
       <main v-if="isAuthenticated" class="library-dashboard">
         <section class="section-banner panel panel--paper">
-          <div>
-            <p class="panel-heading__kicker">我的小说</p>
-            <h2>管理你的项目和已发布作品。</h2>
-          </div>
-          <p class="project-copy">项目负责制作，发布作品负责展示。点进项目后会进入“创作工坊”。</p>
+          <div><p class="panel-heading__kicker">我的小说</p><h2>管理项目和已发布作品</h2></div>
+          <button class="primary-button primary-button--compact" type="button" @click="goToView('projectCreate')">新建项目</button>
         </section>
-
         <section class="library-grid">
           <section class="panel">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">制作项目</p>
-                <h2>正在写的小说</h2>
-              </div>
-            </div>
+            <div class="panel-heading"><div><p class="panel-heading__kicker">制作项目</p><h2>正在写的小说</h2></div></div>
             <div class="project-list" v-if="projects.length">
-              <button
-                v-for="project in projects"
-                :key="project.id"
-                class="project-item"
-                :class="{ 'project-item--active': activeProject?.project.id === project.id }"
-                @click="openWorkshop(project.id)"
-              >
-                <strong>{{ project.title }}</strong>
-                <span>{{ project.genre }}</span>
-                <em>{{ projectStatusLabel(project.indexing_status) }} · {{ formatDateTime(project.updated_at) }}</em>
+              <button v-for="project in projects" :key="project.id" class="project-item" :class="{ 'project-item--active': activeProject?.project.id === project.id }" @click="openWorkshop(project.id)">
+                <strong>{{ project.title }}</strong><span>{{ project.genre }}</span><em>{{ projectStatusLabel(project.indexing_status) }} / {{ formatDateTime(project.updated_at) }}</em>
               </button>
             </div>
-            <p v-else class="empty-text">还没有制作项目。先在右侧创建一部新小说。</p>
+            <p v-else class="empty-text">还没有项目。</p>
           </section>
-
-          <section class="panel">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">快速开始</p>
-                <h2>只写一段想法</h2>
-              </div>
-            </div>
-            <form class="form-stack" @submit.prevent="submitQuickProject()">
-              <label class="field">
-                <span>你的小说想法</span>
-                <textarea
-                  v-model="quickProjectForm.idea"
-                  rows="8"
-                  placeholder="例：我想写一个雨夜便利店的故事。男主是夜班店员，女主每周三凌晨都会来买同一种饮料，但她每次都像第一次见到他。故事要有一点暧昧，也有一点悬疑。"
-                />
-                <small class="field-hint">至少 12 个字。AI 会先用这段话创建项目，进入工坊后可以直接生成正文。</small>
-              </label>
-              <button class="primary-button" :disabled="loading">用这段想法开始</button>
-            </form>
-
-            <div class="detail-divider" />
-
-            <details class="advanced-create">
-              <summary>我想自己填写更多信息</summary>
-              <form class="form-stack" @submit.prevent="submitCreateProject()">
-              <label class="field">
-                <span>项目标题</span>
-                <input v-model="projectForm.title" type="text" maxlength="255" placeholder="例：雨季便利店" />
-                <small class="field-hint">2-255 个字符。写作品名或项目代号都可以。</small>
-              </label>
-              <label class="field">
-                <span>题材类型</span>
-                <input v-model="projectForm.genre" type="text" maxlength="100" placeholder="例：现代都市轻小说 / 校园悬疑 / 奇幻冒险" />
-                <small class="field-hint">2-100 个字符。用于帮助模型判断故事气质。</small>
-              </label>
-              <label class="field">
-                <span>故事前提</span>
-                <textarea
-                  v-model="projectForm.premise"
-                  rows="4"
-                  maxlength="2000"
-                  placeholder="例：一个总在雨夜值班的便利店店员，发现每周三凌晨都会有同一个陌生女孩来买同一种饮料，但她似乎不记得前几次见过他。"
-                />
-                <small class="field-hint">12-2000 个字符。写清主角、冲突或故事钩子即可。</small>
-              </label>
-              <label class="field">
-                <span>世界设定（可选）</span>
-                <textarea
-                  v-model="projectForm.world_brief"
-                  rows="4"
-                  maxlength="4000"
-                  placeholder="例：故事发生在沿海小城。雨季持续三个月，城市里有一条旧电车线，很多重要场景都围绕便利店、电车站和旧书店展开。"
-                />
-                <small class="field-hint">0-4000 个字符。没有特殊世界观可以先留空。</small>
-              </label>
-              <label class="field">
-                <span>自定义偏好（可选）</span>
-                <textarea
-                  v-model="projectForm.writing_rules"
-                  rows="4"
-                  maxlength="2000"
-                  placeholder="例：第三人称有限视角；节奏偏轻；不要突然加入超自然设定；感情线慢热。"
-                />
-                <small class="field-hint">0-2000 个字符。只写这个项目特别需要的偏好。</small>
-              </label>
-              <label class="field">
-                <span>文风预设</span>
-                <select v-model="projectForm.style_profile">
-                  <option value="light_novel">轻小说</option>
-                  <option value="lyrical_restrained">抒情克制</option>
-                </select>
-                <small class="field-hint">不确定就选轻小说；想要更细腻、更克制时选抒情克制。</small>
-              </label>
-              <button class="primary-button" :disabled="loading">创建并进入工坊</button>
-              </form>
-            </details>
-          </section>
-
           <section class="panel panel--paper library-grid__published">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">已发布作品</p>
-                <h2>书城展示中的小说</h2>
-              </div>
-            </div>
+            <div class="panel-heading"><div><p class="panel-heading__kicker">已发布作品</p><h2>书城里的小说</h2></div></div>
             <div class="novel-grid" v-if="myNovels.length">
-              <article v-for="novel in myNovels" :key="novel.id" class="novel-card novel-card--saved">
-                <p class="novel-card__genre">{{ novel.genre }}</p>
-                <h3>{{ novel.title }}</h3>
-                <p class="novel-card__author">{{ novel.author }} · {{ novel.visibility === "public" ? "公开" : "私密" }}</p>
-                <p class="novel-card__timestamps">更新于 {{ formatDateTime(novel.updated_at) }}</p>
-                <p class="novel-card__text">{{ novel.latest_excerpt }}</p>
-                <button class="ghost-button ghost-button--small" type="button" @click="openNovelDetail(novel.id)">管理详情</button>
+              <article v-for="novel in myNovels" :key="novel.id" class="novel-card novel-card--saved novel-card--clickable" @click="openNovelDetail(novel.id)">
+                <p class="novel-card__genre">{{ novel.genre }}</p><h3>{{ novel.title }}</h3><p class="novel-card__author">{{ novel.author }} / {{ novel.visibility === "public" ? "公开" : "私密" }}</p><p class="novel-card__text">{{ novel.latest_excerpt }}</p>
               </article>
             </div>
-            <p v-else class="empty-text">还没有发布到书城的作品。进入创作工坊生成正文后，可以再发布。</p>
+            <p v-else class="empty-text">还没有发布到书城的作品。</p>
           </section>
         </section>
       </main>
+      <section v-else class="panel empty-state"><h2>登录后再管理你的小说。</h2></section>
+    </template>
 
-      <section v-else class="panel empty-state">
-        <p class="panel-heading__kicker">我的小说</p>
-        <h2>登录后再管理你的小说。</h2>
-        <button class="primary-button primary-button--compact" @click="openAuthPanel('register')">创建账号</button>
-      </section>
+    <template v-else-if="currentView === 'projectCreate'">
+      <main v-if="isAuthenticated" class="workspace workspace--single">
+        <section class="panel panel--paper">
+          <div class="panel-heading"><div><p class="panel-heading__kicker">新建项目</p><h2>先把小说的核心设定立住</h2></div></div>
+          <form class="form-stack" @submit.prevent="submitCreateProject()">
+            <label class="field"><span>小说标题</span><input v-model="projectForm.title" maxlength="255" /></label>
+            <label class="field"><span>题材类型</span><input v-model="projectForm.genre" maxlength="100" /></label>
+            <label class="field"><span>故事前提</span><textarea v-model="projectForm.premise" rows="5" maxlength="2000" /></label>
+            <label class="field"><span>世界观</span><textarea v-model="projectForm.world_brief" rows="5" maxlength="4000" /></label>
+            <label class="field"><span>写作偏好</span><textarea v-model="projectForm.writing_rules" rows="4" maxlength="2000" /></label>
+            <label class="field"><span>文风预设</span><select v-model="projectForm.style_profile"><option value="light_novel">轻小说</option><option value="lyrical_restrained">抒情克制</option></select></label>
+            <button class="primary-button" :disabled="loading">创建项目</button>
+          </form>
+        </section>
+        <section class="panel">
+          <div class="panel-heading"><div><p class="panel-heading__kicker">快速开始</p><h2>只写一段想法</h2></div></div>
+          <form class="form-stack" @submit.prevent="submitQuickProject()">
+            <label class="field"><span>小说想法</span><textarea v-model="quickProjectForm.idea" rows="6" /></label>
+            <button class="ghost-button" :disabled="loading">用这段想法开始</button>
+          </form>
+        </section>
+      </main>
+      <section v-else class="panel empty-state"><h2>登录后再创建项目。</h2></section>
+    </template>
+
+    <template v-else-if="currentView === 'projectSettings'">
+      <main v-if="isAuthenticated && hasProject" class="workspace workspace--single">
+        <section class="panel panel--paper">
+          <div class="panel-heading">
+            <div><p class="panel-heading__kicker">项目设定</p><h2>{{ activeProject?.project.title }}</h2></div>
+            <button class="primary-button primary-button--compact" :disabled="loading" @click="store.indexProject()">整理资料</button>
+          </div>
+          <form class="form-stack" @submit.prevent="submitUpdateProject()">
+            <label class="field"><span>小说标题</span><input v-model="projectSettingsForm.title" maxlength="255" /></label>
+            <label class="field"><span>题材类型</span><input v-model="projectSettingsForm.genre" maxlength="100" /></label>
+            <label class="field"><span>故事前提</span><textarea v-model="projectSettingsForm.premise" rows="5" maxlength="2000" /></label>
+            <label class="field"><span>世界观</span><textarea v-model="projectSettingsForm.world_brief" rows="5" maxlength="4000" /></label>
+            <label class="field"><span>写作偏好</span><textarea v-model="projectSettingsForm.writing_rules" rows="4" maxlength="2000" /></label>
+            <label class="field"><span>文风预设</span><select v-model="projectSettingsForm.style_profile"><option value="light_novel">轻小说</option><option value="lyrical_restrained">抒情克制</option></select></label>
+            <button class="primary-button" :disabled="loading">保存项目设定</button>
+          </form>
+        </section>
+      </main>
+      <section v-else class="panel empty-state"><h2>先选择或创建一个项目。</h2></section>
+    </template>
+
+    <template v-else-if="currentView === 'characters'">
+      <main v-if="isAuthenticated && hasProject" class="workspace workspace--single">
+        <section class="panel panel--paper">
+          <div class="panel-heading">
+            <div><p class="panel-heading__kicker">人物卡</p><h2>{{ editingCharacterId ? "编辑人物" : "添加人物" }}</h2></div>
+            <button v-if="editingCharacterId" class="ghost-button ghost-button--small" type="button" @click="resetCharacterForm()">取消</button>
+          </div>
+          <form class="form-stack" @submit.prevent="submitCharacterCard()">
+            <div class="inline-row">
+              <label class="field"><span>姓名</span><input v-model="characterForm.name" maxlength="120" /></label>
+              <label class="field"><span>年龄</span><input v-model="characterForm.age" maxlength="60" /></label>
+              <label class="field"><span>性别</span><input v-model="characterForm.gender" maxlength="60" /></label>
+            </div>
+            <label class="field"><span>在小说里的角色</span><input v-model="characterForm.story_role" maxlength="120" /></label>
+            <label class="field"><span>性格</span><textarea v-model="characterForm.personality" rows="4" maxlength="2000" /></label>
+            <label class="field"><span>人物背景</span><textarea v-model="characterForm.background" rows="5" maxlength="4000" /></label>
+            <button class="primary-button" :disabled="loading">{{ editingCharacterId ? "保存人物卡" : "添加人物卡" }}</button>
+          </form>
+        </section>
+        <section class="panel">
+          <div class="panel-heading"><div><p class="panel-heading__kicker">已有人物</p><h2>{{ activeProject?.character_cards.length ?? 0 }} 张人物卡</h2></div></div>
+          <div class="card-list" v-if="activeProject?.character_cards.length">
+            <article v-for="card in activeProject.character_cards" :key="card.id" class="memory-card">
+              <strong>{{ card.name }}</strong><span>{{ card.story_role }} / {{ card.age }} {{ card.gender }}</span><span>{{ card.personality }}</span><em>{{ card.background }}</em>
+              <button class="ghost-button ghost-button--small" type="button" @click="editCharacterCard(card)">编辑</button>
+            </article>
+          </div>
+          <p v-else class="empty-text">还没有人物卡。先添加主角，再补重要配角。</p>
+        </section>
+      </main>
+      <section v-else class="panel empty-state"><h2>先选择或创建一个项目。</h2></section>
     </template>
 
     <template v-else-if="currentView === 'workshop'">
       <main v-if="isAuthenticated && hasProject" class="workspace workspace--workshop">
-        <section class="workspace__column">
-          <section class="panel">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">我的小说</p>
-                <h2>项目列表</h2>
-              </div>
-            </div>
-            <div class="project-list" v-if="projects.length">
-              <button
-                v-for="project in projects"
-                :key="project.id"
-                class="project-item"
-                :class="{ 'project-item--active': activeProject?.project.id === project.id }"
-                @click="store.selectProject(project.id)"
-              >
-                <strong>{{ project.title }}</strong>
-                <span>{{ project.genre }}</span>
-                <em>{{ projectStatusLabel(project.indexing_status) }}</em>
-              </button>
-            </div>
-            <p v-else class="empty-text">还没有项目。先创建一个作品，再逐步补充设定和资料。</p>
-          </section>
-
-          <section class="panel">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">已发布作品</p>
-                <h2>我在书城里的小说</h2>
-              </div>
-            </div>
-            <div class="project-list" v-if="myNovels.length">
-              <button
-                v-for="novel in myNovels"
-                :key="novel.id"
-                class="project-item"
-                @click="openNovelDetail(novel.id)"
-              >
-                <strong>{{ novel.title }}</strong>
-                <span>{{ novel.author }} · {{ novel.visibility === "public" ? "公开" : "私密" }}</span>
-                <em>更新于 {{ formatDateTime(novel.updated_at) }}</em>
-              </button>
-            </div>
-            <p v-else class="empty-text">还没有发布到书城的作品。可以先生成正文，再在右侧发布。</p>
-          </section>
-
-          <section class="panel">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">创建项目</p>
-                <h2>开始一部新小说</h2>
-              </div>
-            </div>
-            <form class="form-stack" @submit.prevent="submitCreateProject()">
-              <label class="field">
-                <span>项目标题</span>
-                <input v-model="projectForm.title" type="text" maxlength="255" placeholder="例：雨季便利店" />
-                <small class="field-hint">2-255 个字符。写作品名或项目代号都可以。</small>
-              </label>
-              <label class="field">
-                <span>题材类型</span>
-                <input v-model="projectForm.genre" type="text" maxlength="100" placeholder="例：现代都市轻小说 / 校园悬疑 / 奇幻冒险" />
-                <small class="field-hint">2-100 个字符。用于帮助模型判断故事气质。</small>
-              </label>
-              <label class="field">
-                <span>故事前提</span>
-                <textarea
-                  v-model="projectForm.premise"
-                  rows="4"
-                  maxlength="2000"
-                  placeholder="例：一个总在雨夜值班的便利店店员，发现每周三凌晨都会有同一个陌生女孩来买同一种饮料，但她似乎不记得前几次见过他。"
-                />
-                <small class="field-hint">12-2000 个字符。写清主角、冲突或故事钩子即可。</small>
-              </label>
-              <label class="field">
-                <span>世界设定（可选）</span>
-                <textarea
-                  v-model="projectForm.world_brief"
-                  rows="4"
-                  maxlength="4000"
-                  placeholder="例：故事发生在沿海小城。雨季持续三个月，城市里有一条旧电车线，很多重要场景都围绕便利店、电车站和旧书店展开。"
-                />
-                <small class="field-hint">0-4000 个字符。没有特殊世界观可以先留空。</small>
-              </label>
-              <label class="field">
-                <span>自定义偏好（可选）</span>
-                <textarea
-                  v-model="projectForm.writing_rules"
-                  rows="4"
-                  maxlength="2000"
-                  placeholder="例：第三人称有限视角；节奏偏轻；不要突然加入超自然设定；感情线慢热。"
-                />
-                <small class="field-hint">0-2000 个字符。只写这个项目特别需要的偏好。</small>
-              </label>
-              <label class="field">
-                <span>文风预设</span>
-                <select v-model="projectForm.style_profile">
-                  <option value="light_novel">轻小说</option>
-                  <option value="lyrical_restrained">抒情克制</option>
-                </select>
-                <small class="field-hint">不确定就选轻小说；想要更细腻、更克制时选抒情克制。</small>
-              </label>
-              <button class="primary-button" :disabled="loading">创建并进入工坊</button>
-            </form>
-          </section>
-        </section>
-
-        <section class="workspace__column workspace__column--center" v-if="hasProject">
+        <section class="workspace__column workspace__column--center">
           <section class="panel panel--paper">
             <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">项目设定</p>
-                <h2>{{ activeProject?.project.title }}</h2>
-              </div>
-              <button class="primary-button" :disabled="loading" @click="store.indexProject()">整理资料并开始准备</button>
+              <div><p class="panel-heading__kicker">写作</p><h2>{{ activeProject?.project.title }}</h2></div>
+              <div class="mode-switch"><button type="button" :class="{ 'mode-switch__item--active': writingMode === 'auto' }" @click="writingMode = 'auto'">自动</button><button type="button" :class="{ 'mode-switch__item--active': writingMode === 'advanced' }" @click="writingMode = 'advanced'">精细</button></div>
             </div>
-            <div class="project-meta">
-              <div>
-                <span>题材</span>
-                <strong>{{ activeProject?.project.genre }}</strong>
-              </div>
-              <div>
-                <span>状态</span>
-                <strong>{{ projectStatusLabel(activeProject?.project.indexing_status) }}</strong>
-              </div>
-            </div>
-            <p class="project-copy"><strong>故事前提：</strong>{{ activeProject?.project.premise }}</p>
-            <p class="project-copy"><strong>世界设定：</strong>{{ activeProject?.project.world_brief }}</p>
-            <p class="project-copy" v-if="activeProject?.project.writing_rules"><strong>自定义偏好：</strong>{{ activeProject?.project.writing_rules }}</p>
-          </section>
-
-          <section class="panel panel--paper">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">写作模式</p>
-                <h2>{{ writingMode === "auto" ? "AI 自动创作" : "精细控制" }}</h2>
-              </div>
-              <div class="mode-switch" role="tablist" aria-label="写作模式">
-                <button type="button" :class="{ 'mode-switch__item--active': writingMode === 'auto' }" @click="writingMode = 'auto'">
-                  AI 自动创作
-                </button>
-                <button type="button" :class="{ 'mode-switch__item--active': writingMode === 'advanced' }" @click="writingMode = 'advanced'">
-                  精细控制
-                </button>
-              </div>
-            </div>
-
             <form v-if="writingMode === 'auto'" class="form-stack" @submit.prevent="submitAutoGenerate()">
-              <label class="field">
-                <span>把你的想法都写在这里</span>
-                <textarea
-                  v-model="autoGenerationForm.idea"
-                  rows="10"
-                  placeholder="例：我想写一个雨夜便利店的故事。男主是夜班店员，女主每周三凌晨都会来买同一种饮料。她看起来很疲惫，但每次都像第一次见到男主。希望这一段写他们第一次真正聊起来，气氛有点暧昧，也有一点不安。"
-                />
-                <small class="field-hint">不用拆成设定、资料或规则。把人物、场景、氛围、想发生的事写成一大段就行。</small>
-              </label>
-              <button class="primary-button" :disabled="loading">{{ loading ? "AI 正在写..." : "让 AI 自动写一段" }}</button>
+              <label class="field"><span>把想法写在这里</span><textarea v-model="autoGenerationForm.idea" rows="10" /></label>
+              <button class="primary-button" :disabled="loading">让 AI 写一段</button>
             </form>
-
             <form v-else class="form-stack" @submit.prevent="store.generate(generationForm)">
-              <label class="field">
-                <span>这一段你想怎么写</span>
-                <textarea
-                  v-model="generationForm.prompt"
-                  rows="6"
-                  placeholder="例如：写一段两人在深夜河岸对话的场景，让情绪逐步升级，但不要马上和解。"
-                />
-              </label>
+              <label class="field"><span>这一段想怎么写</span><textarea v-model="generationForm.prompt" rows="6" /></label>
               <div class="inline-row">
-                <label class="field">
-                  <span>参考范围</span>
-                  <select v-model="generationForm.search_method">
-                    <option value="local">只参考最相关内容</option>
-                    <option value="global">参考更多全局信息</option>
-                    <option value="drift">自由联想更多线索</option>
-                    <option value="basic">基础参考</option>
-                  </select>
-                  <small class="field-hint">不确定就用“只参考最相关内容”。</small>
-                </label>
-                <label class="field">
-                  <span>正文长度和形式</span>
-                  <input v-model="generationForm.response_type" type="text" placeholder="Multiple Paragraphs" />
-                  <small class="field-hint">可以写“短段落”“多段落”“长章节”等。</small>
-                </label>
+                <label class="field"><span>参考范围</span><select v-model="generationForm.search_method"><option value="local">最相关内容</option><option value="global">更多全局信息</option><option value="drift">自由联想</option><option value="basic">基础参考</option></select></label>
+                <label class="field"><span>长度和形式</span><input v-model="generationForm.response_type" /></label>
               </div>
-              <div class="hero__actions">
-                <button class="ghost-button ghost-button--small" type="button" @click="openFeaturePanel()">更多开关</button>
-              </div>
-              <button class="primary-button" :disabled="loading">按精细设置生成</button>
+              <button class="primary-button" :disabled="loading">生成正文</button>
             </form>
           </section>
-
-          <section v-if="writingMode === 'advanced'" class="dual-grid">
+          <section class="dual-grid" v-if="writingMode === 'advanced'">
             <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="panel-heading__kicker">给 AI 记住</p>
-                  <h2>角色和故事信息</h2>
-                </div>
-              </div>
+              <div class="panel-heading"><div><p class="panel-heading__kicker">补充设定</p><h2>给 AI 记住</h2></div></div>
               <form class="form-stack" @submit.prevent="store.addMemory(memoryForm)">
-                <label class="field">
-                  <span>这条信息的名字</span>
-                  <input v-model="memoryForm.title" type="text" placeholder="例：女主的秘密" />
-                </label>
-                <label class="field">
-                  <span>具体内容</span>
-                  <textarea v-model="memoryForm.content" rows="4" placeholder="例：她每周三凌晨都会失去一段记忆，但会下意识来到同一家便利店。" />
-                </label>
-                <div class="inline-row">
-                  <label class="field">
-                    <span>属于哪部分</span>
-                    <input v-model="memoryForm.memory_scope" type="text" placeholder="story / character / world" />
-                  </label>
-                  <label class="field">
-                    <span>AI 要多重视它（1-5）</span>
-                    <input v-model.number="memoryForm.importance" type="number" min="1" max="5" />
-                  </label>
-                </div>
-                <button class="ghost-button" :disabled="loading">保存给 AI 记住</button>
+                <label class="field"><span>标题</span><input v-model="memoryForm.title" /></label>
+                <label class="field"><span>内容</span><textarea v-model="memoryForm.content" rows="4" /></label>
+                <button class="ghost-button" :disabled="loading">保存设定</button>
               </form>
-              <div class="card-list">
-                <article v-for="memory in activeProject?.memories" :key="memory.id" class="memory-card">
-                  <strong>{{ memory.title }}</strong>
-                  <span>{{ memory.content }}</span>
-                  <em>{{ memory.memory_scope }} / 重要度 {{ memory.importance }}</em>
-                </article>
-              </div>
             </section>
-
             <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="panel-heading__kicker">给 AI 参考</p>
-                  <h2>外部资料或片段</h2>
-                </div>
-              </div>
+              <div class="panel-heading"><div><p class="panel-heading__kicker">参考资料</p><h2>外部资料或片段</h2></div></div>
               <form class="form-stack" @submit.prevent="store.addSource(sourceForm)">
-                <label class="field">
-                  <span>资料名称</span>
-                  <input v-model="sourceForm.title" type="text" placeholder="例：旧电车站描写" />
-                </label>
-                <label class="field">
-                  <span>资料内容</span>
-                  <textarea v-model="sourceForm.content" rows="4" placeholder="可以粘贴你写过的片段、世界观、角色小传或想模仿的结构。" />
-                </label>
-                <label class="field">
-                  <span>资料类型</span>
-                  <input v-model="sourceForm.source_kind" type="text" placeholder="reference / outline / draft" />
-                </label>
+                <label class="field"><span>标题</span><input v-model="sourceForm.title" /></label>
+                <label class="field"><span>内容</span><textarea v-model="sourceForm.content" rows="4" /></label>
                 <button class="ghost-button" :disabled="loading">保存资料</button>
               </form>
-              <div class="card-list">
-                <article v-for="source in activeProject?.sources" :key="source.id" class="memory-card">
-                  <strong>{{ source.title }}</strong>
-                  <span>{{ source.content }}</span>
-                  <em>{{ source.source_kind }}</em>
-                </article>
-              </div>
             </section>
           </section>
-
         </section>
-
-        <section class="workspace__column" v-if="hasProject">
-          <section class="panel panel--warm guide-card">
-            <p class="panel-heading__kicker">下一步</p>
-            <h2>{{ currentStep }}</h2>
-            <p class="guide-card__copy">普通模式可以直接写；精细控制适合你已经有角色、世界观或章节计划的时候。</p>
-          </section>
-
-          <section class="panel" v-if="currentGeneration">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">发布作品</p>
-                <h2>把当前生成结果发布到书城</h2>
-              </div>
-            </div>
-            <form class="form-stack" @submit.prevent="submitPublishNovel()">
-              <label class="field">
-                <span>作品标题</span>
-                <input v-model="publishForm.title" type="text" placeholder="输入书城显示的作品标题" />
-              </label>
-              <label class="field">
-                <span>作者名</span>
-                <input v-model="publishForm.author_name" type="text" :placeholder="currentUser?.username ?? '输入作者名'" />
-              </label>
-              <label class="field">
-                <span>一句宣传语</span>
-                <input v-model="publishForm.tagline" type="text" placeholder="例如：所有错过的人，都在最后一站留下回声。" />
-              </label>
-              <label class="field">
-                <span>作品简介</span>
-                <textarea v-model="publishForm.summary" rows="4" placeholder="用于书城列表和详情页展示。" />
-              </label>
-              <label class="field">
-                <span>可见性</span>
-                <select v-model="publishForm.visibility">
-                  <option value="public">公开</option>
-                  <option value="private">仅自己可见</option>
-                </select>
-              </label>
-              <button class="primary-button" :disabled="loading">发布到书城</button>
-            </form>
-          </section>
-
-          <section class="panel panel--paper">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">AI 写出的正文</p>
-                <h2>{{ currentGeneration?.title ?? "还没有生成内容" }}</h2>
-              </div>
-            </div>
-            <p class="project-copy" v-if="currentGeneration"><strong>摘要：</strong>{{ currentGeneration.summary }}</p>
-            <pre class="story-output">{{ currentGeneration?.content ?? "在左侧写下你的想法，点击生成后，这里会显示 AI 写出的正文。" }}</pre>
-          </section>
-
+        <section class="workspace__column">
+          <section class="panel panel--warm guide-card"><p class="panel-heading__kicker">下一步</p><h2>{{ currentStep }}</h2></section>
           <section class="panel">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">写过的版本</p>
-                <h2>历史记录</h2>
-              </div>
-            </div>
+            <div class="panel-heading"><div><p class="panel-heading__kicker">生成记录</p><h2>草稿</h2></div></div>
             <div class="timeline" v-if="activeProject?.generations.length">
-              <button
-                v-for="item in activeProject?.generations"
-                :key="item.id"
-                class="timeline-item"
-                @click="openGeneration(item.id)"
-              >
-                <strong>{{ item.title }}</strong>
-                <span>{{ item.summary }}</span>
-                <em>{{ item.search_method }} / {{ item.response_type }}</em>
-              </button>
+              <button v-for="item in activeProject.generations" :key="item.id" class="timeline-item" type="button" @click="openGeneration(item.id)"><strong>{{ item.title }}</strong><span>{{ item.summary }}</span><em>{{ formatDateTime(item.created_at) }}</em></button>
             </div>
-            <p v-else class="empty-text">还没有生成历史。先让 AI 写一段。</p>
+            <p v-else class="empty-text">还没有生成记录。</p>
           </section>
-
-          <section class="panel" v-if="writingMode === 'advanced'">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">AI 参考了什么</p>
-                <h2>本次参考内容</h2>
-              </div>
-            </div>
-            <pre class="context-output">{{ currentGeneration?.retrieval_context ?? "这里会显示这次写作时参考到的资料内容。" }}</pre>
-          </section>
-
-          <section class="panel" v-if="writingMode === 'advanced'">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">AI 写作前的整理</p>
-                <h2>本次整理结果</h2>
-              </div>
-            </div>
-            <pre class="context-output">{{ currentGeneration?.scene_card ?? "这里会显示本次生成前整理出来的角色、关系、事件与连续性信息。" }}</pre>
-          </section>
-
-          <section class="panel" v-if="writingMode === 'advanced'">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">本章变化摘要</p>
-                <h2>AI 记录到的新变化</h2>
-              </div>
-            </div>
-            <pre class="context-output">{{ currentGeneration?.evolution_snapshot ?? "这里会显示本章生成后自动提取出的角色、关系、事件和外界认知变化。" }}</pre>
-          </section>
-
-          <section class="panel" v-if="writingMode === 'advanced'">
-            <div class="panel-heading">
-              <div>
-                <p class="panel-heading__kicker">连续性记录</p>
-                <h2>角色和关系的变化</h2>
-              </div>
-            </div>
-
-            <div class="card-list" v-if="activeProject?.character_state_updates.length">
-              <article v-for="item in activeProject?.character_state_updates.slice(0, 4)" :key="item.id" class="memory-card">
-                <strong>{{ item.character_name }}</strong>
-                <span>情绪：{{ item.emotion_state || "未记录" }}</span>
-                <span>目标：{{ item.current_goal || "未记录" }}</span>
-                <em>{{ item.summary || item.self_view_shift || "暂无摘要" }}</em>
-              </article>
-            </div>
-            <p v-else class="empty-text">生成更多章节后，这里会开始累计角色状态变化。</p>
-
-            <div class="detail-divider" />
-
-            <div class="card-list" v-if="activeProject?.relationship_state_updates.length">
-              <article v-for="item in activeProject?.relationship_state_updates.slice(0, 4)" :key="item.id" class="memory-card">
-                <strong>{{ item.source_character }} → {{ item.target_character }}</strong>
-                <span>{{ item.change_type }} / {{ item.direction }} / 强度 {{ item.intensity }}</span>
-                <em>{{ item.summary }}</em>
-              </article>
-            </div>
-
-            <div class="detail-divider" />
-
-            <div class="card-list" v-if="activeProject?.story_events.length">
-              <article v-for="item in activeProject?.story_events.slice(0, 3)" :key="item.id" class="memory-card">
-                <strong>{{ item.title }}</strong>
-                <span>{{ item.summary }}</span>
-                <em>{{ item.impact_summary }}</em>
-              </article>
-            </div>
-
-            <div class="detail-divider" />
-
-            <div class="card-list" v-if="activeProject?.world_perception_updates.length">
-              <article v-for="item in activeProject?.world_perception_updates.slice(0, 3)" :key="item.id" class="memory-card">
-                <strong>{{ item.observer_group }} 对 {{ item.subject_name }}</strong>
-                <span>{{ item.direction }}</span>
-                <em>{{ item.change_summary }}</em>
-              </article>
-            </div>
+          <section class="panel panel--paper">
+            <div class="panel-heading"><div><p class="panel-heading__kicker">当前草稿</p><h2>{{ currentGeneration ? "发布前可编辑" : "先生成一段正文" }}</h2></div></div>
+            <form v-if="currentGeneration" class="form-stack draft-editor">
+              <label class="field"><span>章节标题</span><input v-model="draftForm.title" /></label>
+              <label class="field"><span>摘要</span><textarea v-model="draftForm.summary" rows="3" /></label>
+              <label class="field"><span>正文</span><textarea v-model="draftForm.content" rows="14" /></label>
+            </form>
+            <form v-if="currentGeneration" class="form-stack" @submit.prevent="submitPublishNovel()">
+              <label class="field"><span>作品标题</span><input v-model="publishForm.title" /></label>
+              <label class="field"><span>作者名</span><input v-model="publishForm.author_name" /></label>
+              <label class="field"><span>简介</span><textarea v-model="publishForm.summary" rows="4" /></label>
+              <label class="field"><span>宣传语</span><input v-model="publishForm.tagline" /></label>
+              <button class="primary-button" :disabled="loading">发布为作品</button>
+            </form>
           </section>
         </section>
       </main>
+      <section v-else class="panel empty-state"><h2>先选择或创建一个项目。</h2></section>
+    </template>
 
-      <section v-else class="panel empty-state">
-        <p class="panel-heading__kicker">创作工坊</p>
-        <h2>{{ isAuthenticated ? "先选择或创建一个小说项目。" : "登录后再进入创作工坊。" }}</h2>
-        <button v-if="isAuthenticated" class="primary-button primary-button--compact" @click="goToView('studio')">回到我的小说</button>
-        <button v-else class="primary-button primary-button--compact" @click="openAuthPanel('register')">创建账号</button>
+    <template v-else-if="currentView === 'novelEditor'">
+      <section v-if="currentNovel && isManagingCurrentNovel" class="novel-editor">
+        <section class="panel panel--paper">
+          <div class="section-head"><div><p class="panel-heading__kicker">作品编辑</p><h2>{{ currentNovel.title }}</h2></div><button class="ghost-button ghost-button--small" type="button" @click="goToView('detail')">查看作品</button></div>
+          <form class="form-stack" @submit.prevent="submitUpdateNovel()">
+            <label class="field"><span>作品标题</span><input v-model="manageNovelForm.title" /></label>
+            <label class="field"><span>作者名</span><input v-model="manageNovelForm.author_name" /></label>
+            <label class="field"><span>宣传语</span><input v-model="manageNovelForm.tagline" /></label>
+            <label class="field"><span>作品简介</span><textarea v-model="manageNovelForm.summary" rows="4" /></label>
+            <label class="field"><span>谁可以看</span><select v-model="manageNovelForm.visibility"><option value="public">公开</option><option value="private">仅自己可见</option></select></label>
+            <button class="primary-button" :disabled="loading">保存作品信息</button>
+          </form>
+        </section>
+        <section class="panel">
+          <div class="section-head"><div><p class="panel-heading__kicker">章节编辑</p><h2>修改已发布章节</h2></div></div>
+          <label v-if="sortedChapters.length" class="field"><span>选择章节</span><select :value="selectedChapter?.id" @change="selectChapterById(($event.target as HTMLSelectElement).value)"><option v-for="chapter in sortedChapters" :key="chapter.id" :value="chapter.id">第 {{ chapter.chapter_no }} 章 · {{ chapter.title }}</option></select></label>
+          <form v-if="selectedChapter" class="form-stack" @submit.prevent="submitUpdateChapter()">
+            <label class="field"><span>章节序号</span><input v-model.number="chapterEditForm.chapter_no" type="number" min="1" /></label>
+            <label class="field"><span>章节标题</span><input v-model="chapterEditForm.title" /></label>
+            <label class="field"><span>章节摘要</span><textarea v-model="chapterEditForm.summary" rows="3" /></label>
+            <label class="field"><span>正文内容</span><textarea v-model="chapterEditForm.content" rows="16" /></label>
+            <button class="primary-button" :disabled="loading">保存章节</button>
+          </form>
+        </section>
+        <section class="panel" v-if="currentGeneration">
+          <div class="section-head"><div><p class="panel-heading__kicker">追加章节</p><h2>把当前草稿加入这部作品</h2></div></div>
+          <form class="form-stack draft-editor" @submit.prevent="submitAppendChapter()">
+            <label class="field"><span>章节序号</span><input v-model.number="appendChapterForm.chapter_no" type="number" min="1" /></label>
+            <label class="field"><span>章节标题</span><input v-model="appendChapterForm.title" /></label>
+            <label class="field"><span>章节摘要</span><textarea v-model="draftForm.summary" rows="3" /></label>
+            <label class="field"><span>正文内容</span><textarea v-model="draftForm.content" rows="16" /></label>
+            <button class="primary-button" :disabled="loading || !activeProject">保存为新章节</button>
+          </form>
+        </section>
       </section>
+      <section v-else class="panel empty-state"><h2>先从“我的小说”选择一部自己的作品。</h2></section>
     </template>
 
     <template v-else-if="currentView === 'profile'">
-      <section v-if="isAuthenticated" class="content-grid content-grid--profile">
-        <section class="panel panel--paper">
-          <div class="section-head">
-            <div>
-              <p class="panel-heading__kicker">我的</p>
-              <h2>个人资料</h2>
-            </div>
-          </div>
-          <form class="form-stack" @submit.prevent="submitProfile()">
-            <label class="field">
-              <span>用户名</span>
-              <input :value="currentUser?.username ?? ''" type="text" disabled />
-            </label>
-            <label class="field">
-              <span>邮箱</span>
-              <input v-model="profileForm.email" type="email" placeholder="以后可以在这里补充邮箱" />
-            </label>
-            <label class="field">
-              <span>手机号</span>
-              <input v-model="profileForm.phone" type="tel" placeholder="以后可以在这里补充手机号" />
-            </label>
-            <label class="field">
-              <span>个人简介</span>
-              <textarea v-model="profileForm.bio" rows="5" />
-            </label>
-            <button class="primary-button" :disabled="loading">保存资料</button>
-          </form>
-        </section>
-
-        <section class="panel">
-          <div class="section-head">
-            <div>
-              <p class="panel-heading__kicker">创作概览</p>
-              <h2>你的当前状态</h2>
-            </div>
-          </div>
-          <div class="journey-list">
-            <article class="journey-card">
-              <strong>{{ projectCount }} 个项目</strong>
-              <span>继续整理你的世界设定和人物记忆。</span>
-            </article>
-            <article class="journey-card">
-              <strong>{{ generationCount }} 次生成</strong>
-              <span>把满意的章节整理出来，逐步扩展成长篇。</span>
-            </article>
-            <article class="journey-card">
-              <strong>{{ bookshelfNovels.length }} 本收藏</strong>
-              <span>把喜欢的作品放进书架，作为氛围和节奏参考。</span>
-            </article>
-          </div>
-        </section>
-      </section>
-
-      <section v-else class="panel empty-state">
-        <p class="panel-heading__kicker">我的</p>
-        <h2>先登录，再管理你的资料和偏好。</h2>
-        <button class="primary-button primary-button--compact" @click="openAuthPanel('login')">去登录</button>
+      <section class="panel panel--paper">
+        <div class="panel-heading"><div><p class="panel-heading__kicker">我的</p><h2>{{ isAuthenticated ? "管理个人资料" : "登录后再管理个人资料" }}</h2></div></div>
+        <form v-if="isAuthenticated" class="form-stack" @submit.prevent="submitProfile()">
+          <label class="field"><span>简介</span><textarea v-model="profileForm.bio" rows="4" /></label>
+          <label class="field"><span>Email</span><input v-model="profileForm.email" type="email" /></label>
+          <label class="field"><span>Phone</span><input v-model="profileForm.phone" /></label>
+          <button class="primary-button" :disabled="loading">保存资料</button>
+        </form>
+        <button v-else class="primary-button primary-button--compact" @click="openAuthPanel('login')">登录</button>
       </section>
     </template>
-
-    <div v-if="featurePanelOpen" class="auth-overlay" @click.self="closeFeaturePanel()">
-      <section class="feature-modal panel">
-        <div class="panel-heading">
-          <div>
-            <p class="panel-heading__kicker">更多开关</p>
-            <h2>控制这次写作要不要参考更多信息</h2>
-          </div>
-          <button class="ghost-button ghost-button--small" type="button" @click="closeFeaturePanel()">关闭</button>
-        </div>
-
-        <div class="journey-list">
-          <article class="journey-card">
-            <label class="field">
-              <span class="feature-toggle-label">
-                <input v-model="generationForm.use_global_search" type="checkbox" />
-                参考整个项目的更多内容
-              </span>
-            </label>
-            <span>除了当前段落最相关的信息，再多看一些整体剧情和设定。更稳，但会更慢。</span>
-          </article>
-
-          <article class="journey-card">
-            <label class="field">
-              <span class="feature-toggle-label">
-                <input v-model="generationForm.use_scene_card" type="checkbox" />
-                写作前先帮我整理一遍
-              </span>
-            </label>
-            <span>先把角色、关系、关键事件和参考内容整理清楚，再交给 AI 写。</span>
-          </article>
-
-          <article class="journey-card">
-            <label class="field">
-              <span class="feature-toggle-label">
-                <input v-model="generationForm.use_refiner" type="checkbox" />
-                生成后自动润色
-              </span>
-            </label>
-            <span>正文生成后再顺一遍语言，让它更轻、更自然，但会更耗时。</span>
-          </article>
-
-          <article class="journey-card">
-            <label class="field">
-              <span class="feature-toggle-label">
-                <input v-model="generationForm.write_evolution" type="checkbox" />
-                记住这章发生的变化
-              </span>
-            </label>
-            <span>自动记录本章里角色、关系和事件的变化，后面继续写时可以接上。</span>
-          </article>
-        </div>
-      </section>
-    </div>
   </div>
 </template>

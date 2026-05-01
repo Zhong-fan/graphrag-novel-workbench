@@ -57,6 +57,10 @@ class ProjectCreateRequest(BaseModel):
     style_profile: str = Field(default="light_novel", pattern="^(light_novel|lyrical_restrained)$")
 
 
+class ProjectUpdateRequest(ProjectCreateRequest):
+    pass
+
+
 class ProjectOut(BaseModel):
     id: int
     title: str
@@ -87,6 +91,34 @@ class MemoryOut(BaseModel):
     content: str
     memory_scope: str
     importance: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CharacterCardCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    age: str = Field(default="", max_length=60)
+    gender: str = Field(default="", max_length=60)
+    personality: str = Field(default="", max_length=2000)
+    story_role: str = Field(default="", max_length=120)
+    background: str = Field(default="", max_length=4000)
+
+
+class CharacterCardUpdateRequest(CharacterCardCreateRequest):
+    pass
+
+
+class CharacterCardOut(BaseModel):
+    id: int
+    name: str
+    age: str
+    gender: str
+    personality: str
+    story_role: str
+    background: str
     created_at: datetime
     updated_at: datetime
 
@@ -192,6 +224,7 @@ class WorldPerceptionUpdateOut(BaseModel):
 class ProjectDetailResponse(BaseModel):
     project: ProjectOut
     memories: list[MemoryOut]
+    character_cards: list[CharacterCardOut] = []
     sources: list[SourceOut]
     generations: list[GenerationOut]
     character_state_updates: list[CharacterStateUpdateOut] = []
@@ -270,6 +303,10 @@ class PublishNovelRequest(BaseModel):
     summary: str = Field(default="", max_length=5000)
     tagline: str = Field(default="", max_length=255)
     visibility: str = Field(default="public", pattern="^(public|private)$")
+    chapter_title: str = Field(default="", max_length=255)
+    chapter_summary: str = Field(default="", max_length=5000)
+    chapter_content: str = Field(default="", max_length=200000)
+    chapter_no: int = Field(default=1, ge=1, le=10000)
 
 
 class UpdateNovelRequest(BaseModel):
@@ -284,6 +321,16 @@ class AppendNovelChapterRequest(BaseModel):
     project_id: int
     generation_id: int
     title: str = Field(default="", max_length=255)
+    summary: str = Field(default="", max_length=5000)
+    content: str = Field(default="", max_length=200000)
+    chapter_no: int | None = Field(default=None, ge=1, le=10000)
+
+
+class UpdateNovelChapterRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    summary: str = Field(default="", max_length=5000)
+    content: str = Field(..., min_length=1, max_length=200000)
+    chapter_no: int = Field(..., ge=1, le=10000)
 
 
 class BootstrapResponse(BaseModel):

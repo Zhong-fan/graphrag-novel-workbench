@@ -11,9 +11,12 @@ import type {
   NovelDetail,
   PublishNovelPayload,
   Project,
+  ProjectPayload,
   ProjectDetailResponse,
+  CharacterCardPayload,
   UpdateNovelPayload,
   AppendNovelChapterPayload,
+  UpdateNovelChapterPayload,
   User,
   UserProfile,
 } from "../types";
@@ -325,14 +328,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
-  async function createProject(payload: {
-    title: string;
-    genre: string;
-    premise: string;
-    world_brief: string;
-    writing_rules: string;
-    style_profile: string;
-  }) {
+  async function createProject(payload: ProjectPayload) {
     if (!token.value) {
       return;
     }
@@ -346,6 +342,27 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       success.value = "项目已创建。";
     } catch (err) {
       error.value = err instanceof Error ? err.message : "创建项目失败。";
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function updateProject(payload: ProjectPayload) {
+    if (!token.value || !activeProject.value) {
+      return;
+    }
+    const projectId = activeProject.value.project.id;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const project = await api.updateProject(token.value, projectId, payload);
+      activeProject.value.project = project;
+      syncProjectSummary(project);
+      success.value = "项目设定已保存。";
+      await selectProject(projectId, { showLoading: false, silent: true });
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "保存项目设定失败。";
     } finally {
       loading.value = false;
     }
@@ -369,6 +386,42 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       success.value = "长期设定已加入项目。";
     } catch (err) {
       error.value = err instanceof Error ? err.message : "保存长期设定失败。";
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function addCharacterCard(payload: CharacterCardPayload) {
+    if (!token.value || !activeProject.value) {
+      return;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      await api.addCharacterCard(token.value, activeProject.value.project.id, payload);
+      await selectProject(activeProject.value.project.id);
+      success.value = "人物卡已添加。";
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "保存人物卡失败。";
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function updateCharacterCard(cardId: number, payload: CharacterCardPayload) {
+    if (!token.value || !activeProject.value) {
+      return;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      await api.updateCharacterCard(token.value, activeProject.value.project.id, cardId, payload);
+      await selectProject(activeProject.value.project.id);
+      success.value = "人物卡已保存。";
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "保存人物卡失败。";
     } finally {
       loading.value = false;
     }
@@ -592,6 +645,31 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
+  async function updateNovelChapter(novelId: number, chapterId: number, payload: UpdateNovelChapterPayload) {
+    if (!token.value) {
+      error.value = "请先登录。";
+      return null;
+    }
+
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const updated = await api.updateNovelChapter(token.value, novelId, chapterId, payload);
+      currentNovel.value = updated;
+      await loadNovels();
+      await loadFavorites();
+      await loadMyNovels();
+      success.value = "章节已保存。";
+      return updated;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "保存章节失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
   return {
     bootstrap,
     captcha,
@@ -623,8 +701,11 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     submitNovelComment,
     selectProject,
     createProject,
+    updateProject,
     clearFeedback,
     addMemory,
+    addCharacterCard,
+    updateCharacterCard,
     addSource,
     indexProject,
     generate,
@@ -633,5 +714,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     publishNovelFromGeneration,
     updatePublishedNovel,
     appendNovelChapter,
+    updateNovelChapter,
   };
 });

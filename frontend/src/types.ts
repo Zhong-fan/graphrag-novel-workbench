@@ -42,6 +42,15 @@ export interface Project {
   updated_at: string;
 }
 
+export interface ProjectPayload {
+  title: string;
+  genre: string;
+  premise: string;
+  world_brief: string;
+  writing_rules: string;
+  style_profile: string;
+}
+
 export interface MemoryItem {
   id: number;
   title: string;
@@ -50,6 +59,27 @@ export interface MemoryItem {
   importance: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface CharacterCard {
+  id: number;
+  name: string;
+  age: string;
+  gender: string;
+  personality: string;
+  story_role: string;
+  background: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CharacterCardPayload {
+  name: string;
+  age: string;
+  gender: string;
+  personality: string;
+  story_role: string;
+  background: string;
 }
 
 export interface SourceItem {
@@ -77,6 +107,7 @@ export interface GenerationItem {
 export interface ProjectDetailResponse {
   project: Project;
   memories: MemoryItem[];
+  character_cards: CharacterCard[];
   sources: SourceItem[];
   generations: GenerationItem[];
   character_state_updates: CharacterStateUpdate[];
@@ -154,6 +185,10 @@ export interface PublishNovelPayload {
   summary: string;
   tagline: string;
   visibility: "public" | "private";
+  chapter_title: string;
+  chapter_summary: string;
+  chapter_content: string;
+  chapter_no: number;
 }
 
 export interface UpdateNovelPayload {
@@ -168,6 +203,16 @@ export interface AppendNovelChapterPayload {
   project_id: number;
   generation_id: number;
   title: string;
+  summary: string;
+  content: string;
+  chapter_no?: number | null;
+}
+
+export interface UpdateNovelChapterPayload {
+  title: string;
+  summary: string;
+  content: string;
+  chapter_no: number;
 }
 
 export interface UserProfile {

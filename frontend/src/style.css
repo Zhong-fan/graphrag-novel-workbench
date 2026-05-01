@@ -403,7 +403,7 @@ button {
 }
 
 .content-grid {
-  grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.85fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .content-grid--home-hot {
@@ -411,10 +411,23 @@ button {
 }
 
 .content-grid--profile {
-  grid-template-columns: minmax(0, 1.05fr) minmax(280px, 0.8fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .novel-detail {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.reader-page {
+  display: grid;
+  gap: var(--space-5);
+  width: min(1720px, calc(100vw - 32px));
+  margin-left: 50%;
+  transform: translateX(-50%);
+}
+
+.novel-editor {
   display: grid;
   gap: var(--space-5);
 }
@@ -463,6 +476,39 @@ button {
 .novel-detail__stat {
   color: var(--ink-soft);
   font-size: 0.92rem;
+}
+
+.chapter-index__list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.chapter-index__item {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 0.3rem var(--space-4);
+  width: 100%;
+  padding: var(--space-4);
+  text-align: left;
+  background: color-mix(in oklab, white 86%, var(--paper));
+  border: 1px solid color-mix(in oklab, var(--line) 92%, white);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.chapter-index__item:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.chapter-index__item span,
+.chapter-index__item small {
+  color: var(--ink-soft);
+}
+
+.chapter-index__item small {
+  grid-column: 2;
+  line-height: 1.6;
 }
 
 .detail-divider {
@@ -530,17 +576,17 @@ button {
 
 .library-grid {
   display: grid;
-  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.25fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-5);
   align-items: start;
 }
 
 .library-grid__published {
-  grid-column: 1 / -1;
+  grid-column: auto;
 }
 
 .library-grid__published .novel-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .mode-switch {
@@ -569,12 +615,12 @@ button {
 }
 
 .workspace {
-  grid-template-columns: minmax(290px, 0.92fr) minmax(0, 1.2fr) minmax(310px, 0.92fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
 }
 
 .workspace--workshop {
-  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .workspace--workshop > .workspace__column:first-child {
@@ -587,14 +633,14 @@ button {
 
 .workspace--starter .workspace__column {
   display: grid;
-  grid-template-columns: minmax(0, 0.95fr) minmax(340px, 1.45fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-5);
   align-items: start;
 }
 
 .workspace--starter .workspace__column > .panel:nth-child(3) {
-  grid-column: 2;
-  grid-row: 1 / span 2;
+  grid-column: auto;
+  grid-row: auto;
 }
 
 .workspace__column {
@@ -659,14 +705,27 @@ button {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.novel-grid--list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.novel-grid--list .novel-card {
+  min-height: 220px;
+}
+
 .novel-card {
   padding: var(--space-5);
+  padding-bottom: 86px;
   position: relative;
   overflow: hidden;
   background: linear-gradient(180deg, color-mix(in oklab, white 86%, var(--rose-soft)), color-mix(in oklab, white 82%, var(--pink-cloud)));
   border: 1px solid color-mix(in oklab, var(--line) 92%, white);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
+}
+
+.novel-card--clickable {
+  cursor: pointer;
 }
 
 .novel-card::before {
@@ -714,6 +773,26 @@ button {
 
 .novel-card__text {
   margin: var(--space-3) 0 0;
+}
+
+.novel-card__actions--iconic {
+  position: absolute;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 2;
+  margin-top: 0;
+}
+
+.search-field {
+  min-width: min(420px, 100%);
+}
+
+.shelf-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  align-items: end;
+  justify-content: flex-end;
 }
 
 .journey-list {
@@ -852,11 +931,11 @@ button {
 
 .inline-row,
 .dual-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .project-meta {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   margin-bottom: var(--space-4);
 }
 
@@ -956,6 +1035,64 @@ button {
 .timeline {
   display: grid;
   gap: var(--space-3);
+}
+
+.novel-reader {
+  min-height: 720px;
+}
+
+.reader-page__bar {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  align-items: center;
+  margin-bottom: var(--space-4);
+}
+
+.chapter-nav {
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+  flex-wrap: wrap;
+}
+
+.chapter-nav--bottom {
+  margin: var(--space-5) 0 0;
+}
+
+.chapter-nav__select {
+  width: min(440px, 100%);
+}
+
+.chapter-jump {
+  display: flex;
+  align-items: end;
+  gap: var(--space-2);
+}
+
+.chapter-jump .field {
+  width: 120px;
+}
+
+.novel-reader__content {
+  margin-top: var(--space-5);
+  padding: clamp(1.6rem, 3vw, 3rem);
+  white-space: pre-wrap;
+  color: color-mix(in oklab, var(--ink) 92%, black);
+  background: color-mix(in oklab, white 86%, var(--paper));
+  border: 1px solid color-mix(in oklab, var(--line) 90%, white);
+  border-radius: var(--radius-md);
+  font-family: var(--font-display);
+  font-size: 1.12rem;
+  line-height: 2.15;
+}
+
+.draft-editor textarea:last-child {
+  min-height: 520px;
+  font-family: var(--font-display);
+  line-height: 1.95;
 }
 
 .project-item,
@@ -1191,6 +1328,10 @@ button {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .novel-grid--list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .workspace,
   .content-grid,
   .content-grid--profile,
@@ -1249,6 +1390,20 @@ button {
 }
 
 @media (max-width: 760px) {
+  .reader-page {
+    width: 100%;
+    margin-left: 0;
+    transform: none;
+  }
+
+  .chapter-index__item {
+    grid-template-columns: 1fr;
+  }
+
+  .chapter-index__item small {
+    grid-column: auto;
+  }
+
   .shell {
     width: min(100vw - 16px, 100%);
     padding-top: 16px;

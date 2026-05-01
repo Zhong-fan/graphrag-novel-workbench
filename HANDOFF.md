@@ -1,280 +1,259 @@
-# Frontend Product Roadmap
-
-## 当前状态
-
-目前前端已经完成了第一轮产品化改版，但有一部分内容还是“展示型界面”，还没有和真实后端数据完全打通。
-
-已经完成：
-
-- 顶部导航改成 `首页 / 书城 / 书架 / 我的小说 / 我的`
-- 登录 / 注册改成右上角独立入口
-- 注册简化成 `用户名 + 密码 + 验证码`
-- “我的小说”里保留了现有创作工作台
-- 首页、书城、书架、我的 这些页面结构已经搭起来了
-
-还没有完成：
-
-- 首页推荐小说是前端写死的示例数据
-- 书城小说列表是前端写死的示例数据
-- 点赞 / 收藏 / 评论目前只是前端交互，没有真实持久化
-- 书架数据目前来自前端临时状态，不是后端用户收藏
-- “我的”里的邮箱 / 手机号 / 简介还没有真实保存
-- “我的小说”生成出来的内容，还没有发布到“书城”展示
-
-## 总目标
-
-把当前项目从“创作后台 + 假前台”补成：
-
-1. 有真实前台小说展示站
-2. 有真实用户书架
-3. 有真实互动系统
-4. 有作者后台
-5. 有作品发布链路
-
----
-
-## 建议实施顺序
-
-不要一起做，按下面顺序推进。
-
-### 第 1 步：先把“书城作品”数据结构补出来
-
-目标：
-
-- 后端有真实的“作品”表
-- 前端书城不再读假数据
-
-建议新增实体：
-
-- `Novel`
-- `NovelChapter`
-- `NovelLike`
-- `NovelFavorite`
-- `NovelComment`
-- `UserProfile`
-
-建议最小字段：
-
-`Novel`
-
-- `id`
-- `author_id`
-- `title`
-- `summary`
-- `genre`
-- `tagline`
-- `cover_url` 可选
-- `status` 例如 `draft / published`
-- `visibility` 例如 `private / public`
-- `created_at`
-- `updated_at`
-
-`NovelChapter`
-
-- `id`
-- `novel_id`
-- `title`
-- `summary`
-- `content`
-- `chapter_no`
-- `created_at`
-
-`NovelLike`
-
-- `id`
-- `novel_id`
-- `user_id`
-
-`NovelFavorite`
-
-- `id`
-- `novel_id`
-- `user_id`
-
-`NovelComment`
-
-- `id`
-- `novel_id`
-- `user_id`
-- `content`
-- `created_at`
-
-`UserProfile`
-
-- `id`
-- `user_id`
-- `bio`
-- `email`
-- `phone`
-
-### 第 2 步：把“我的小说”生成结果接成可发布作品
-
-目标：
-
-- 用户在“我的小说”里生成的内容，能真正变成一部小说或章节
-
-建议做法：
-
-- 先把 `Project` 和 `GenerationRun` 保留
-- 增加“发布为作品”动作
-- 允许把某次生成结果写入 `Novel` + `NovelChapter`
-
-建议新增接口：
-
-- `POST /api/novels/from-generation`
-- 入参：
-  - `project_id`
-  - `generation_id`
-  - `title` 可覆盖
-  - `summary` 可覆盖
-  - `visibility`
-
-这样可以先不改动现有生成主链，只在后面加“发布”。
-
-### 第 3 步：把书城页面接真实 API
-
-目标：
-
-- 首页推荐
-- 书城列表
-- 小说详情
-
-建议新增接口：
-
-- `GET /api/novels`
-- `GET /api/novels/{novel_id}`
-- `GET /api/home/feed`
-
-建议前端替换：
-
-- 把 `App.vue` 里写死的 `novels` 移到 store
-- 从 API 拉取
-- 首页推荐区改成后端返回
-
-### 第 4 步：把书架做成真实收藏
-
-目标：
-
-- 收藏是真收藏
-- 换设备 / 刷新页面后仍然存在
-
-建议接口：
-
-- `POST /api/novels/{novel_id}/favorite`
-- `DELETE /api/novels/{novel_id}/favorite`
-- `GET /api/me/favorites`
-
-前端改动：
-
-- “书架”页面只展示 `GET /api/me/favorites`
-- 收藏按钮直接调接口
-
-### 第 5 步：把点赞和评论做成真实互动
-
-目标：
-
-- 点赞数、评论数真实可用
-
-建议接口：
-
-- `POST /api/novels/{novel_id}/like`
-- `DELETE /api/novels/{novel_id}/like`
-- `GET /api/novels/{novel_id}/comments`
-- `POST /api/novels/{novel_id}/comments`
-
-前端注意：
-
-- 点赞要做“当前用户是否已点赞”
-- 评论列表最好分页
-
-### 第 6 步：补“我的”页面真实资料设置
-
-目标：
-
-- 邮箱、手机号、简介可保存
-
-建议接口：
-
-- `GET /api/me/profile`
-- `PUT /api/me/profile`
-
-前端改动：
-
-- 进入“我的”时拉资料
-- 点击保存时提交
-
-### 第 7 步：再做小说详情页
-
-当前还缺一个关键页面：
-
-- 小说详情页
-
-应该包含：
-
-- 作品信息
-- 章节列表
-- 点赞 / 收藏 / 评论
-- 作者信息
-- 推荐作品
-
-建议前端后续拆页面，而不是继续把所有内容都塞进一个 `App.vue`。
-
----
-
-## 技术债
-
-当前前端为了快速出结构，很多内容还在一个文件里。
-
-后续建议拆分：
-
-- `pages/HomePage.vue`
-- `pages/StorePage.vue`
-- `pages/ShelfPage.vue`
-- `pages/StudioPage.vue`
-- `pages/ProfilePage.vue`
-- `components/AuthModal.vue`
-- `components/NovelCard.vue`
-- `components/ProjectCard.vue`
-
-Pinia 也建议拆 store：
-
-- `authStore`
-- `novelStore`
-- `shelfStore`
-- `studioStore`
-- `profileStore`
-
----
-
-## 数据迁移注意点
-
-因为现在用户表还是：
-
-- `display_name` 实际充当用户名
-- `email` 目前是内部占位邮箱
-
-以后如果要做真邮箱资料：
-
-1. 不要把现有 `email` 直接当用户真实邮箱使用
-2. 最好新增 `UserProfile.email`
-3. 或者单独做一次迁移，把占位邮箱与真实邮箱机制分开
-
----
-
-## 推荐下一次开工顺序
-
-你回来后，建议按这个顺序继续：
-
-1. 先做 `Novel / NovelChapter / Favorite / Comment / Profile` 后端模型
-2. 再做 `GET /api/novels` 和 `GET /api/me/favorites`
-3. 把前端书城、书架从假数据切到真数据
-4. 再做“从生成结果发布到书城”
-5. 最后补点赞、评论、个人资料保存
-
----
-
-## 一句话结论
-
-现在前端已经有了产品外壳，但前台小说展示和社区交互还主要是假的。
-
-后续应先补真实作品数据层，再补发布链路，再补书架 / 点赞 / 评论 / 个人资料，按顺序推进，不要一起动。
+# Handoff
+
+## Current Repo State
+
+- Workspace: `E:\Computer\Wyc_Xc\MVP`
+- Branch: `main`
+- Remote: `origin` -> `https://github.com/Zhong-fan/graphrag-novel-workbench.git`
+- Latest known pushed commit before this handoff: `64a50626a245726322b4c9d1e60e8e9fb8111a56`
+- There are uncommitted changes in:
+  - `app/api.py`
+  - `app/contracts.py`
+  - `frontend/src/App.vue`
+  - `frontend/src/api.ts`
+  - `frontend/src/stores/workbench.ts`
+  - `frontend/src/style.css`
+  - `frontend/src/types.ts`
+
+Do not assume the working tree is clean. Review `git status --short` and `git diff` before continuing.
+
+## User Direction
+
+The user wants the novel site to feel less like a backend/admin tool and more like a simple reader/writer product.
+
+Important product preferences:
+
+- Avoid confusing technical terms in the UI.
+- Prefer vertical/top-bottom layouts over left-right split layouts.
+- Use floating toast messages for success/error feedback, not inline status text.
+- Keep cards looking like cards, but allow users to switch between grid and list layout.
+- For novel cards, clicking the card body should open the novel detail page. Like/favorite controls should stay fixed at the bottom-right of the card.
+- The reading page can be wider than the normal app shell.
+- Separate novel overview, reading, and editing into different pages.
+
+Latest explicit request, translated:
+
+> The novel detail overview page and the active reading page should be separate. The novel editing page should be a standalone top navigation page.
+
+Meaning:
+
+- Novel overview/detail page: metadata, summary, stats, actions, chapter index, and maybe comments.
+- Reading page: chapter reading only, with top and bottom chapter navigation.
+- Novel editor page: separate top navigation item, focused on owner editing for novel metadata and chapters.
+
+## Work Completed In This Session
+
+### Auth and Feedback
+
+- Login/register were moved toward a standalone auth page instead of a small modal-like flow.
+- Register form now includes:
+  - confirm password
+  - password visibility toggle
+  - password/username requirement hints
+  - copy changed from "open your writing space" to "create your writing space"
+- Password visibility control uses a small eye-style icon instead of plain text.
+- Error/success feedback was moved toward floating toast UI.
+- Raw object errors such as `[object Object]` were addressed by normalizing displayed error messages.
+
+### Background and Visual Polish
+
+- Added animated page background work.
+- User disliked the first obvious stripe-like ripple style and asked for a more natural, transparent water-like movement.
+- The current style has been adjusted, but visual quality should still be checked in browser.
+
+### Home, Store, Shelf, Cards
+
+- The home hot/discussed novels layout was widened so it does not occupy only half the page.
+- Home/store/shelf novel cards were adjusted.
+- User later asked to restore card-like appearance while keeping a list option.
+- Current direction implemented in progress:
+  - `novelLayout = ref<"grid" | "list">("grid")`
+  - layout toggle controls added for home/store/shelf
+  - card/list CSS partially restored
+- Shelf was split into:
+  - favorites
+  - likes
+- Search was added over title/author/genre/tagline/summary/latest excerpt.
+- Novel card body opens detail.
+- Favorite/like buttons were fixed toward card bottom-right.
+
+### My Novels / Creation / Writing
+
+- "My Novels" was changed toward a management page instead of putting the whole creation workflow there.
+- Creation/workflow moved toward a separate writing/workshop page.
+- Added two writing modes:
+  - simplified AI mode for users who only provide a paragraph and expect AI to infer/write more
+  - advanced mode for users with more detailed ideas
+- Added guidance/constraints/examples in project creation fields so users are not guessing required length and format.
+- Some backend/system-level writing rules were moved out of user-facing prompt language:
+  - dialogue should use corner brackets
+  - nested quotes should use double corner brackets
+  - character emotion should usually be conveyed through environment/action before dialogue, but not as a rigid rule
+
+### Novel/Chapter Editing and Publishing
+
+- Generated text can now be edited before being published/appended.
+- Generated content can be assigned chapter metadata such as chapter number/title/summary.
+- Backend additions include:
+  - `UpdateNovelChapterRequest`
+  - `PUT /api/novels/{novel_id}/chapters/{chapter_id}`
+- Frontend API/store support added for updating a novel chapter.
+- Current generated text is being split conceptually into:
+  - novel body with chapters
+  - temporary draft text that can be edited and appended into the novel
+
+### Reading / Detail
+
+- Chapter list became clickable/readable.
+- Reading UI got top and bottom chapter navigation:
+  - previous chapter
+  - next chapter
+  - chapter select dropdown
+  - chapter number jump
+- If there is only one chapter, navigation controls should not show.
+- User then clarified that overview and reading should be separate pages.
+
+## Important Current Code Context
+
+Most of the frontend is still in `frontend/src/App.vue`.
+
+Current `ViewKey` is still expected to look like:
+
+```ts
+type ViewKey = "home" | "store" | "detail" | "shelf" | "studio" | "workshop" | "profile" | "auth";
+```
+
+It still needs new views, likely:
+
+```ts
+type ViewKey =
+  | "home"
+  | "store"
+  | "detail"
+  | "reader"
+  | "shelf"
+  | "studio"
+  | "workshop"
+  | "novelEditor"
+  | "profile"
+  | "auth";
+```
+
+Relevant state/computed/functions already exist in `App.vue`:
+
+- `currentNovel`
+- `selectedChapterId`
+- `chapterJumpNo`
+- `chapterEditForm`
+- `selectedChapter`
+- `sortedChapters`
+- `previousChapter`
+- `nextChapter`
+- `hasChapterNavigation`
+- `selectChapterById`
+- `jumpToChapterNo`
+- `submitUpdateChapter`
+- `submitAppendChapter`
+- `submitUpdateNovel`
+- `isManagingCurrentNovel`
+
+The current `detail` template still mixes:
+
+- novel overview hero/metadata/actions
+- reader section
+- chapter editor
+- novel metadata editor
+- append generated draft form
+- comments
+
+This is the main unfinished task.
+
+## Recommended Next Implementation
+
+1. Add `reader` and `novelEditor` to `ViewKey`.
+2. Add top navigation item `Novel Editor` using the app's Chinese UI copy.
+3. Keep `detail` as the overview page only:
+   - title, author, genre, tagline, summary
+   - chapter count/date/stat actions
+   - like/favorite/comment count
+   - compact chapter index
+   - clicking a chapter should call something like `openReader(chapter.id)`
+4. Create a `reader` view:
+   - show current chapter title/summary/content only
+   - include chapter navigation above and below content
+   - include a back-to-detail action
+   - include edit action only if the current user owns the novel
+5. Create a `novelEditor` view:
+   - if no editable current novel is selected, show an empty state telling the user to choose a novel from My Novels
+   - if the user owns the current novel, show:
+     - novel metadata edit form
+     - chapter selector
+     - chapter edit form
+     - append generated draft form when a draft exists
+6. Move wide layout styling away from generic `.novel-detail` and apply it to the reader page instead.
+7. Run verification:
+   - `npm run build`
+   - `python -m compileall app`
+
+## Suggested Helper Functions
+
+Add functions similar to:
+
+```ts
+function openReader(chapterId?: number) {
+  if (chapterId) {
+    selectedChapterId.value = chapterId;
+  }
+  currentView.value = "reader";
+}
+
+function openNovelEditor() {
+  currentView.value = "novelEditor";
+}
+```
+
+When opening a novel detail:
+
+```ts
+selectedChapterId.value = currentNovel.value?.chapters[0]?.id ?? null;
+currentView.value = "detail";
+```
+
+The chapter index on detail should not render the full chapter body.
+
+## Files To Review First Next Time
+
+- `frontend/src/App.vue`
+- `frontend/src/style.css`
+- `frontend/src/stores/workbench.ts`
+- `frontend/src/api.ts`
+- `frontend/src/types.ts`
+- `app/api.py`
+- `app/contracts.py`
+
+Useful commands:
+
+```powershell
+git status --short
+git diff --stat
+rg -n "type ViewKey|currentView|novel-detail|selectedChapter|submitUpdateChapter|submitAppendChapter|novelEditor" frontend/src/App.vue
+rg -n "\.novel-detail|\.novel-reader|\.chapter-nav|\.reader" frontend/src/style.css frontend/src/App.vue
+```
+
+## Verification Status
+
+Before the final split request, these passed earlier:
+
+```powershell
+npm run build
+python -m compileall app
+```
+
+After the latest request, implementation was stopped by the user before code changes were made. Re-run both after continuing work.
+
+## Notes
+
+- Do not commit or push unless the user asks again.
+- There may be unrelated/generated files in the workspace. Review before staging.
+- Avoid reverting user changes. Work with the current dirty tree.
+- If committing later, inspect `git status --short` carefully and stage only intended files.

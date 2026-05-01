@@ -14,6 +14,7 @@ from neo4j import GraphDatabase
 
 from .config import Settings
 from .models import (
+    CharacterCard,
     CharacterStateUpdate,
     GraphWorkspace,
     Memory,
@@ -56,6 +57,7 @@ class GraphRAGService:
         project: Project,
         memories: list[Memory],
         sources: list[SourceDocument],
+        character_cards: list[CharacterCard] | None = None,
         character_updates: list[CharacterStateUpdate] | None = None,
         relationship_updates: list[RelationshipStateUpdate] | None = None,
         story_events: list[StoryEvent] | None = None,
@@ -106,6 +108,23 @@ class GraphRAGService:
                             f"资料标题：{source.title}",
                             f"资料类型：{source.source_kind}",
                             source.content,
+                        ]
+                    ),
+                )
+            )
+
+        for card in character_cards or []:
+            documents.append(
+                (
+                    f"character_card_{card.id:04d}.txt",
+                    "\n".join(
+                        [
+                            f"人物姓名：{card.name}",
+                            f"年龄：{card.age or '未填写'}",
+                            f"性别：{card.gender or '未填写'}",
+                            f"故事角色：{card.story_role or '未填写'}",
+                            f"性格：{card.personality or '未填写'}",
+                            f"人物背景：{card.background or '未填写'}",
                         ]
                     ),
                 )
@@ -186,6 +205,7 @@ class GraphRAGService:
         memories: list[Memory],
         sources: list[SourceDocument],
         workspace_record: GraphWorkspace,
+        character_cards: list[CharacterCard] | None = None,
         character_updates: list[CharacterStateUpdate] | None = None,
         relationship_updates: list[RelationshipStateUpdate] | None = None,
         story_events: list[StoryEvent] | None = None,
@@ -195,6 +215,7 @@ class GraphRAGService:
             project,
             memories,
             sources,
+            character_cards=character_cards,
             character_updates=character_updates,
             relationship_updates=relationship_updates,
             story_events=story_events,

@@ -65,6 +65,10 @@ class Project(Base, TimestampMixin):
 
     owner: Mapped["User"] = relationship(back_populates="projects")
     memories: Mapped[list["Memory"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    character_cards: Mapped[list["CharacterCard"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
     source_documents: Mapped[list["SourceDocument"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
@@ -107,6 +111,21 @@ class Memory(Base, TimestampMixin):
     importance: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
 
     project: Mapped["Project"] = relationship(back_populates="memories")
+
+
+class CharacterCard(Base, TimestampMixin):
+    __tablename__ = "character_cards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    age: Mapped[str] = mapped_column(String(60), default="", nullable=False)
+    gender: Mapped[str] = mapped_column(String(60), default="", nullable=False)
+    personality: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    story_role: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    background: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    project: Mapped["Project"] = relationship(back_populates="character_cards")
 
 
 class SourceDocument(Base, TimestampMixin):

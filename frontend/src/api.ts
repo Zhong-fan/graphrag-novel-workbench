@@ -2,6 +2,8 @@ import type {
   AuthResponse,
   BootstrapResponse,
   CaptchaChallenge,
+  CharacterCard,
+  CharacterCardPayload,
   FavoriteToggleResponse,
   GenerationItem,
   IndexResponse,
@@ -14,10 +16,12 @@ import type {
   PublishNovelPayload,
   Project,
   ProjectDetailResponse,
+  ProjectPayload,
   SourceItem,
   User,
   UserProfile,
   AppendNovelChapterPayload,
+  UpdateNovelChapterPayload,
 } from "./types";
 
 type RequestOptions = RequestInit & {
@@ -131,10 +135,10 @@ export const api = {
   updateMyProfile: (token: string, payload: UserProfile) =>
     request<UserProfile>("/api/me/profile", { method: "PUT", token, body: JSON.stringify(payload) }),
   listProjects: (token: string) => request<Project[]>("/api/projects", { token }),
-  createProject: (
-    token: string,
-    payload: { title: string; genre: string; premise: string; world_brief: string; writing_rules: string; style_profile: string },
-  ) => request<Project>("/api/projects", { method: "POST", token, body: JSON.stringify(payload) }),
+  createProject: (token: string, payload: ProjectPayload) =>
+    request<Project>("/api/projects", { method: "POST", token, body: JSON.stringify(payload) }),
+  updateProject: (token: string, projectId: number, payload: ProjectPayload) =>
+    request<Project>(`/api/projects/${projectId}`, { method: "PUT", token, body: JSON.stringify(payload) }),
   projectDetail: (token: string, projectId: number) =>
     request<ProjectDetailResponse>(`/api/projects/${projectId}`, { token }),
   addMemory: (
@@ -142,6 +146,10 @@ export const api = {
     projectId: number,
     payload: { title: string; content: string; memory_scope: string; importance: number },
   ) => request<MemoryItem>(`/api/projects/${projectId}/memories`, { method: "POST", token, body: JSON.stringify(payload) }),
+  addCharacterCard: (token: string, projectId: number, payload: CharacterCardPayload) =>
+    request<CharacterCard>(`/api/projects/${projectId}/character-cards`, { method: "POST", token, body: JSON.stringify(payload) }),
+  updateCharacterCard: (token: string, projectId: number, cardId: number, payload: CharacterCardPayload) =>
+    request<CharacterCard>(`/api/projects/${projectId}/character-cards/${cardId}`, { method: "PUT", token, body: JSON.stringify(payload) }),
   addSource: (
     token: string,
     projectId: number,
@@ -184,6 +192,12 @@ export const api = {
   appendNovelChapterFromGeneration: (token: string, novelId: number, payload: AppendNovelChapterPayload) =>
     request<NovelDetail>(`/api/novels/${novelId}/chapters/from-generation`, {
       method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  updateNovelChapter: (token: string, novelId: number, chapterId: number, payload: UpdateNovelChapterPayload) =>
+    request<NovelDetail>(`/api/novels/${novelId}/chapters/${chapterId}`, {
+      method: "PUT",
       token,
       body: JSON.stringify(payload),
     }),
