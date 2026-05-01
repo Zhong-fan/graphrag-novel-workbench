@@ -13,6 +13,7 @@ const { bootstrap, captcha, currentUser, projects, novels, favoriteNovels, myNov
 const currentView = ref<ViewKey>("home");
 const authPanelOpen = ref(false);
 const authMode = ref<"register" | "login">("register");
+const featurePanelOpen = ref(false);
 
 const loginForm = reactive({
   username: "",
@@ -31,6 +32,7 @@ const projectForm = reactive({
   premise: "",
   world_brief: "",
   writing_rules: "对白使用「」，嵌套引号使用『』。人物情绪先通过环境和动作呈现，再落到对白。",
+  style_profile: "light_novel",
 });
 
 const memoryForm = reactive({
@@ -50,6 +52,10 @@ const generationForm = reactive({
   prompt: "",
   search_method: "local",
   response_type: "Multiple Paragraphs",
+  use_global_search: true,
+  use_scene_card: true,
+  use_refiner: true,
+  write_evolution: true,
 });
 
 const profileForm = reactive({
@@ -164,6 +170,14 @@ function openAuthPanel(mode: "register" | "login") {
 
 function closeAuthPanel() {
   authPanelOpen.value = false;
+}
+
+function openFeaturePanel() {
+  featurePanelOpen.value = true;
+}
+
+function closeFeaturePanel() {
+  featurePanelOpen.value = false;
 }
 
 function goToView(view: ViewKey) {
@@ -825,6 +839,13 @@ watch(
                 <span>写作规则</span>
                 <textarea v-model="projectForm.writing_rules" rows="4" />
               </label>
+              <label class="field">
+                <span>文风预设</span>
+                <select v-model="projectForm.style_profile">
+                  <option value="light_novel">轻小说</option>
+                  <option value="lyrical_restrained">抒情克制</option>
+                </select>
+              </label>
               <button class="primary-button" :disabled="loading">创建项目</button>
             </form>
           </section>
@@ -863,16 +884,16 @@ watch(
               <div class="panel-heading">
                 <div>
                   <p class="panel-heading__kicker">补充内容</p>
-                  <h2>长期记忆</h2>
+                  <h2>长期设定</h2>
                 </div>
               </div>
               <form class="form-stack" @submit.prevent="store.addMemory(memoryForm)">
                 <label class="field">
-                  <span>记忆标题</span>
+                  <span>设定标题</span>
                   <input v-model="memoryForm.title" type="text" />
                 </label>
                 <label class="field">
-                  <span>记忆内容</span>
+                  <span>设定内容</span>
                   <textarea v-model="memoryForm.content" rows="4" />
                 </label>
                 <div class="inline-row">
@@ -885,7 +906,7 @@ watch(
                     <input v-model.number="memoryForm.importance" type="number" min="1" max="5" />
                   </label>
                 </div>
-                <button class="ghost-button" :disabled="loading">保存记忆</button>
+                <button class="ghost-button" :disabled="loading">保存设定</button>
               </form>
               <div class="card-list">
                 <article v-for="memory in activeProject?.memories" :key="memory.id" class="memory-card">
@@ -957,6 +978,9 @@ watch(
                   <span>输出形式</span>
                   <input v-model="generationForm.response_type" type="text" />
                 </label>
+              </div>
+              <div class="hero__actions">
+                <button class="ghost-button ghost-button--small" type="button" @click="openFeaturePanel()">功能调整</button>
               </div>
               <button class="primary-button" :disabled="loading">生成正文</button>
             </form>
@@ -1046,6 +1070,75 @@ watch(
               </div>
             </div>
             <pre class="context-output">{{ currentGeneration?.retrieval_context ?? "这里会显示这次写作时参考到的资料内容。" }}</pre>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="panel-heading__kicker">写作上下文卡</p>
+                <h2>本次真正送进写作器的整理结果</h2>
+              </div>
+            </div>
+            <pre class="context-output">{{ currentGeneration?.scene_card ?? "这里会显示本次生成前整理出来的角色、关系、事件与连续性上下文卡。" }}</pre>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="panel-heading__kicker">演化快照</p>
+                <h2>本章提取出的结构化变化</h2>
+              </div>
+            </div>
+            <pre class="context-output">{{ currentGeneration?.evolution_snapshot ?? "这里会显示本章生成后自动提取出的角色、关系、事件和外界认知变化。" }}</pre>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="panel-heading__kicker">演化状态</p>
+                <h2>最近写回的角色与关系变化</h2>
+              </div>
+            </div>
+
+            <div class="card-list" v-if="activeProject?.character_state_updates.length">
+              <article v-for="item in activeProject?.character_state_updates.slice(0, 4)" :key="item.id" class="memory-card">
+                <strong>{{ item.character_name }}</strong>
+                <span>情绪：{{ item.emotion_state || "未记录" }}</span>
+                <span>目标：{{ item.current_goal || "未记录" }}</span>
+                <em>{{ item.summary || item.self_view_shift || "暂无摘要" }}</em>
+              </article>
+            </div>
+            <p v-else class="empty-text">生成更多章节后，这里会开始累计角色状态变化。</p>
+
+            <div class="detail-divider" />
+
+            <div class="card-list" v-if="activeProject?.relationship_state_updates.length">
+              <article v-for="item in activeProject?.relationship_state_updates.slice(0, 4)" :key="item.id" class="memory-card">
+                <strong>{{ item.source_character }} → {{ item.target_character }}</strong>
+                <span>{{ item.change_type }} / {{ item.direction }} / 强度 {{ item.intensity }}</span>
+                <em>{{ item.summary }}</em>
+              </article>
+            </div>
+
+            <div class="detail-divider" />
+
+            <div class="card-list" v-if="activeProject?.story_events.length">
+              <article v-for="item in activeProject?.story_events.slice(0, 3)" :key="item.id" class="memory-card">
+                <strong>{{ item.title }}</strong>
+                <span>{{ item.summary }}</span>
+                <em>{{ item.impact_summary }}</em>
+              </article>
+            </div>
+
+            <div class="detail-divider" />
+
+            <div class="card-list" v-if="activeProject?.world_perception_updates.length">
+              <article v-for="item in activeProject?.world_perception_updates.slice(0, 3)" :key="item.id" class="memory-card">
+                <strong>{{ item.observer_group }} 对 {{ item.subject_name }}</strong>
+                <span>{{ item.direction }}</span>
+                <em>{{ item.change_summary }}</em>
+              </article>
+            </div>
           </section>
         </section>
       </main>
@@ -1178,6 +1271,60 @@ watch(
           </label>
           <button class="primary-button" :disabled="loading">登录</button>
         </form>
+      </section>
+    </div>
+
+    <div v-if="featurePanelOpen" class="auth-overlay" @click.self="closeFeaturePanel()">
+      <section class="feature-modal panel">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-heading__kicker">功能调整</p>
+            <h2>控制本次生成会启用哪些能力</h2>
+          </div>
+          <button class="ghost-button ghost-button--small" type="button" @click="closeFeaturePanel()">关闭</button>
+        </div>
+
+        <div class="journey-list">
+          <article class="journey-card">
+            <label class="field">
+              <span class="feature-toggle-label">
+                <input v-model="generationForm.use_global_search" type="checkbox" />
+                使用全局检索
+              </span>
+            </label>
+            <span>除了当前场景附近的信息，再额外查一次更大范围的剧情和设定。更稳，但更慢。</span>
+          </article>
+
+          <article class="journey-card">
+            <label class="field">
+              <span class="feature-toggle-label">
+                <input v-model="generationForm.use_scene_card" type="checkbox" />
+                使用写作上下文卡
+              </span>
+            </label>
+            <span>先把角色变化、关系变化、关键事件和检索结果整理成结构化卡片，再交给模型写。</span>
+          </article>
+
+          <article class="journey-card">
+            <label class="field">
+              <span class="feature-toggle-label">
+                <input v-model="generationForm.use_refiner" type="checkbox" />
+                使用轻量润色
+              </span>
+            </label>
+            <span>正文生成后再做一轮减重和润色，让语言更轻、更顺，但会更耗时。</span>
+          </article>
+
+          <article class="journey-card">
+            <label class="field">
+              <span class="feature-toggle-label">
+                <input v-model="generationForm.write_evolution" type="checkbox" />
+                写回演化状态
+              </span>
+            </label>
+            <span>自动提取本章的角色状态、关系、事件和外界看法变化，供后续章节继续继承。</span>
+          </article>
+        </div>
       </section>
     </div>
   </div>

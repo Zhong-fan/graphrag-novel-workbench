@@ -66,7 +66,7 @@ export const api = {
   listProjects: (token: string) => request<Project[]>("/api/projects", { token }),
   createProject: (
     token: string,
-    payload: { title: string; genre: string; premise: string; world_brief: string; writing_rules: string },
+    payload: { title: string; genre: string; premise: string; world_brief: string; writing_rules: string; style_profile: string },
   ) => request<Project>("/api/projects", { method: "POST", token, body: JSON.stringify(payload) }),
   projectDetail: (token: string, projectId: number) =>
     request<ProjectDetailResponse>(`/api/projects/${projectId}`, { token }),
@@ -85,7 +85,15 @@ export const api = {
   generate: (
     token: string,
     projectId: number,
-    payload: { prompt: string; search_method: string; response_type: string },
+    payload: {
+      prompt: string;
+      search_method: string;
+      response_type: string;
+      use_global_search: boolean;
+      use_scene_card: boolean;
+      use_refiner: boolean;
+      write_evolution: boolean;
+    },
   ) => request<GenerationItem>(`/api/projects/${projectId}/generate`, { method: "POST", token, body: JSON.stringify(payload) }),
   listNovels: (token?: string | null) => request<NovelCard[]>("/api/novels", { token }),
   novelDetail: (novelId: number, token?: string | null) => request<NovelDetail>(`/api/novels/${novelId}`, { token }),

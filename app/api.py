@@ -25,6 +25,7 @@ from .contracts import (
     AuthResponse,
     BootstrapResponse,
     CaptchaChallenge,
+    CharacterStateUpdateOut,
     FavoriteToggleResponse,
     GenerateRequest,
     GenerationOut,
@@ -47,14 +48,19 @@ from .contracts import (
     RegisterRequest,
     SourceCreateRequest,
     SourceOut,
+    StoryEventOut,
     UpdateNovelRequest,
     UserOut,
     UserProfileOut,
     UserProfileUpdateRequest,
+    WorldPerceptionUpdateOut,
+    RelationshipStateUpdateOut,
 )
 from .db import db_session, get_db, init_db
+from .evolution_service import EvolutionService
 from .graphrag_service import GraphRAGService
 from .models import (
+    CharacterStateUpdate,
     GenerationRun,
     GraphWorkspace,
     Memory,
@@ -64,9 +70,12 @@ from .models import (
     NovelFavorite,
     NovelLike,
     Project,
+    RelationshipStateUpdate,
     SourceDocument,
+    StoryEvent,
     User,
     UserProfile,
+    WorldPerceptionUpdate,
 )
 from .story_service import StoryGenerationService
 
@@ -156,6 +165,61 @@ def _novel_comment_out(comment: NovelComment) -> NovelCommentOut:
         username=comment.user.display_name,
         content=comment.content,
         created_at=comment.created_at,
+    )
+
+
+def _character_state_out(item: CharacterStateUpdate) -> CharacterStateUpdateOut:
+    return CharacterStateUpdateOut(
+        id=item.id,
+        character_name=item.character_name,
+        emotion_state=item.emotion_state,
+        current_goal=item.current_goal,
+        self_view_shift=item.self_view_shift,
+        public_perception=item.public_perception,
+        summary=item.summary,
+        created_at=item.created_at,
+    )
+
+
+def _relationship_state_out(item: RelationshipStateUpdate) -> RelationshipStateUpdateOut:
+    return RelationshipStateUpdateOut(
+        id=item.id,
+        source_character=item.source_character,
+        target_character=item.target_character,
+        change_type=item.change_type,
+        direction=item.direction,
+        intensity=item.intensity,
+        summary=item.summary,
+        created_at=item.created_at,
+    )
+
+
+def _story_event_out(item: StoryEvent) -> StoryEventOut:
+    try:
+        participants = json.loads(item.participants_json)
+    except json.JSONDecodeError:
+        participants = []
+    if not isinstance(participants, list):
+        participants = []
+    return StoryEventOut(
+        id=item.id,
+        title=item.title,
+        summary=item.summary,
+        impact_summary=item.impact_summary,
+        participants=[str(participant) for participant in participants],
+        location_hint=item.location_hint,
+        created_at=item.created_at,
+    )
+
+
+def _world_perception_out(item: WorldPerceptionUpdate) -> WorldPerceptionUpdateOut:
+    return WorldPerceptionUpdateOut(
+        id=item.id,
+        subject_name=item.subject_name,
+        observer_group=item.observer_group,
+        direction=item.direction,
+        change_summary=item.change_summary,
+        created_at=item.created_at,
     )
 
 
@@ -312,7 +376,16 @@ def create_app() -> FastAPI:
             db.commit()
 
             try:
-                graphrag.index_project(project, list(project.memories), list(project.source_documents), record)
+                graphrag.index_project(
+                    project,
+                    list(project.memories),
+                    list(project.source_documents),
+                    record,
+                    character_updates=list(project.character_state_updates),
+                    relationship_updates=list(project.relationship_state_updates),
+                    story_events=list(project.story_events),
+                    world_updates=list(project.world_perception_updates),
+                )
                 project.indexing_status = "ready"
                 record.neo4j_sync_status = "synced"
                 record.last_indexed_at = datetime.utcnow()
@@ -434,6 +507,7 @@ def create_app() -> FastAPI:
             premise=payload.premise,
             world_brief=payload.world_brief,
             writing_rules=payload.writing_rules,
+            style_profile=payload.style_profile,
         )
         db.add(project)
         db.commit()
@@ -450,11 +524,33 @@ def create_app() -> FastAPI:
         generations = db.scalars(
             select(GenerationRun).where(GenerationRun.project_id == project.id).order_by(GenerationRun.created_at.desc())
         ).all()
+        character_updates = db.scalars(
+            select(CharacterStateUpdate)
+            .where(CharacterStateUpdate.project_id == project.id)
+            .order_by(CharacterStateUpdate.created_at.desc())
+        ).all()
+        relationship_updates = db.scalars(
+            select(RelationshipStateUpdate)
+            .where(RelationshipStateUpdate.project_id == project.id)
+            .order_by(RelationshipStateUpdate.created_at.desc())
+        ).all()
+        story_events = db.scalars(
+            select(StoryEvent).where(StoryEvent.project_id == project.id).order_by(StoryEvent.created_at.desc())
+        ).all()
+        world_updates = db.scalars(
+            select(WorldPerceptionUpdate)
+            .where(WorldPerceptionUpdate.project_id == project.id)
+            .order_by(WorldPerceptionUpdate.created_at.desc())
+        ).all()
         return ProjectDetailResponse(
             project=ProjectOut.model_validate(project),
             memories=[MemoryOut.model_validate(item) for item in project.memories],
             sources=[SourceOut.model_validate(item) for item in project.source_documents],
             generations=[GenerationOut.model_validate(item) for item in generations],
+            character_state_updates=[_character_state_out(item) for item in character_updates[:20]],
+            relationship_state_updates=[_relationship_state_out(item) for item in relationship_updates[:20]],
+            story_events=[_story_event_out(item) for item in story_events[:20]],
+            world_perception_updates=[_world_perception_out(item) for item in world_updates[:20]],
         )
 
     @app.get("/api/novels", response_model=list[NovelCardOut])
@@ -814,7 +910,68 @@ def create_app() -> FastAPI:
 
         graphrag = GraphRAGService(settings)
         local_result = graphrag.query(project, payload.prompt, payload.search_method, payload.response_type)
-        global_result = graphrag.query(project, payload.prompt, "global", payload.response_type)
+        global_result = None
+        if payload.use_global_search:
+            global_result = graphrag.query(project, payload.prompt, "global", payload.response_type)
+        recent_character_updates = db.scalars(
+            select(CharacterStateUpdate)
+            .where(CharacterStateUpdate.project_id == project.id)
+            .order_by(CharacterStateUpdate.created_at.desc())
+        ).all()
+        recent_relationship_updates = db.scalars(
+            select(RelationshipStateUpdate)
+            .where(RelationshipStateUpdate.project_id == project.id)
+            .order_by(RelationshipStateUpdate.created_at.desc())
+        ).all()
+        recent_story_events = db.scalars(
+            select(StoryEvent).where(StoryEvent.project_id == project.id).order_by(StoryEvent.created_at.desc())
+        ).all()
+        recent_world_updates = db.scalars(
+            select(WorldPerceptionUpdate)
+            .where(WorldPerceptionUpdate.project_id == project.id)
+            .order_by(WorldPerceptionUpdate.created_at.desc())
+        ).all()
+
+        evolution = EvolutionService(settings)
+        scene_card = ""
+        if payload.use_scene_card:
+            scene_card = evolution.build_scene_card(
+                user_prompt=payload.prompt,
+                local_context=local_result.text,
+                global_context=global_result.text if global_result is not None else "未启用全局检索。",
+                recent_character_updates=[
+                    {
+                        "character_name": item.character_name,
+                        "emotion_state": item.emotion_state,
+                        "current_goal": item.current_goal,
+                        "summary": item.summary,
+                    }
+                    for item in recent_character_updates[:8]
+                ],
+                recent_relationship_updates=[
+                    {
+                        "source_character": item.source_character,
+                        "target_character": item.target_character,
+                        "summary": item.summary,
+                    }
+                    for item in recent_relationship_updates[:8]
+                ],
+                recent_events=[
+                    {
+                        "title": item.title,
+                        "impact_summary": item.impact_summary,
+                    }
+                    for item in recent_story_events[:6]
+                ],
+                recent_world_updates=[
+                    {
+                        "observer_group": item.observer_group,
+                        "subject_name": item.subject_name,
+                        "change_summary": item.change_summary,
+                    }
+                    for item in recent_world_updates[:6]
+                ],
+            )
 
         writer = StoryGenerationService(settings)
         title, summary, content = writer.generate(
@@ -823,14 +980,15 @@ def create_app() -> FastAPI:
             premise=project.premise,
             world_brief=project.world_brief,
             writing_rules=project.writing_rules,
+            style_profile=project.style_profile,
             punctuation_rule=project.punctuation_rule,
             user_prompt=payload.prompt,
-            local_context=local_result.text,
-            global_context=global_result.text,
+            scene_card=scene_card,
             memories=[
                 {"title": memory.title, "content": memory.content}
                 for memory in sorted(project.memories, key=lambda item: item.importance, reverse=True)
             ],
+            use_refiner=payload.use_refiner,
         )
 
         generation = GenerationRun(
@@ -838,7 +996,13 @@ def create_app() -> FastAPI:
             prompt=payload.prompt,
             search_method=payload.search_method,
             response_type=payload.response_type,
-            retrieval_context=f"[Local]\n{local_result.text}\n\n[Global]\n{global_result.text}",
+            retrieval_context=(
+                f"[Local]\n{local_result.text}\n\n[Global]\n{global_result.text}"
+                if global_result is not None
+                else f"[Local]\n{local_result.text}\n\n[Global]\n未启用全局检索。"
+            ),
+            scene_card=scene_card,
+            evolution_snapshot="",
             title=title,
             summary=summary,
             content=content,
@@ -846,6 +1010,128 @@ def create_app() -> FastAPI:
         db.add(generation)
         db.commit()
         db.refresh(generation)
+
+        if payload.write_evolution:
+            evolution_payload = evolution.extract_evolution(
+                project_title=project.title,
+                genre=project.genre,
+                premise=project.premise,
+                user_prompt=payload.prompt,
+                title=title,
+                summary=summary,
+                content=content,
+            )
+        else:
+            evolution_payload = evolution.empty_payload()
+
+        for item in evolution_payload.characters:
+            if not item.character_name:
+                continue
+            db.add(
+                CharacterStateUpdate(
+                    project=project,
+                    generation_run=generation,
+                    character_name=item.character_name,
+                    emotion_state=item.emotion_state,
+                    current_goal=item.current_goal,
+                    self_view_shift=item.self_view_shift,
+                    public_perception=item.public_perception,
+                    summary=item.summary,
+                )
+            )
+
+        for item in evolution_payload.relationships:
+            if not item.source_character or not item.target_character:
+                continue
+            db.add(
+                RelationshipStateUpdate(
+                    project=project,
+                    generation_run=generation,
+                    source_character=item.source_character,
+                    target_character=item.target_character,
+                    change_type=item.change_type,
+                    direction=item.direction,
+                    intensity=item.intensity,
+                    summary=item.summary,
+                )
+            )
+
+        for item in evolution_payload.events:
+            if not item.title:
+                continue
+            db.add(
+                StoryEvent(
+                    project=project,
+                    generation_run=generation,
+                    title=item.title,
+                    summary=item.summary,
+                    impact_summary=item.impact_summary,
+                    participants_json=json.dumps(item.participants, ensure_ascii=False),
+                    location_hint=item.location_hint,
+                )
+            )
+
+        for item in evolution_payload.world_updates:
+            if not item.subject_name or not item.observer_group:
+                continue
+            db.add(
+                WorldPerceptionUpdate(
+                    project=project,
+                    generation_run=generation,
+                    subject_name=item.subject_name,
+                    observer_group=item.observer_group,
+                    direction=item.direction,
+                    change_summary=item.change_summary,
+                )
+            )
+
+        generation.evolution_snapshot = json.dumps(
+            {
+                "characters": [
+                    {
+                        "character_name": item.character_name,
+                        "emotion_state": item.emotion_state,
+                        "current_goal": item.current_goal,
+                        "self_view_shift": item.self_view_shift,
+                        "public_perception": item.public_perception,
+                        "summary": item.summary,
+                    }
+                    for item in evolution_payload.characters
+                ],
+                "relationships": [
+                    {
+                        "source_character": item.source_character,
+                        "target_character": item.target_character,
+                        "change_type": item.change_type,
+                        "direction": item.direction,
+                        "intensity": item.intensity,
+                        "summary": item.summary,
+                    }
+                    for item in evolution_payload.relationships
+                ],
+                "events": [
+                    {
+                        "title": item.title,
+                        "summary": item.summary,
+                        "impact_summary": item.impact_summary,
+                        "participants": item.participants,
+                        "location_hint": item.location_hint,
+                    }
+                    for item in evolution_payload.events
+                ],
+                "world_updates": [
+                    {
+                        "subject_name": item.subject_name,
+                        "observer_group": item.observer_group,
+                        "direction": item.direction,
+                        "change_summary": item.change_summary,
+                    }
+                    for item in evolution_payload.world_updates
+                ],
+            },
+            ensure_ascii=False,
+        )
+        db.commit()
         return GenerationOut.model_validate(generation)
 
     dist_dir = settings.root_dir / "frontend" / "dist"

@@ -35,6 +35,7 @@ export interface Project {
   premise: string;
   world_brief: string;
   writing_rules: string;
+  style_profile: string;
   punctuation_rule: string;
   indexing_status: string;
   created_at: string;
@@ -66,6 +67,8 @@ export interface GenerationItem {
   content: string;
   summary: string;
   retrieval_context: string;
+  scene_card: string;
+  evolution_snapshot: string;
   search_method: string;
   response_type: string;
   created_at: string;
@@ -76,6 +79,10 @@ export interface ProjectDetailResponse {
   memories: MemoryItem[];
   sources: SourceItem[];
   generations: GenerationItem[];
+  character_state_updates: CharacterStateUpdate[];
+  relationship_state_updates: RelationshipStateUpdate[];
+  story_events: StoryEventItem[];
+  world_perception_updates: WorldPerceptionUpdate[];
 }
 
 export interface IndexResponse {
@@ -167,4 +174,45 @@ export interface UserProfile {
   bio: string;
   email?: string | null;
   phone?: string | null;
+}
+
+export interface CharacterStateUpdate {
+  id: number;
+  character_name: string;
+  emotion_state: string;
+  current_goal: string;
+  self_view_shift: string;
+  public_perception: string;
+  summary: string;
+  created_at: string;
+}
+
+export interface RelationshipStateUpdate {
+  id: number;
+  source_character: string;
+  target_character: string;
+  change_type: string;
+  direction: string;
+  intensity: number;
+  summary: string;
+  created_at: string;
+}
+
+export interface StoryEventItem {
+  id: number;
+  title: string;
+  summary: string;
+  impact_summary: string;
+  participants: string[];
+  location_hint: string;
+  created_at: string;
+}
+
+export interface WorldPerceptionUpdate {
+  id: number;
+  subject_name: string;
+  observer_group: string;
+  direction: string;
+  change_summary: string;
+  created_at: string;
 }

@@ -55,6 +55,7 @@ class Project(Base, TimestampMixin):
     premise: Mapped[str] = mapped_column(Text, nullable=False)
     world_brief: Mapped[str] = mapped_column(Text, default="", nullable=False)
     writing_rules: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    style_profile: Mapped[str] = mapped_column(String(40), default="light_novel", nullable=False)
     punctuation_rule: Mapped[str] = mapped_column(
         String(120),
         default="对话使用「」，嵌套引号使用『』。",
@@ -74,6 +75,22 @@ class Project(Base, TimestampMixin):
         uselist=False,
     )
     generations: Mapped[list["GenerationRun"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+    character_state_updates: Mapped[list["CharacterStateUpdate"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+    relationship_state_updates: Mapped[list["RelationshipStateUpdate"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+    story_events: Mapped[list["StoryEvent"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+    world_perception_updates: Mapped[list["WorldPerceptionUpdate"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
     )
@@ -126,11 +143,29 @@ class GenerationRun(Base, TimestampMixin):
     search_method: Mapped[str] = mapped_column(String(30), default="local", nullable=False)
     response_type: Mapped[str] = mapped_column(String(120), default="Multiple Paragraphs", nullable=False)
     retrieval_context: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    scene_card: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    evolution_snapshot: Mapped[str] = mapped_column(Text, default="", nullable=False)
     title: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
 
     project: Mapped["Project"] = relationship(back_populates="generations")
+    character_state_updates: Mapped[list["CharacterStateUpdate"]] = relationship(
+        back_populates="generation_run",
+        cascade="all, delete-orphan",
+    )
+    relationship_state_updates: Mapped[list["RelationshipStateUpdate"]] = relationship(
+        back_populates="generation_run",
+        cascade="all, delete-orphan",
+    )
+    story_events: Mapped[list["StoryEvent"]] = relationship(
+        back_populates="generation_run",
+        cascade="all, delete-orphan",
+    )
+    world_perception_updates: Mapped[list["WorldPerceptionUpdate"]] = relationship(
+        back_populates="generation_run",
+        cascade="all, delete-orphan",
+    )
 
 
 class UserProfile(Base, TimestampMixin):
@@ -215,3 +250,68 @@ class NovelComment(Base, TimestampMixin):
 
     novel: Mapped["Novel"] = relationship(back_populates="comments")
     user: Mapped["User"] = relationship(back_populates="novel_comments")
+
+
+class CharacterStateUpdate(Base, TimestampMixin):
+    __tablename__ = "character_state_updates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    generation_run_id: Mapped[int] = mapped_column(ForeignKey("generation_runs.id"), nullable=False)
+    character_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    emotion_state: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    current_goal: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    self_view_shift: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    public_perception: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    project: Mapped["Project"] = relationship(back_populates="character_state_updates")
+    generation_run: Mapped["GenerationRun"] = relationship(back_populates="character_state_updates")
+
+
+class RelationshipStateUpdate(Base, TimestampMixin):
+    __tablename__ = "relationship_state_updates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    generation_run_id: Mapped[int] = mapped_column(ForeignKey("generation_runs.id"), nullable=False)
+    source_character: Mapped[str] = mapped_column(String(100), nullable=False)
+    target_character: Mapped[str] = mapped_column(String(100), nullable=False)
+    change_type: Mapped[str] = mapped_column(String(60), default="relationship_shift", nullable=False)
+    direction: Mapped[str] = mapped_column(String(20), default="stable", nullable=False)
+    intensity: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    project: Mapped["Project"] = relationship(back_populates="relationship_state_updates")
+    generation_run: Mapped["GenerationRun"] = relationship(back_populates="relationship_state_updates")
+
+
+class StoryEvent(Base, TimestampMixin):
+    __tablename__ = "story_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    generation_run_id: Mapped[int] = mapped_column(ForeignKey("generation_runs.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    impact_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    participants_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    location_hint: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+
+    project: Mapped["Project"] = relationship(back_populates="story_events")
+    generation_run: Mapped["GenerationRun"] = relationship(back_populates="story_events")
+
+
+class WorldPerceptionUpdate(Base, TimestampMixin):
+    __tablename__ = "world_perception_updates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    generation_run_id: Mapped[int] = mapped_column(ForeignKey("generation_runs.id"), nullable=False)
+    subject_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    observer_group: Mapped[str] = mapped_column(String(100), nullable=False)
+    direction: Mapped[str] = mapped_column(String(20), default="stable", nullable=False)
+    change_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    project: Mapped["Project"] = relationship(back_populates="world_perception_updates")
+    generation_run: Mapped["GenerationRun"] = relationship(back_populates="world_perception_updates")

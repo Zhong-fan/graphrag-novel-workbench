@@ -13,7 +13,16 @@ import yaml
 from neo4j import GraphDatabase
 
 from .config import Settings
-from .models import GraphWorkspace, Memory, Project, SourceDocument
+from .models import (
+    CharacterStateUpdate,
+    GraphWorkspace,
+    Memory,
+    Project,
+    RelationshipStateUpdate,
+    SourceDocument,
+    StoryEvent,
+    WorldPerceptionUpdate,
+)
 
 
 @dataclass
@@ -47,6 +56,10 @@ class GraphRAGService:
         project: Project,
         memories: list[Memory],
         sources: list[SourceDocument],
+        character_updates: list[CharacterStateUpdate] | None = None,
+        relationship_updates: list[RelationshipStateUpdate] | None = None,
+        story_events: list[StoryEvent] | None = None,
+        world_updates: list[WorldPerceptionUpdate] | None = None,
     ) -> Path:
         workspace = self.ensure_workspace(project)
         input_dir = workspace / "input"
@@ -76,8 +89,8 @@ class GraphRAGService:
                     f"memory_{memory.id:04d}.txt",
                     "\n".join(
                         [
-                            f"记忆标题：{memory.title}",
-                            f"记忆范围：{memory.memory_scope}",
+                            f"设定标题：{memory.title}",
+                            f"设定范围：{memory.memory_scope}",
                             f"重要度：{memory.importance}",
                             f"内容：{memory.content}",
                         ]
@@ -99,6 +112,71 @@ class GraphRAGService:
                 )
             )
 
+        for update in (character_updates or [])[:40]:
+            documents.append(
+                (
+                    f"state_character_{update.id:04d}.txt",
+                    "\n".join(
+                        [
+                            f"角色：{update.character_name}",
+                            f"当前情绪：{update.emotion_state}",
+                            f"当前目标：{update.current_goal}",
+                            f"自我认知变化：{update.self_view_shift}",
+                            f"外界看法：{update.public_perception}",
+                            f"状态摘要：{update.summary}",
+                        ]
+                    ),
+                )
+            )
+
+        for update in (relationship_updates or [])[:40]:
+            documents.append(
+                (
+                    f"state_relationship_{update.id:04d}.txt",
+                    "\n".join(
+                        [
+                            f"来源角色：{update.source_character}",
+                            f"目标角色：{update.target_character}",
+                            f"变化类型：{update.change_type}",
+                            f"变化方向：{update.direction}",
+                            f"变化强度：{update.intensity}",
+                            f"关系摘要：{update.summary}",
+                        ]
+                    ),
+                )
+            )
+
+        for event in (story_events or [])[:40]:
+            documents.append(
+                (
+                    f"story_event_{event.id:04d}.txt",
+                    "\n".join(
+                        [
+                            f"事件标题：{event.title}",
+                            f"事件摘要：{event.summary}",
+                            f"影响摘要：{event.impact_summary}",
+                            f"参与者：{event.participants_json}",
+                            f"地点提示：{event.location_hint}",
+                        ]
+                    ),
+                )
+            )
+
+        for update in (world_updates or [])[:40]:
+            documents.append(
+                (
+                    f"world_update_{update.id:04d}.txt",
+                    "\n".join(
+                        [
+                            f"主体：{update.subject_name}",
+                            f"观察群体：{update.observer_group}",
+                            f"方向：{update.direction}",
+                            f"变化摘要：{update.change_summary}",
+                        ]
+                    ),
+                )
+            )
+
         for filename, content in documents:
             (input_dir / filename).write_text(content.strip() + "\n", encoding="utf-8")
         return workspace
@@ -109,8 +187,20 @@ class GraphRAGService:
         memories: list[Memory],
         sources: list[SourceDocument],
         workspace_record: GraphWorkspace,
+        character_updates: list[CharacterStateUpdate] | None = None,
+        relationship_updates: list[RelationshipStateUpdate] | None = None,
+        story_events: list[StoryEvent] | None = None,
+        world_updates: list[WorldPerceptionUpdate] | None = None,
     ) -> GraphWorkspace:
-        workspace = self.rebuild_inputs(project, memories, sources)
+        workspace = self.rebuild_inputs(
+            project,
+            memories,
+            sources,
+            character_updates=character_updates,
+            relationship_updates=relationship_updates,
+            story_events=story_events,
+            world_updates=world_updates,
+        )
         self._run_graphrag_command(
             [
                 "index",
@@ -229,9 +319,11 @@ class GraphRAGService:
     def _write_workspace_env(self, workspace: Path) -> None:
         content = "\n".join(
             [
-                f"GRAPHRAG_API_KEY={self.settings.openai_api_key or ''}",
-                f"GRAPHRAG_API_BASE={self.settings.openai_base_url}",
+                f"GRAPHRAG_CHAT_API_KEY={self.settings.openai_api_key or ''}",
+                f"GRAPHRAG_CHAT_API_BASE={self.settings.openai_base_url}",
                 f"GRAPHRAG_CHAT_MODEL={self.settings.utility_model}",
+                f"GRAPHRAG_EMBEDDING_API_KEY={self.settings.embedding_api_key or ''}",
+                f"GRAPHRAG_EMBEDDING_API_BASE={self.settings.embedding_base_url}",
                 f"GRAPHRAG_EMBEDDING_MODEL={self.settings.embedding_model}",
             ]
         )
@@ -247,15 +339,15 @@ class GraphRAGService:
 
         default_chat = models.setdefault("default_chat_model", {})
         default_chat["model"] = "${GRAPHRAG_CHAT_MODEL}"
-        default_chat["api_key"] = "${GRAPHRAG_API_KEY}"
+        default_chat["api_key"] = "${GRAPHRAG_CHAT_API_KEY}"
         if "api_base" in default_chat or "type" in default_chat:
-            default_chat["api_base"] = "${GRAPHRAG_API_BASE}"
+            default_chat["api_base"] = "${GRAPHRAG_CHAT_API_BASE}"
 
         default_embedding = models.setdefault("default_embedding_model", {})
         default_embedding["model"] = "${GRAPHRAG_EMBEDDING_MODEL}"
-        default_embedding["api_key"] = "${GRAPHRAG_API_KEY}"
+        default_embedding["api_key"] = "${GRAPHRAG_EMBEDDING_API_KEY}"
         if "api_base" in default_embedding or "type" in default_embedding:
-            default_embedding["api_base"] = "${GRAPHRAG_API_BASE}"
+            default_embedding["api_base"] = "${GRAPHRAG_EMBEDDING_API_BASE}"
 
         settings_path.write_text(
             yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
@@ -266,9 +358,11 @@ class GraphRAGService:
         env = os.environ.copy()
         env["OPENAI_API_KEY"] = self.settings.openai_api_key or ""
         env["OPENAI_BASE_URL"] = self.settings.openai_base_url
-        env["GRAPHRAG_API_KEY"] = self.settings.openai_api_key or ""
-        env["GRAPHRAG_API_BASE"] = self.settings.openai_base_url
+        env["GRAPHRAG_CHAT_API_KEY"] = self.settings.openai_api_key or ""
+        env["GRAPHRAG_CHAT_API_BASE"] = self.settings.openai_base_url
         env["GRAPHRAG_CHAT_MODEL"] = self.settings.utility_model
+        env["GRAPHRAG_EMBEDDING_API_KEY"] = self.settings.embedding_api_key or ""
+        env["GRAPHRAG_EMBEDDING_API_BASE"] = self.settings.embedding_base_url
         env["GRAPHRAG_EMBEDDING_MODEL"] = self.settings.embedding_model
         env["GRAPH_MVP_LOCAL_EMBEDDINGS"] = "1" if self.settings.graphrag_local_embeddings else "0"
         completed = subprocess.run(

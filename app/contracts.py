@@ -54,6 +54,7 @@ class ProjectCreateRequest(BaseModel):
     premise: str = Field(..., min_length=12)
     world_brief: str = Field(default="")
     writing_rules: str = Field(default="")
+    style_profile: str = Field(default="light_novel", pattern="^(light_novel|lyrical_restrained)$")
 
 
 class ProjectOut(BaseModel):
@@ -63,6 +64,7 @@ class ProjectOut(BaseModel):
     premise: str
     world_brief: str
     writing_rules: str
+    style_profile: str
     punctuation_rule: str
     indexing_status: str
     created_at: datetime
@@ -124,6 +126,10 @@ class GenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=12)
     search_method: str = Field(default="local")
     response_type: str = Field(default="Multiple Paragraphs")
+    use_global_search: bool = True
+    use_scene_card: bool = True
+    use_refiner: bool = True
+    write_evolution: bool = True
 
 
 class GenerationOut(BaseModel):
@@ -132,6 +138,8 @@ class GenerationOut(BaseModel):
     content: str
     summary: str
     retrieval_context: str
+    scene_card: str
+    evolution_snapshot: str
     search_method: str
     response_type: str
     created_at: datetime
@@ -140,11 +148,56 @@ class GenerationOut(BaseModel):
         from_attributes = True
 
 
+class CharacterStateUpdateOut(BaseModel):
+    id: int
+    character_name: str
+    emotion_state: str
+    current_goal: str
+    self_view_shift: str
+    public_perception: str
+    summary: str
+    created_at: datetime
+
+
+class RelationshipStateUpdateOut(BaseModel):
+    id: int
+    source_character: str
+    target_character: str
+    change_type: str
+    direction: str
+    intensity: int
+    summary: str
+    created_at: datetime
+
+
+class StoryEventOut(BaseModel):
+    id: int
+    title: str
+    summary: str
+    impact_summary: str
+    participants: list[str]
+    location_hint: str
+    created_at: datetime
+
+
+class WorldPerceptionUpdateOut(BaseModel):
+    id: int
+    subject_name: str
+    observer_group: str
+    direction: str
+    change_summary: str
+    created_at: datetime
+
+
 class ProjectDetailResponse(BaseModel):
     project: ProjectOut
     memories: list[MemoryOut]
     sources: list[SourceOut]
     generations: list[GenerationOut]
+    character_state_updates: list[CharacterStateUpdateOut] = []
+    relationship_state_updates: list[RelationshipStateUpdateOut] = []
+    story_events: list[StoryEventOut] = []
+    world_perception_updates: list[WorldPerceptionUpdateOut] = []
 
 
 class NovelChapterOut(BaseModel):

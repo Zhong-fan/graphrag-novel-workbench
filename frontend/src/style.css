@@ -803,6 +803,24 @@ button {
   box-shadow: var(--shadow-md);
 }
 
+.feature-modal {
+  width: min(560px, calc(100vw - 32px));
+  box-shadow: var(--shadow-md);
+}
+
+.feature-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.feature-toggle-label input {
+  width: 1rem;
+  height: 1rem;
+}
+
 .auth-tabs {
   display: inline-grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

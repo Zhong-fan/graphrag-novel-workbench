@@ -331,6 +331,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     premise: string;
     world_brief: string;
     writing_rules: string;
+    style_profile: string;
   }) {
     if (!token.value) {
       return;
@@ -360,9 +361,9 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     try {
       await api.addMemory(token.value, activeProject.value.project.id, payload);
       await selectProject(activeProject.value.project.id);
-      success.value = "记忆已加入项目。";
+      success.value = "长期设定已加入项目。";
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "保存记忆失败。";
+      error.value = err instanceof Error ? err.message : "保存长期设定失败。";
     } finally {
       loading.value = false;
     }
@@ -404,7 +405,15 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
-  async function generate(payload: { prompt: string; search_method: string; response_type: string }) {
+  async function generate(payload: {
+    prompt: string;
+    search_method: string;
+    response_type: string;
+    use_global_search: boolean;
+    use_scene_card: boolean;
+    use_refiner: boolean;
+    write_evolution: boolean;
+  }) {
     if (!token.value || !activeProject.value) {
       return;
     }
