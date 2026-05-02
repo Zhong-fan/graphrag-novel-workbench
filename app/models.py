@@ -34,6 +34,10 @@ class User(Base, TimestampMixin):
         uselist=False,
     )
     owned_novels: Mapped[list["Novel"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
+    project_folders: Mapped[list["ProjectFolder"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     novel_likes: Mapped[list["NovelLike"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     novel_favorites: Mapped[list["NovelFavorite"]] = relationship(
         back_populates="user",
@@ -62,8 +66,11 @@ class Project(Base, TimestampMixin):
         nullable=False,
     )
     indexing_status: Mapped[str] = mapped_column(String(40), default="idle", nullable=False)
+    folder_id: Mapped[int | None] = mapped_column(ForeignKey("project_folders.id"), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     owner: Mapped["User"] = relationship(back_populates="projects")
+    folder: Mapped["ProjectFolder | None"] = relationship(back_populates="projects")
     memories: Mapped[list["Memory"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     character_cards: Mapped[list["CharacterCard"]] = relationship(
         back_populates="project",
@@ -100,6 +107,20 @@ class Project(Base, TimestampMixin):
     )
 
 
+class ProjectFolder(Base, TimestampMixin):
+    __tablename__ = "project_folders"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_project_folders_user_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_default: Mapped[bool] = mapped_column(default=False, nullable=False)
+
+    user: Mapped["User"] = relationship(back_populates="project_folders")
+    projects: Mapped[list["Project"]] = relationship(back_populates="folder")
+
+
 class Memory(Base, TimestampMixin):
     __tablename__ = "memories"
 
@@ -124,6 +145,7 @@ class CharacterCard(Base, TimestampMixin):
     personality: Mapped[str] = mapped_column(Text, default="", nullable=False)
     story_role: Mapped[str] = mapped_column(String(120), default="", nullable=False)
     background: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="character_cards")
 
@@ -213,6 +235,7 @@ class Novel(Base, TimestampMixin):
     cover_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(String(40), default="draft", nullable=False)
     visibility: Mapped[str] = mapped_column(String(40), default="private", nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     owner: Mapped["User"] = relationship(back_populates="owned_novels")
     chapters: Mapped[list["NovelChapter"]] = relationship(back_populates="novel", cascade="all, delete-orphan")

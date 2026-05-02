@@ -3,20 +3,21 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 
 import { useWorkbenchStore } from "./stores/workbench";
-import type { CharacterCard, NovelCard, ProjectPayload } from "./types";
+import type { CharacterCard, NovelCard, ProjectFolder, ProjectPayload, TrashItem } from "./types";
 
 type ViewKey =
   | "home"
-  | "store"
-  | "detail"
-  | "reader"
-  | "shelf"
+  | "discover"
+  | "favorites"
   | "studio"
+  | "trash"
   | "projectCreate"
   | "projectSettings"
   | "characters"
   | "workshop"
   | "novelEditor"
+  | "reader"
+  | "detail"
   | "profile"
   | "auth";
 
@@ -26,6 +27,8 @@ const {
   captcha,
   currentUser,
   projects,
+  projectFolders,
+  trashItems,
   novels,
   favoriteNovels,
   myNovels,
@@ -46,9 +49,17 @@ const authError = ref("");
 const showRegisterPassword = ref(false);
 const showLoginPassword = ref(false);
 const writingMode = ref<"auto" | "advanced">("auto");
-const shelfTab = ref<"liked" | "favorited">("favorited");
+const favoritesTab = ref<"liked" | "favorited">("favorited");
 const novelLayout = ref<"grid" | "list">("grid");
 const novelSearch = ref("");
+const workspaceSearch = ref("");
+const folderPanelCollapsed = ref(false);
+const showCreateFolder = ref(false);
+const folderForm = reactive({ name: "" });
+const movingProjectId = ref<number | null>(null);
+const selectedWorkspaceFolderId = ref<number | null>(null);
+const workspacePage = ref(1);
+const workspacePageSize = ref(6);
 let feedbackTimer: number | null = null;
 
 const loginForm = reactive({ username: "", password: "" });
@@ -118,19 +129,48 @@ const chapterEditForm = reactive({ title: "", summary: "", content: "", chapter_
 
 const selectedChapterId = ref<number | null>(null);
 const chapterJumpNo = ref(1);
+const selectedDraftProjectId = ref<number | null>(null);
+const selectedDraftGenerationId = ref<number | null>(null);
+const selectedSettingsProjectId = ref<number | null>(null);
 
 const featuredNovel = computed(() => novels.value[0] ?? null);
 const hasProject = computed(() => Boolean(activeProject.value));
 const likedNovels = computed(() => novels.value.filter((novel) => novel.is_liked));
 const shelfDisplayNovels = computed(() => {
   const keyword = novelSearch.value.trim().toLowerCase();
-  const source = shelfTab.value === "favorited" ? favoriteNovels.value : likedNovels.value;
+  const source = favoritesTab.value === "favorited" ? favoriteNovels.value : likedNovels.value;
   return keyword ? source.filter((novel) => matchesNovelSearch(novel, keyword)) : source;
 });
 const searchedNovels = computed(() => {
   const keyword = novelSearch.value.trim().toLowerCase();
   return keyword ? novels.value.filter((novel) => matchesNovelSearch(novel, keyword)) : novels.value;
 });
+const sortedFolders = computed<ProjectFolder[]>(() =>
+  [...projectFolders.value].sort((a, b) => a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at)),
+);
+const selectedWorkspaceFolder = computed<ProjectFolder | null>(() => {
+  if (!sortedFolders.value.length) return null;
+  return sortedFolders.value.find((item) => item.id === selectedWorkspaceFolderId.value) ?? sortedFolders.value[0] ?? null;
+});
+const filteredWorkspaceProjects = computed(() => {
+  const folderId = selectedWorkspaceFolder.value?.id ?? null;
+  const keyword = workspaceSearch.value.trim().toLowerCase();
+  const source = projects.value.filter((project) => (folderId ? project.folder_id === folderId : true));
+  if (!keyword) return source;
+  return source.filter((project) =>
+    [project.title, project.genre, project.premise, project.world_brief, project.writing_rules].join(" ").toLowerCase().includes(keyword),
+  );
+});
+const workspaceTotalPages = computed(() => Math.max(1, Math.ceil(filteredWorkspaceProjects.value.length / workspacePageSize.value)));
+const pagedWorkspaceProjects = computed(() => {
+  const start = (workspacePage.value - 1) * workspacePageSize.value;
+  return filteredWorkspaceProjects.value.slice(start, start + workspacePageSize.value);
+});
+const trashSummary = computed<Record<TrashItem["item_type"], number>>(() => ({
+  project: trashItems.value.filter((item) => item.item_type === "project").length,
+  novel: trashItems.value.filter((item) => item.item_type === "novel").length,
+  character_card: trashItems.value.filter((item) => item.item_type === "character_card").length,
+}));
 
 function matchesNovelSearch(novel: NovelCard, keyword: string) {
   return [novel.title, novel.author, novel.genre, novel.tagline, novel.summary, novel.latest_excerpt]
@@ -158,6 +198,11 @@ const hasChapterNavigation = computed(() => sortedChapters.value.length > 1);
 const nextNovelChapterNo = computed(() =>
   currentNovel.value ? Math.max(0, ...currentNovel.value.chapters.map((chapter) => chapter.chapter_no)) + 1 : 1,
 );
+const projectGenerations = computed(() => activeProject.value?.generations ?? []);
+const selectedDraftGeneration = computed(() => {
+  if (!projectGenerations.value.length) return null;
+  return projectGenerations.value.find((item) => item.id === selectedDraftGenerationId.value) ?? projectGenerations.value[0] ?? null;
+});
 
 const currentStep = computed(() => {
   if (!isAuthenticated.value) return "先创建账号，再开始写自己的小说。";
@@ -195,6 +240,30 @@ function projectStatusLabel(status: string | undefined) {
 
 function goToView(view: ViewKey) {
   currentView.value = view;
+}
+
+function openWorkspace() {
+  if (!isAuthenticated.value) {
+    openAuthPanel("login");
+    return;
+  }
+  currentView.value = "studio";
+}
+
+function openFavorites() {
+  if (!isAuthenticated.value) {
+    openAuthPanel("login");
+    return;
+  }
+  currentView.value = "favorites";
+}
+
+function openTrash() {
+  if (!isAuthenticated.value) {
+    openAuthPanel("login");
+    return;
+  }
+  currentView.value = "trash";
 }
 
 function requireAuth(nextView: ViewKey) {
@@ -246,9 +315,9 @@ function syncDraftFromGeneration(generation: typeof currentGeneration.value) {
   draftForm.title = generation.title || "";
   draftForm.summary = generation.summary || "";
   draftForm.content = generation.content || "";
-  draftForm.chapter_no = (activeProject.value?.generations.length ?? 0) + 1;
+  draftForm.chapter_no = 1;
   appendChapterForm.title = generation.title || "";
-  appendChapterForm.chapter_no = draftForm.chapter_no;
+  appendChapterForm.chapter_no = nextNovelChapterNo.value;
 }
 
 function resetCharacterForm() {
@@ -273,8 +342,20 @@ function editCharacterCard(card: CharacterCard) {
 
 function openProjectSettings() {
   if (!isAuthenticated.value) return openAuthPanel("login");
-  syncProjectSettingsForm();
   currentView.value = "projectSettings";
+}
+
+async function selectSettingsProject(value: number | string) {
+  const projectId = Number(value);
+  if (!projectId) {
+    selectedSettingsProjectId.value = null;
+    return;
+  }
+  await store.selectProject(projectId);
+  if (!error.value) {
+    selectedSettingsProjectId.value = projectId;
+    syncProjectSettingsForm();
+  }
 }
 
 function openCharacters() {
@@ -287,10 +368,22 @@ function openReader(chapterId?: number) {
   currentView.value = "reader";
 }
 
-function openNovelEditor() {
+async function openNovelEditor(projectId?: number) {
   if (!isAuthenticated.value) return openAuthPanel("login");
+  const targetProjectId = projectId ?? selectedDraftProjectId.value ?? activeProject.value?.project.id ?? projects.value[0]?.id ?? null;
+  if (targetProjectId && activeProject.value?.project.id !== targetProjectId) {
+    await store.selectProject(targetProjectId);
+  }
+  if (!error.value) {
+    selectedDraftProjectId.value = targetProjectId;
+    selectedDraftGenerationId.value = currentGeneration.value?.id ?? activeProject.value?.generations[0]?.id ?? null;
+  }
   syncNovelManageForm();
   currentView.value = "novelEditor";
+}
+
+function backToWorkspace() {
+  currentView.value = "studio";
 }
 
 async function openNovelDetail(novelId: number) {
@@ -319,11 +412,81 @@ function jumpToChapterNo() {
 function openGeneration(id: number) {
   const found = activeProject.value?.generations.find((item) => item.id === id) ?? null;
   currentGeneration.value = found;
+  selectedDraftGenerationId.value = found?.id ?? null;
   if (found) {
     publishForm.title = found.title || activeProject.value?.project.title || "";
     publishForm.summary = found.summary || "";
     syncDraftFromGeneration(found);
   }
+}
+
+async function selectDraftProject(value: number | string) {
+  const projectId = Number(value);
+  if (!projectId) {
+    selectedDraftProjectId.value = null;
+    selectedDraftGenerationId.value = null;
+    return;
+  }
+  await store.selectProject(projectId);
+  if (!error.value) {
+    selectedDraftProjectId.value = projectId;
+    selectedDraftGenerationId.value = currentGeneration.value?.id ?? activeProject.value?.generations[0]?.id ?? null;
+  }
+}
+
+function selectDraftGenerationById(value: number | string) {
+  const generationId = Number(value);
+  if (!generationId) {
+    selectedDraftGenerationId.value = null;
+    currentGeneration.value = null;
+    return;
+  }
+  openGeneration(generationId);
+}
+
+function toggleFolderPanel() {
+  folderPanelCollapsed.value = !folderPanelCollapsed.value;
+}
+
+function selectWorkspaceFolder(folderId: number | string) {
+  selectedWorkspaceFolderId.value = Number(folderId);
+  workspacePage.value = 1;
+}
+
+async function submitCreateFolder() {
+  const name = folderForm.name.trim();
+  if (!name) {
+    authError.value = "请输入文件夹名称。";
+    return;
+  }
+  const created = await store.createFolder(name);
+  if (created) {
+    folderForm.name = "";
+    showCreateFolder.value = false;
+    selectedWorkspaceFolderId.value = created.id;
+  }
+}
+
+async function assignProjectFolder(projectId: number, folderId: number | string) {
+  movingProjectId.value = projectId;
+  await store.moveProjectToFolder(projectId, Number(folderId));
+  movingProjectId.value = null;
+}
+
+function previousWorkspacePage() {
+  workspacePage.value = Math.max(1, workspacePage.value - 1);
+}
+
+function nextWorkspacePage() {
+  workspacePage.value = Math.min(workspaceTotalPages.value, workspacePage.value + 1);
+}
+
+async function deleteProjectToTrash(projectId: number) {
+  await store.deleteProject(projectId);
+}
+
+async function restoreTrash(item: TrashItem) {
+  await store.restoreTrashItem(item.item_id, item.item_type);
 }
 
 async function likeNovel(novelId: number) {
@@ -465,10 +628,10 @@ async function submitUpdateNovel() {
 }
 
 async function submitAppendChapter() {
-  if (!currentNovel.value || !activeProject.value?.project || !currentGeneration.value) return;
+  if (!currentNovel.value || !activeProject.value?.project || !selectedDraftGeneration.value) return;
   await store.appendNovelChapter(currentNovel.value.id, {
     project_id: activeProject.value.project.id,
-    generation_id: currentGeneration.value.id,
+    generation_id: selectedDraftGeneration.value.id,
     title: appendChapterForm.title.trim() || draftForm.title.trim(),
     summary: draftForm.summary.trim(),
     content: draftForm.content.trim(),
@@ -504,10 +667,29 @@ watch(publishDefaults, (next) => {
   if (!publishForm.author_name.trim()) publishForm.author_name = next.author_name;
 }, { immediate: true });
 
-watch(currentGeneration, (next) => syncDraftFromGeneration(next), { immediate: true });
+watch(currentGeneration, (next) => {
+  selectedDraftGenerationId.value = next?.id ?? null;
+  syncDraftFromGeneration(next);
+}, { immediate: true });
 
 watch(nextNovelChapterNo, (next) => {
-  if (!appendChapterForm.chapter_no || appendChapterForm.chapter_no < 1) appendChapterForm.chapter_no = next;
+  appendChapterForm.chapter_no = next;
+}, { immediate: true });
+
+watch(sortedFolders, (next) => {
+  if (!next.length) {
+    selectedWorkspaceFolderId.value = null;
+    return;
+  }
+  if (!selectedWorkspaceFolderId.value || !next.some((item) => item.id === selectedWorkspaceFolderId.value)) {
+    selectedWorkspaceFolderId.value = next[0].id;
+  }
+}, { immediate: true });
+
+watch(filteredWorkspaceProjects, () => {
+  if (workspacePage.value > workspaceTotalPages.value) {
+    workspacePage.value = workspaceTotalPages.value;
+  }
 }, { immediate: true });
 
 watch(selectedChapter, (next) => {
@@ -528,6 +710,12 @@ watch(selectedChapter, (next) => {
 watch(() => activeProject.value?.project.id, () => {
   syncProjectSettingsForm();
   resetCharacterForm();
+  if (activeProject.value?.project.id && !selectedSettingsProjectId.value) {
+    selectedSettingsProjectId.value = activeProject.value.project.id;
+  }
+  if (activeProject.value?.project.id && !selectedDraftProjectId.value) {
+    selectedDraftProjectId.value = activeProject.value.project.id;
+  }
 }, { immediate: true });
 
 watch(profile, (next) => {
@@ -549,36 +737,20 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
 </script>
 
 <template>
-  <div class="shell">
-    <header class="topbar">
-      <div class="brand">
-        <p class="eyebrow">ChenFlow</p>
-        <h1>{{ bootstrap?.service_name ?? "晨流写作台" }}</h1>
-      </div>
-      <nav class="topnav" aria-label="Primary">
-        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'home' }" @click="goToView('home')">首页</button>
-        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'store' }" @click="goToView('store')">书城</button>
-        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'shelf' }" @click="goToView('shelf')">书架</button>
-        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'studio' }" @click="requireAuth('studio')">我的小说</button>
-        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'projectCreate' }" @click="requireAuth('projectCreate')">新建项目</button>
-        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'projectSettings' }" @click="openProjectSettings()">项目设定</button>
-        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'characters' }" @click="openCharacters()">人物卡</button>
-        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'workshop' }" @click="requireAuth('workshop')">写作</button>
-        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'novelEditor' }" @click="openNovelEditor()">作品编辑</button>
-        <button class="topnav__item" :class="{ 'topnav__item--active': currentView === 'profile' }" @click="requireAuth('profile')">我的</button>
-      </nav>
-      <div class="topbar__side">
-        <template v-if="isAuthenticated">
-          <span class="topbar__user">{{ currentUser?.username }}</span>
-          <button class="ghost-button ghost-button--small" @click="store.logout()">退出</button>
-        </template>
-        <template v-else>
-          <button class="ghost-button ghost-button--small" @click="openAuthPanel('login')">登录</button>
-          <button class="primary-button primary-button--compact" @click="openAuthPanel('register')">创建账号</button>
-        </template>
-      </div>
-    </header>
+  <div class="app-scene" aria-hidden="true">
+    <div class="app-scene__color app-scene__color--one"></div>
+    <div class="app-scene__color app-scene__color--two"></div>
+    <div class="app-scene__color app-scene__color--three"></div>
+    <div class="app-scene__glass app-scene__glass--one"></div>
+    <div class="app-scene__glass app-scene__glass--two"></div>
+    <div class="app-scene__glass app-scene__glass--three"></div>
+    <div class="app-scene__glass app-scene__glass--four"></div>
+    <div class="app-scene__glass app-scene__glass--five"></div>
+    <div class="app-scene__glass app-scene__glass--six"></div>
+    <div class="app-scene__glass app-scene__glass--seven"></div>
+  </div>
 
+  <div class="shell shell--workspace">
     <div class="toast-stack" v-if="authError || error || success" aria-live="polite">
       <div class="toast toast--error" v-if="authError || error">
         <span>{{ authError || error }}</span>
@@ -638,388 +810,401 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
       </section>
     </template>
 
-    <template v-else-if="currentView === 'home'">
-      <section class="hero hero--showcase">
-        <div class="hero__main">
-          <p class="hero__label">首页推荐</p>
-          <h2>{{ featuredNovel?.title ?? "正在准备推荐小说" }}</h2>
-          <p class="hero__lede">{{ featuredNovel?.tagline ?? "从书城发现作品，也从这里开始自己的小说。" }}</p>
-          <p class="hero__excerpt">{{ featuredNovel?.latest_excerpt ?? "创建项目、添加人物卡、设定世界观，然后进入写作。" }}</p>
-          <div class="hero__actions">
-            <button class="primary-button" @click="goToView('store')">去书城</button>
-            <button class="ghost-button" @click="requireAuth('projectCreate')">新建项目</button>
+    <template v-else-if="['novelEditor', 'projectSettings', 'characters', 'workshop'].includes(currentView)">
+      <div class="editor-shell">
+        <aside class="editor-sidebar panel panel--paper">
+          <div class="brand brand--sidebar">
+            <p class="eyebrow">ChenFlow</p>
+            <h1>小说编辑</h1>
           </div>
-        </div>
-      </section>
-      <section class="panel panel--paper">
-        <div class="section-head">
-          <div><p class="panel-heading__kicker">正在阅读</p><h2>最近作品</h2></div>
-          <div class="mode-switch">
-            <button type="button" :class="{ 'mode-switch__item--active': novelLayout === 'grid' }" @click="novelLayout = 'grid'">卡片</button>
-            <button type="button" :class="{ 'mode-switch__item--active': novelLayout === 'list' }" @click="novelLayout = 'list'">列表</button>
+          <div class="editor-sidebar__actions">
+            <button class="ghost-button ghost-button--small" type="button" @click="backToWorkspace()">返回</button>
+            <button class="ghost-button ghost-button--small" type="button" @click="goToView('profile')">我的</button>
           </div>
-        </div>
-        <div class="novel-grid" :class="{ 'novel-grid--list': novelLayout === 'list' }">
-          <article v-for="novel in novels.slice(0, 6)" :key="novel.id" class="novel-card novel-card--clickable" @click="openNovelDetail(novel.id)">
-            <p class="novel-card__genre">{{ novel.genre }}</p>
-            <h3>{{ novel.title }}</h3>
-            <p class="novel-card__author">{{ novel.author }}</p>
-            <p class="novel-card__text">{{ novel.latest_excerpt }}</p>
-          </article>
-        </div>
-      </section>
-    </template>
+          <nav class="sidebar-nav" aria-label="Editor">
+            <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'novelEditor' }" @click="openNovelEditor(activeProject?.project.id)">作品编辑</button>
+            <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'projectSettings' }" @click="openProjectSettings()">项目设定</button>
+            <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'characters' }" @click="openCharacters()">人物卡</button>
+            <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'workshop' }" @click="activeProject?.project.id && openWorkshop(activeProject.project.id)">写作</button>
+          </nav>
+        </aside>
 
-    <template v-else-if="currentView === 'store'">
-      <section class="section-banner panel panel--paper">
-        <div><p class="panel-heading__kicker">书城</p><h2>发现别人的小说</h2></div>
-        <label class="field search-field"><span>搜索</span><input v-model="novelSearch" type="search" placeholder="标题、作者、简介或正文片段" /></label>
-      </section>
-      <section class="novel-grid novel-grid--store" :class="{ 'novel-grid--list': novelLayout === 'list' }">
-        <article v-for="novel in searchedNovels" :key="novel.id" class="novel-card novel-card--clickable" @click="openNovelDetail(novel.id)">
-          <p class="novel-card__genre">{{ novel.genre }}</p>
-          <h3>{{ novel.title }}</h3>
-          <p class="novel-card__author">{{ novel.author }}</p>
-          <p class="novel-card__tagline">{{ novel.tagline }}</p>
-          <p class="novel-card__text">{{ novel.latest_excerpt }}</p>
-          <div class="novel-card__meta"><span>{{ novel.likes_count }} 赞</span><span>{{ novel.favorites_count }} 收藏</span><span>{{ novel.comments_count }} 评论</span></div>
-          <div class="novel-card__actions novel-card__actions--iconic">
-            <button class="novel-card__toggle novel-card__toggle--heart" :class="{ 'novel-card__toggle--active': novel.is_liked }" type="button" @click.stop="likeNovel(novel.id)">♥ {{ novel.likes_count }}</button>
-            <button class="novel-card__toggle novel-card__toggle--star" :class="{ 'novel-card__toggle--active': novel.is_favorited }" type="button" @click.stop="toggleSaveNovel(novel.id)">★ {{ novel.favorites_count }}</button>
-          </div>
-        </article>
-      </section>
-    </template>
+        <main class="main-shell">
+          <template v-if="currentView === 'projectSettings'">
+            <main v-if="isAuthenticated && hasProject" class="workspace workspace--single">
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <p class="panel-heading__kicker">选择项目</p>
+                    <h2>先选要编辑的小说项目</h2>
+                    <p class="panel-heading__desc">只展示当前最重要的信息：标题、题材、状态和最近更新时间。</p>
+                  </div>
+                </div>
+                <div class="project-list project-list--select" v-if="projects.length">
+                  <button
+                    v-for="project in projects"
+                    :key="project.id"
+                    class="project-item"
+                    :class="{ 'project-item--active': activeProject?.project.id === project.id }"
+                    type="button"
+                    @click="selectSettingsProject(project.id)"
+                  >
+                    <strong>{{ project.title }}</strong>
+                    <span>{{ project.genre }}</span>
+                    <em>{{ projectStatusLabel(project.indexing_status) }} / {{ formatDateTime(project.updated_at) }}</em>
+                  </button>
+                </div>
+              </section>
+              <section class="panel panel--paper">
+                <div class="panel-heading">
+                  <div>
+                    <p class="panel-heading__kicker">项目设定</p>
+                    <h2>{{ activeProject?.project.title }}</h2>
+                    <p class="panel-heading__desc">先确定核心前提，再补写作偏好和文风，层级会更清楚。</p>
+                  </div>
+                  <div class="mode-switch">
+                    <button class="ghost-button ghost-button--small" type="button" @click="openCharacters()">人物卡</button>
+                    <button class="primary-button primary-button--compact" :disabled="loading" @click="store.indexProject()">整理资料</button>
+                  </div>
+                </div>
+                <div class="project-meta">
+                  <div><span>题材</span><strong>{{ activeProject?.project.genre }}</strong></div>
+                  <div><span>资料状态</span><strong>{{ projectStatusLabel(activeProject?.project.indexing_status) }}</strong></div>
+                  <div><span>最近更新</span><strong>{{ formatDateTime(activeProject?.project.updated_at) }}</strong></div>
+                </div>
+                <form class="form-stack" @submit.prevent="submitUpdateProject()">
+                  <label class="field"><span>小说标题</span><input v-model="projectSettingsForm.title" maxlength="255" /></label>
+                  <label class="field"><span>题材类型</span><input v-model="projectSettingsForm.genre" maxlength="100" /></label>
+                  <label class="field"><span>故事前提</span><textarea v-model="projectSettingsForm.premise" rows="5" maxlength="2000" /></label>
+                  <label class="field"><span>世界观</span><textarea v-model="projectSettingsForm.world_brief" rows="5" maxlength="4000" /></label>
+                  <label class="field"><span>写作偏好</span><textarea v-model="projectSettingsForm.writing_rules" rows="4" maxlength="2000" /></label>
+                  <label class="field"><span>文风预设</span><select v-model="projectSettingsForm.style_profile"><option value="light_novel">轻小说</option><option value="lyrical_restrained">抒情克制</option></select></label>
+                  <button class="primary-button" :disabled="loading">保存项目设定</button>
+                </form>
+              </section>
+            </main>
+          </template>
 
-    <template v-else-if="currentView === 'detail'">
-      <section v-if="currentNovel" class="novel-detail">
-        <section class="panel panel--paper novel-detail__hero">
-          <div class="section-head">
-            <div><p class="panel-heading__kicker">作品</p><h2>{{ currentNovel.title }}</h2></div>
-            <button class="ghost-button ghost-button--small" type="button" @click="goToView('store')">返回书城</button>
-          </div>
-          <div class="novel-detail__meta">
-            <div><span>作者</span><strong>{{ currentNovel.author }}</strong></div>
-            <div><span>题材</span><strong>{{ currentNovel.genre }}</strong></div>
-            <div><span>章节</span><strong>{{ currentNovel.chapters_count }}</strong></div>
-            <div><span>创建</span><strong>{{ formatDateTime(currentNovel.created_at) }}</strong></div>
-            <div><span>更新</span><strong>{{ formatDateTime(currentNovel.updated_at) }}</strong></div>
-          </div>
-          <p class="novel-detail__tagline">{{ currentNovel.tagline }}</p>
-          <p class="project-copy">{{ currentNovel.summary }}</p>
-          <div class="novel-detail__actions">
-            <button class="novel-card__toggle novel-card__toggle--heart" :class="{ 'novel-card__toggle--active': currentNovel.is_liked }" @click="likeNovel(currentNovel.id)">♥ {{ currentNovel.likes_count }}</button>
-            <button class="novel-card__toggle novel-card__toggle--star" :class="{ 'novel-card__toggle--active': currentNovel.is_favorited }" @click="toggleSaveNovel(currentNovel.id)">★ {{ currentNovel.favorites_count }}</button>
-            <button v-if="isManagingCurrentNovel" class="ghost-button ghost-button--small" type="button" @click="openNovelEditor()">编辑作品</button>
-          </div>
-        </section>
-        <section class="panel panel--paper chapter-index" v-if="sortedChapters.length">
-          <div class="section-head">
-            <div><p class="panel-heading__kicker">章节目录</p><h2>选择章节开始阅读</h2></div>
-            <button class="primary-button primary-button--compact" type="button" @click="openReader()">开始阅读</button>
-          </div>
-          <div class="chapter-index__list">
-            <button v-for="chapter in sortedChapters" :key="chapter.id" class="chapter-index__item" type="button" @click="openReader(chapter.id)">
-              <span>第 {{ chapter.chapter_no }} 章</span>
-              <strong>{{ chapter.title }}</strong>
-              <small v-if="chapter.summary">{{ chapter.summary }}</small>
-            </button>
-          </div>
-        </section>
-        <section v-else class="panel empty-state"><h2>这篇作品还没有公开章节。</h2></section>
-        <section class="panel panel--paper">
-          <div class="section-head"><div><p class="panel-heading__kicker">评论</p><h2>读者讨论</h2></div></div>
-          <form class="form-stack" @submit.prevent="submitComment()">
-            <label class="field"><span>写下你的评论</span><textarea v-model="commentForm.content" rows="4" /></label>
-            <button class="primary-button" :disabled="loading">发表评论</button>
-          </form>
-          <div class="comment-list" v-if="novelComments.length">
-            <article v-for="comment in novelComments" :key="comment.id" class="comment-card">
-              <div class="comment-card__head"><strong>{{ comment.username }}</strong><span>{{ formatDateTime(comment.created_at) }}</span></div>
-              <p>{{ comment.content }}</p>
-            </article>
-          </div>
-          <p v-else class="empty-text">还没有评论。</p>
-        </section>
-      </section>
-      <section v-else class="panel empty-state"><h2>没有找到这篇作品。</h2></section>
-    </template>
+          <template v-else-if="currentView === 'characters'">
+            <main v-if="isAuthenticated && hasProject" class="workspace workspace--single">
+              <section class="panel panel--paper">
+                <div class="panel-heading">
+                  <div>
+                    <p class="panel-heading__kicker">人物卡</p>
+                    <h2>{{ editingCharacterId ? "编辑人物" : "添加人物" }}</h2>
+                    <p class="panel-heading__desc">一张卡只放一类信息，让角色的姓名、职责、性格和背景分层展示。</p>
+                  </div>
+                  <div class="mode-switch">
+                    <button class="ghost-button ghost-button--small" type="button" @click="openProjectSettings()">项目设定</button>
+                    <button v-if="editingCharacterId" class="ghost-button ghost-button--small" type="button" @click="resetCharacterForm()">取消</button>
+                  </div>
+                </div>
+                <form class="form-stack" @submit.prevent="submitCharacterCard()">
+                  <div class="inline-row">
+                    <label class="field"><span>姓名</span><input v-model="characterForm.name" maxlength="120" /></label>
+                    <label class="field"><span>年龄</span><input v-model="characterForm.age" maxlength="60" /></label>
+                    <label class="field"><span>性别</span><input v-model="characterForm.gender" maxlength="60" /></label>
+                  </div>
+                  <label class="field"><span>在小说里的角色</span><input v-model="characterForm.story_role" maxlength="120" /></label>
+                  <label class="field"><span>性格</span><textarea v-model="characterForm.personality" rows="4" maxlength="2000" /></label>
+                  <label class="field"><span>人物背景</span><textarea v-model="characterForm.background" rows="5" maxlength="4000" /></label>
+                  <button class="primary-button" :disabled="loading">{{ editingCharacterId ? "保存人物卡" : "添加人物卡" }}</button>
+                </form>
+              </section>
+              <section class="panel">
+                <div class="panel-heading"><div><p class="panel-heading__kicker">已有人物</p><h2>{{ activeProject?.character_cards.length ?? 0 }} 张人物卡</h2></div></div>
+                <div class="card-list" v-if="activeProject?.character_cards.length">
+                  <article v-for="card in activeProject.character_cards" :key="card.id" class="memory-card">
+                    <strong>{{ card.name }}</strong>
+                    <span>{{ card.story_role }} / {{ card.age }} {{ card.gender }}</span>
+                    <span>{{ card.personality }}</span>
+                    <em>{{ card.background }}</em>
+                    <div class="hero__actions">
+                      <button class="ghost-button ghost-button--small" type="button" @click="editCharacterCard(card)">编辑</button>
+                      <button class="ghost-button ghost-button--small" type="button" @click="activeProject?.project.id && store.deleteCharacterCard(activeProject.project.id, card.id)">删除</button>
+                    </div>
+                  </article>
+                </div>
+              </section>
+            </main>
+          </template>
 
-    <template v-else-if="currentView === 'reader'">
-      <section v-if="currentNovel && selectedChapter" class="reader-page">
-        <section class="panel panel--paper novel-reader">
-          <div class="reader-page__bar">
-            <button class="ghost-button ghost-button--small" type="button" @click="goToView('detail')">返回作品</button>
-            <button v-if="isManagingCurrentNovel" class="ghost-button ghost-button--small" type="button" @click="openNovelEditor()">编辑作品</button>
-          </div>
-          <div class="chapter-nav" v-if="hasChapterNavigation">
-            <button v-if="previousChapter" class="ghost-button ghost-button--small" type="button" @click="selectedChapterId = previousChapter.id">上一章</button>
-            <label class="field chapter-nav__select"><span>选择章节</span><select :value="selectedChapter.id" @change="selectChapterById(($event.target as HTMLSelectElement).value)"><option v-for="chapter in sortedChapters" :key="chapter.id" :value="chapter.id">第 {{ chapter.chapter_no }} 章 · {{ chapter.title }}</option></select></label>
-            <form class="chapter-jump" @submit.prevent="jumpToChapterNo()"><label class="field"><span>跳到</span><input v-model.number="chapterJumpNo" type="number" min="1" /></label><button class="ghost-button ghost-button--small">跳转</button></form>
-            <button v-if="nextChapter" class="ghost-button ghost-button--small" type="button" @click="selectedChapterId = nextChapter.id">下一章</button>
-          </div>
-          <p class="panel-heading__kicker">{{ currentNovel.title }}</p>
-          <h2>第 {{ selectedChapter.chapter_no }} 章 · {{ selectedChapter.title }}</h2>
-          <p class="project-copy" v-if="selectedChapter.summary">{{ selectedChapter.summary }}</p>
-          <article class="novel-reader__content">{{ selectedChapter.content }}</article>
-          <div class="chapter-nav chapter-nav--bottom" v-if="hasChapterNavigation">
-            <button v-if="previousChapter" class="ghost-button ghost-button--small" type="button" @click="selectedChapterId = previousChapter.id">上一章</button>
-            <button v-if="nextChapter" class="ghost-button ghost-button--small" type="button" @click="selectedChapterId = nextChapter.id">下一章</button>
-          </div>
-        </section>
-      </section>
-      <section v-else class="panel empty-state"><h2>先从作品页选择一个章节。</h2></section>
-    </template>
+          <template v-else-if="currentView === 'workshop'">
+            <main v-if="isAuthenticated && hasProject" class="workspace workspace--workshop">
+              <section class="workspace__column workspace__column--center">
+                <section class="panel panel--paper">
+                  <div class="panel-heading">
+                    <div><p class="panel-heading__kicker">写作</p><h2>{{ activeProject?.project.title }}</h2></div>
+                    <div class="mode-switch">
+                      <button type="button" :class="{ 'mode-switch__item--active': writingMode === 'auto' }" @click="writingMode = 'auto'">自动</button>
+                      <button type="button" :class="{ 'mode-switch__item--active': writingMode === 'advanced' }" @click="writingMode = 'advanced'">精细</button>
+                    </div>
+                  </div>
+                  <form v-if="writingMode === 'auto'" class="form-stack" @submit.prevent="submitAutoGenerate()">
+                    <label class="field"><span>把想法写在这里</span><textarea v-model="autoGenerationForm.idea" rows="10" /></label>
+                    <button class="primary-button" :disabled="loading">让 AI 写一段</button>
+                  </form>
+                  <form v-else class="form-stack" @submit.prevent="store.generate(generationForm)">
+                    <label class="field"><span>这一段想怎么写</span><textarea v-model="generationForm.prompt" rows="6" /></label>
+                    <div class="inline-row">
+                      <label class="field"><span>参考范围</span><select v-model="generationForm.search_method"><option value="local">最相关内容</option><option value="global">更多全局信息</option><option value="drift">自由联想</option><option value="basic">基础参考</option></select></label>
+                      <label class="field"><span>长度和形式</span><input v-model="generationForm.response_type" /></label>
+                    </div>
+                    <button class="primary-button" :disabled="loading">生成正文</button>
+                  </form>
+                </section>
+              </section>
+              <section class="workspace__column">
+                <section class="panel panel--warm guide-card"><p class="panel-heading__kicker">下一步</p><h2>{{ currentStep }}</h2></section>
+                <section class="panel">
+                  <div class="panel-heading"><div><p class="panel-heading__kicker">生成记录</p><h2>草稿</h2></div></div>
+                  <div class="timeline" v-if="activeProject?.generations.length">
+                    <button v-for="item in activeProject.generations" :key="item.id" class="timeline-item" type="button" @click="openGeneration(item.id)"><strong>{{ item.title }}</strong><span>{{ item.summary }}</span><em>{{ formatDateTime(item.created_at) }}</em></button>
+                  </div>
+                </section>
+              </section>
+            </main>
+          </template>
 
-    <template v-else-if="currentView === 'shelf'">
-      <section class="section-banner panel">
-        <div><p class="panel-heading__kicker">书架</p><h2>{{ shelfTab === "favorited" ? "我的收藏" : "我的喜欢" }}</h2></div>
-        <div class="shelf-tools">
-          <div class="mode-switch">
-            <button type="button" :class="{ 'mode-switch__item--active': shelfTab === 'favorited' }" @click="shelfTab = 'favorited'">收藏</button>
-            <button type="button" :class="{ 'mode-switch__item--active': shelfTab === 'liked' }" @click="shelfTab = 'liked'">喜欢</button>
-          </div>
-          <label class="field search-field"><span>搜索</span><input v-model="novelSearch" type="search" /></label>
-        </div>
-      </section>
-      <div v-if="shelfDisplayNovels.length" class="novel-grid" :class="{ 'novel-grid--list': novelLayout === 'list' }">
-        <article v-for="novel in shelfDisplayNovels" :key="novel.id" class="novel-card novel-card--saved novel-card--clickable" @click="openNovelDetail(novel.id)">
-          <p class="novel-card__genre">{{ novel.genre }}</p>
-          <h3>{{ novel.title }}</h3>
-          <p class="novel-card__author">{{ novel.author }}</p>
-          <p class="novel-card__text">{{ novel.latest_excerpt }}</p>
-        </article>
+          <template v-else-if="currentView === 'novelEditor'">
+            <section v-if="currentNovel && isManagingCurrentNovel" class="novel-editor">
+              <section class="panel panel--paper">
+                <div class="section-head"><div><p class="panel-heading__kicker">作品编辑</p><h2>{{ currentNovel.title }}</h2></div><button class="ghost-button ghost-button--small" type="button" @click="goToView('detail')">查看作品</button></div>
+                <form class="form-stack" @submit.prevent="submitUpdateNovel()">
+                  <label class="field"><span>作品标题</span><input v-model="manageNovelForm.title" /></label>
+                  <label class="field"><span>作者名</span><input v-model="manageNovelForm.author_name" /></label>
+                  <label class="field"><span>宣传语</span><input v-model="manageNovelForm.tagline" /></label>
+                  <label class="field"><span>作品简介</span><textarea v-model="manageNovelForm.summary" rows="4" /></label>
+                  <label class="field"><span>谁可以看</span><select v-model="manageNovelForm.visibility"><option value="public">公开</option><option value="private">仅自己可见</option></select></label>
+                  <div class="hero__actions">
+                    <button class="primary-button" :disabled="loading">保存作品信息</button>
+                    <button class="ghost-button" type="button" @click="currentNovel && store.deleteNovel(currentNovel.id)">删除作品</button>
+                  </div>
+                </form>
+              </section>
+            </section>
+          </template>
+        </main>
       </div>
-      <section v-else class="panel empty-state"><h2>这里还没有作品。</h2></section>
     </template>
 
-    <template v-else-if="currentView === 'studio'">
-      <main v-if="isAuthenticated" class="library-dashboard">
-        <section class="section-banner panel panel--paper">
-          <div><p class="panel-heading__kicker">我的小说</p><h2>管理项目和已发布作品</h2></div>
-          <button class="primary-button primary-button--compact" type="button" @click="goToView('projectCreate')">新建项目</button>
-        </section>
-        <section class="library-grid">
-          <section class="panel">
-            <div class="panel-heading"><div><p class="panel-heading__kicker">制作项目</p><h2>正在写的小说</h2></div></div>
-            <div class="project-list" v-if="projects.length">
-              <button v-for="project in projects" :key="project.id" class="project-item" :class="{ 'project-item--active': activeProject?.project.id === project.id }" @click="openWorkshop(project.id)">
-                <strong>{{ project.title }}</strong><span>{{ project.genre }}</span><em>{{ projectStatusLabel(project.indexing_status) }} / {{ formatDateTime(project.updated_at) }}</em>
+    <template v-else>
+      <div class="workspace-shell">
+        <aside class="sidebar panel panel--paper">
+          <div class="brand brand--sidebar">
+            <p class="eyebrow">晨流写作台</p>
+            <h1>Chen Flow</h1>
+          </div>
+          <nav class="sidebar-nav" aria-label="Primary">
+            <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'home' }" @click="goToView('home')">首页</button>
+            <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'studio' }" @click="openWorkspace()">我的小说</button>
+            <div v-if="currentView === 'studio'" class="sidebar-nav__subtools">
+              <button class="ghost-button ghost-button--small" type="button" @click="showCreateFolder = !showCreateFolder">+ 文件夹</button>
+              <button class="ghost-button ghost-button--small" type="button" @click="toggleFolderPanel()">{{ folderPanelCollapsed ? "展开" : "收起" }}</button>
+            </div>
+            <div v-if="currentView === 'studio' && !folderPanelCollapsed" class="folder-list">
+              <button
+                v-for="folder in sortedFolders"
+                :key="folder.id"
+                class="folder-list__item"
+                :class="{ 'folder-list__item--active': selectedWorkspaceFolder?.id === folder.id }"
+                @click="selectWorkspaceFolder(folder.id)"
+              >
+                <span>{{ folder.name }}</span>
+                <em>{{ folder.project_count }}</em>
               </button>
             </div>
-            <p v-else class="empty-text">还没有项目。</p>
-          </section>
-          <section class="panel panel--paper library-grid__published">
-            <div class="panel-heading"><div><p class="panel-heading__kicker">已发布作品</p><h2>书城里的小说</h2></div></div>
-            <div class="novel-grid" v-if="myNovels.length">
-              <article v-for="novel in myNovels" :key="novel.id" class="novel-card novel-card--saved novel-card--clickable" @click="openNovelDetail(novel.id)">
-                <p class="novel-card__genre">{{ novel.genre }}</p><h3>{{ novel.title }}</h3><p class="novel-card__author">{{ novel.author }} / {{ novel.visibility === "public" ? "公开" : "私密" }}</p><p class="novel-card__text">{{ novel.latest_excerpt }}</p>
+            <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'favorites' }" @click="openFavorites()">我的喜欢/收藏</button>
+            <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'discover' }" @click="goToView('discover')">发现</button>
+            <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'trash' }" @click="openTrash()">回收站</button>
+          </nav>
+          <div class="sidebar__footer">
+            <template v-if="isAuthenticated">
+              <span class="topbar__user">{{ currentUser?.username }}</span>
+              <button class="ghost-button ghost-button--small" @click="store.logout()">退出</button>
+            </template>
+            <template v-else>
+              <button class="ghost-button ghost-button--small" @click="openAuthPanel('login')">登录</button>
+              <button class="primary-button primary-button--compact" @click="openAuthPanel('register')">创建账号</button>
+            </template>
+          </div>
+        </aside>
+
+        <main class="main-shell">
+          <template v-if="currentView === 'home'">
+            <section class="hero hero--showcase">
+              <div class="hero__main">
+                <p class="hero__label">首页推荐</p>
+                <h2>{{ featuredNovel?.title ?? "正在准备推荐小说" }}</h2>
+                <p class="hero__lede">{{ featuredNovel?.tagline ?? "从发现里找到作品，也从这里开始自己的小说。" }}</p>
+                <p class="hero__excerpt">{{ featuredNovel?.latest_excerpt ?? "创建项目、归档到文件夹、维护人物卡，然后进入写作。" }}</p>
+                <div class="hero__actions">
+                  <button class="primary-button" @click="goToView('discover')">去发现</button>
+                  <button class="ghost-button" @click="openWorkspace()">我的小说</button>
+                </div>
+              </div>
+            </section>
+          </template>
+
+          <template v-else-if="currentView === 'studio'">
+            <section class="section-banner panel panel--paper">
+              <div><p class="panel-heading__kicker">我的小说</p><h2>{{ selectedWorkspaceFolder?.name ?? "默认文件夹" }}</h2></div>
+              <div class="shelf-tools">
+                <label class="field search-field"><span>搜索</span><input v-model="workspaceSearch" type="search" placeholder="搜索标题、题材或设定" /></label>
+                <label class="field">
+                  <span>文件夹</span>
+                  <select :value="selectedWorkspaceFolder?.id ?? ''" @change="selectWorkspaceFolder(($event.target as HTMLSelectElement).value)">
+                    <option v-for="folder in sortedFolders" :key="folder.id" :value="folder.id">{{ folder.name }}</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+            <section class="panel panel--paper">
+              <div class="section-head">
+                <div><p class="panel-heading__kicker">项目</p><h2>当前文件夹里的小说项目</h2></div>
+                <button class="primary-button primary-button--compact" type="button" @click="goToView('projectCreate')">新建小说项目</button>
+              </div>
+              <div class="novel-grid" v-if="pagedWorkspaceProjects.length">
+                <article v-for="project in pagedWorkspaceProjects" :key="project.id" class="novel-card novel-card--clickable" @click="openWorkshop(project.id)">
+                  <p class="novel-card__genre">{{ project.genre }}</p>
+                  <h3>{{ project.title }}</h3>
+                  <p class="novel-card__text">{{ project.premise }}</p>
+                  <p class="novel-card__author">{{ projectStatusLabel(project.indexing_status) }} / {{ formatDateTime(project.updated_at) }}</p>
+                  <label class="field" @click.stop>
+                    <span>移动到文件夹</span>
+                    <select :disabled="movingProjectId === project.id" :value="project.folder_id ?? ''" @change="assignProjectFolder(project.id, ($event.target as HTMLSelectElement).value)">
+                      <option v-for="folder in sortedFolders" :key="folder.id" :value="folder.id">{{ folder.name }}</option>
+                    </select>
+                  </label>
+                  <div class="novel-card__actions novel-card__actions--iconic">
+                    <button class="ghost-button ghost-button--small" type="button" @click.stop="openWorkshop(project.id)">打开</button>
+                    <button class="ghost-button ghost-button--small" type="button" @click.stop="deleteProjectToTrash(project.id)">删除</button>
+                  </div>
+                </article>
+              </div>
+              <p v-else class="empty-text">这个文件夹里还没有项目。</p>
+              <div class="pagination-bar">
+                <span>共 {{ filteredWorkspaceProjects.length }} 条 / 每页 {{ workspacePageSize }} 条 / 第 {{ workspacePage }} / {{ workspaceTotalPages }} 页</span>
+                <div class="hero__actions">
+                  <button class="ghost-button ghost-button--small" :disabled="workspacePage <= 1" @click="previousWorkspacePage()">上一页</button>
+                  <button class="ghost-button ghost-button--small" :disabled="workspacePage >= workspaceTotalPages" @click="nextWorkspacePage()">下一页</button>
+                </div>
+              </div>
+            </section>
+            <section v-if="showCreateFolder" class="panel panel--paper">
+              <div class="panel-heading"><div><p class="panel-heading__kicker">新建文件夹</p><h2>为小说项目建立新分类</h2></div></div>
+              <form class="form-stack" @submit.prevent="submitCreateFolder()">
+                <label class="field"><span>文件夹名称</span><input v-model="folderForm.name" maxlength="120" /></label>
+                <div class="hero__actions">
+                  <button class="primary-button" :disabled="loading">创建文件夹</button>
+                  <button class="ghost-button" type="button" @click="showCreateFolder = false">取消</button>
+                </div>
+              </form>
+            </section>
+          </template>
+
+          <template v-else-if="currentView === 'favorites'">
+            <section class="section-banner section-banner--catalog panel">
+              <div><p class="panel-heading__kicker">我的喜欢/收藏</p><h2>{{ favoritesTab === "favorited" ? "我的收藏" : "我的喜欢" }}</h2></div>
+              <div class="shelf-tools">
+                <div class="mode-switch">
+                  <button type="button" :class="{ 'mode-switch__item--active': favoritesTab === 'favorited' }" @click="favoritesTab = 'favorited'">收藏</button>
+                  <button type="button" :class="{ 'mode-switch__item--active': favoritesTab === 'liked' }" @click="favoritesTab = 'liked'">喜欢</button>
+                </div>
+                <label class="field search-field"><span>搜索</span><input v-model="novelSearch" type="search" /></label>
+              </div>
+            </section>
+            <div v-if="shelfDisplayNovels.length" class="novel-grid" :class="{ 'novel-grid--list': novelLayout === 'list' }">
+              <article v-for="novel in shelfDisplayNovels" :key="novel.id" class="novel-card novel-card--saved novel-card--clickable" @click="openNovelDetail(novel.id)">
+                <p class="novel-card__genre">{{ novel.genre }}</p>
+                <h3>{{ novel.title }}</h3>
+                <p class="novel-card__author">{{ novel.author }}</p>
+                <p class="novel-card__text">{{ novel.latest_excerpt }}</p>
               </article>
             </div>
-            <p v-else class="empty-text">还没有发布到书城的作品。</p>
-          </section>
-        </section>
-      </main>
-      <section v-else class="panel empty-state"><h2>登录后再管理你的小说。</h2></section>
-    </template>
+          </template>
 
-    <template v-else-if="currentView === 'projectCreate'">
-      <main v-if="isAuthenticated" class="workspace workspace--single">
-        <section class="panel panel--paper">
-          <div class="panel-heading"><div><p class="panel-heading__kicker">新建项目</p><h2>先把小说的核心设定立住</h2></div></div>
-          <form class="form-stack" @submit.prevent="submitCreateProject()">
-            <label class="field"><span>小说标题</span><input v-model="projectForm.title" maxlength="255" /></label>
-            <label class="field"><span>题材类型</span><input v-model="projectForm.genre" maxlength="100" /></label>
-            <label class="field"><span>故事前提</span><textarea v-model="projectForm.premise" rows="5" maxlength="2000" /></label>
-            <label class="field"><span>世界观</span><textarea v-model="projectForm.world_brief" rows="5" maxlength="4000" /></label>
-            <label class="field"><span>写作偏好</span><textarea v-model="projectForm.writing_rules" rows="4" maxlength="2000" /></label>
-            <label class="field"><span>文风预设</span><select v-model="projectForm.style_profile"><option value="light_novel">轻小说</option><option value="lyrical_restrained">抒情克制</option></select></label>
-            <button class="primary-button" :disabled="loading">创建项目</button>
-          </form>
-        </section>
-        <section class="panel">
-          <div class="panel-heading"><div><p class="panel-heading__kicker">快速开始</p><h2>只写一段想法</h2></div></div>
-          <form class="form-stack" @submit.prevent="submitQuickProject()">
-            <label class="field"><span>小说想法</span><textarea v-model="quickProjectForm.idea" rows="6" /></label>
-            <button class="ghost-button" :disabled="loading">用这段想法开始</button>
-          </form>
-        </section>
-      </main>
-      <section v-else class="panel empty-state"><h2>登录后再创建项目。</h2></section>
-    </template>
+          <template v-else-if="currentView === 'discover'">
+            <section class="section-banner section-banner--catalog panel panel--paper">
+              <div><p class="panel-heading__kicker">发现</p><h2>发现别人的小说</h2></div>
+              <label class="field search-field"><span>搜索</span><input v-model="novelSearch" type="search" placeholder="标题、作者、简介或正文片段" /></label>
+            </section>
+            <section class="novel-grid novel-grid--store" :class="{ 'novel-grid--list': novelLayout === 'list' }">
+              <article v-for="novel in searchedNovels" :key="novel.id" class="novel-card novel-card--clickable" @click="openNovelDetail(novel.id)">
+                <p class="novel-card__genre">{{ novel.genre }}</p>
+                <h3>{{ novel.title }}</h3>
+                <p class="novel-card__author">{{ novel.author }}</p>
+                <p class="novel-card__tagline">{{ novel.tagline }}</p>
+                <p class="novel-card__text">{{ novel.latest_excerpt }}</p>
+                <div class="novel-card__meta"><span>{{ novel.likes_count }} 赞</span><span>{{ novel.favorites_count }} 收藏</span><span>{{ novel.comments_count }} 评论</span></div>
+                <div class="novel-card__actions novel-card__actions--iconic">
+                  <button class="novel-card__toggle novel-card__toggle--heart" :class="{ 'novel-card__toggle--active': novel.is_liked }" type="button" @click.stop="likeNovel(novel.id)">♥ {{ novel.likes_count }}</button>
+                  <button class="novel-card__toggle novel-card__toggle--star" :class="{ 'novel-card__toggle--active': novel.is_favorited }" type="button" @click.stop="toggleSaveNovel(novel.id)">★ {{ novel.favorites_count }}</button>
+                </div>
+              </article>
+            </section>
+          </template>
 
-    <template v-else-if="currentView === 'projectSettings'">
-      <main v-if="isAuthenticated && hasProject" class="workspace workspace--single">
-        <section class="panel panel--paper">
-          <div class="panel-heading">
-            <div><p class="panel-heading__kicker">项目设定</p><h2>{{ activeProject?.project.title }}</h2></div>
-            <button class="primary-button primary-button--compact" :disabled="loading" @click="store.indexProject()">整理资料</button>
-          </div>
-          <form class="form-stack" @submit.prevent="submitUpdateProject()">
-            <label class="field"><span>小说标题</span><input v-model="projectSettingsForm.title" maxlength="255" /></label>
-            <label class="field"><span>题材类型</span><input v-model="projectSettingsForm.genre" maxlength="100" /></label>
-            <label class="field"><span>故事前提</span><textarea v-model="projectSettingsForm.premise" rows="5" maxlength="2000" /></label>
-            <label class="field"><span>世界观</span><textarea v-model="projectSettingsForm.world_brief" rows="5" maxlength="4000" /></label>
-            <label class="field"><span>写作偏好</span><textarea v-model="projectSettingsForm.writing_rules" rows="4" maxlength="2000" /></label>
-            <label class="field"><span>文风预设</span><select v-model="projectSettingsForm.style_profile"><option value="light_novel">轻小说</option><option value="lyrical_restrained">抒情克制</option></select></label>
-            <button class="primary-button" :disabled="loading">保存项目设定</button>
-          </form>
-        </section>
-      </main>
-      <section v-else class="panel empty-state"><h2>先选择或创建一个项目。</h2></section>
-    </template>
-
-    <template v-else-if="currentView === 'characters'">
-      <main v-if="isAuthenticated && hasProject" class="workspace workspace--single">
-        <section class="panel panel--paper">
-          <div class="panel-heading">
-            <div><p class="panel-heading__kicker">人物卡</p><h2>{{ editingCharacterId ? "编辑人物" : "添加人物" }}</h2></div>
-            <button v-if="editingCharacterId" class="ghost-button ghost-button--small" type="button" @click="resetCharacterForm()">取消</button>
-          </div>
-          <form class="form-stack" @submit.prevent="submitCharacterCard()">
-            <div class="inline-row">
-              <label class="field"><span>姓名</span><input v-model="characterForm.name" maxlength="120" /></label>
-              <label class="field"><span>年龄</span><input v-model="characterForm.age" maxlength="60" /></label>
-              <label class="field"><span>性别</span><input v-model="characterForm.gender" maxlength="60" /></label>
-            </div>
-            <label class="field"><span>在小说里的角色</span><input v-model="characterForm.story_role" maxlength="120" /></label>
-            <label class="field"><span>性格</span><textarea v-model="characterForm.personality" rows="4" maxlength="2000" /></label>
-            <label class="field"><span>人物背景</span><textarea v-model="characterForm.background" rows="5" maxlength="4000" /></label>
-            <button class="primary-button" :disabled="loading">{{ editingCharacterId ? "保存人物卡" : "添加人物卡" }}</button>
-          </form>
-        </section>
-        <section class="panel">
-          <div class="panel-heading"><div><p class="panel-heading__kicker">已有人物</p><h2>{{ activeProject?.character_cards.length ?? 0 }} 张人物卡</h2></div></div>
-          <div class="card-list" v-if="activeProject?.character_cards.length">
-            <article v-for="card in activeProject.character_cards" :key="card.id" class="memory-card">
-              <strong>{{ card.name }}</strong><span>{{ card.story_role }} / {{ card.age }} {{ card.gender }}</span><span>{{ card.personality }}</span><em>{{ card.background }}</em>
-              <button class="ghost-button ghost-button--small" type="button" @click="editCharacterCard(card)">编辑</button>
-            </article>
-          </div>
-          <p v-else class="empty-text">还没有人物卡。先添加主角，再补重要配角。</p>
-        </section>
-      </main>
-      <section v-else class="panel empty-state"><h2>先选择或创建一个项目。</h2></section>
-    </template>
-
-    <template v-else-if="currentView === 'workshop'">
-      <main v-if="isAuthenticated && hasProject" class="workspace workspace--workshop">
-        <section class="workspace__column workspace__column--center">
-          <section class="panel panel--paper">
-            <div class="panel-heading">
-              <div><p class="panel-heading__kicker">写作</p><h2>{{ activeProject?.project.title }}</h2></div>
-              <div class="mode-switch"><button type="button" :class="{ 'mode-switch__item--active': writingMode === 'auto' }" @click="writingMode = 'auto'">自动</button><button type="button" :class="{ 'mode-switch__item--active': writingMode === 'advanced' }" @click="writingMode = 'advanced'">精细</button></div>
-            </div>
-            <form v-if="writingMode === 'auto'" class="form-stack" @submit.prevent="submitAutoGenerate()">
-              <label class="field"><span>把想法写在这里</span><textarea v-model="autoGenerationForm.idea" rows="10" /></label>
-              <button class="primary-button" :disabled="loading">让 AI 写一段</button>
-            </form>
-            <form v-else class="form-stack" @submit.prevent="store.generate(generationForm)">
-              <label class="field"><span>这一段想怎么写</span><textarea v-model="generationForm.prompt" rows="6" /></label>
-              <div class="inline-row">
-                <label class="field"><span>参考范围</span><select v-model="generationForm.search_method"><option value="local">最相关内容</option><option value="global">更多全局信息</option><option value="drift">自由联想</option><option value="basic">基础参考</option></select></label>
-                <label class="field"><span>长度和形式</span><input v-model="generationForm.response_type" /></label>
+          <template v-else-if="currentView === 'trash'">
+            <section class="section-banner panel panel--paper">
+              <div><p class="panel-heading__kicker">回收站</p><h2>已删除内容</h2></div>
+              <div class="hero__stats">
+                <span>项目 {{ trashSummary.project }}</span>
+                <span>作品 {{ trashSummary.novel }}</span>
+                <span>人物卡 {{ trashSummary.character_card }}</span>
               </div>
-              <button class="primary-button" :disabled="loading">生成正文</button>
-            </form>
-          </section>
-          <section class="dual-grid" v-if="writingMode === 'advanced'">
-            <section class="panel">
-              <div class="panel-heading"><div><p class="panel-heading__kicker">补充设定</p><h2>给 AI 记住</h2></div></div>
-              <form class="form-stack" @submit.prevent="store.addMemory(memoryForm)">
-                <label class="field"><span>标题</span><input v-model="memoryForm.title" /></label>
-                <label class="field"><span>内容</span><textarea v-model="memoryForm.content" rows="4" /></label>
-                <button class="ghost-button" :disabled="loading">保存设定</button>
-              </form>
             </section>
             <section class="panel">
-              <div class="panel-heading"><div><p class="panel-heading__kicker">参考资料</p><h2>外部资料或片段</h2></div></div>
-              <form class="form-stack" @submit.prevent="store.addSource(sourceForm)">
-                <label class="field"><span>标题</span><input v-model="sourceForm.title" /></label>
-                <label class="field"><span>内容</span><textarea v-model="sourceForm.content" rows="4" /></label>
-                <button class="ghost-button" :disabled="loading">保存资料</button>
-              </form>
+              <div class="card-list" v-if="trashItems.length">
+                <article v-for="item in trashItems" :key="`${item.item_type}-${item.item_id}`" class="memory-card">
+                  <strong>{{ item.title }}</strong>
+                  <span>{{ item.subtitle || item.item_type }}</span>
+                  <em>{{ formatDateTime(item.deleted_at) }}</em>
+                  <button class="ghost-button ghost-button--small" type="button" @click="restoreTrash(item)">恢复</button>
+                </article>
+              </div>
+              <p v-else class="empty-text">回收站目前是空的。</p>
             </section>
-          </section>
-        </section>
-        <section class="workspace__column">
-          <section class="panel panel--warm guide-card"><p class="panel-heading__kicker">下一步</p><h2>{{ currentStep }}</h2></section>
-          <section class="panel">
-            <div class="panel-heading"><div><p class="panel-heading__kicker">生成记录</p><h2>草稿</h2></div></div>
-            <div class="timeline" v-if="activeProject?.generations.length">
-              <button v-for="item in activeProject.generations" :key="item.id" class="timeline-item" type="button" @click="openGeneration(item.id)"><strong>{{ item.title }}</strong><span>{{ item.summary }}</span><em>{{ formatDateTime(item.created_at) }}</em></button>
-            </div>
-            <p v-else class="empty-text">还没有生成记录。</p>
-          </section>
-          <section class="panel panel--paper">
-            <div class="panel-heading"><div><p class="panel-heading__kicker">当前草稿</p><h2>{{ currentGeneration ? "发布前可编辑" : "先生成一段正文" }}</h2></div></div>
-            <form v-if="currentGeneration" class="form-stack draft-editor">
-              <label class="field"><span>章节标题</span><input v-model="draftForm.title" /></label>
-              <label class="field"><span>摘要</span><textarea v-model="draftForm.summary" rows="3" /></label>
-              <label class="field"><span>正文</span><textarea v-model="draftForm.content" rows="14" /></label>
-            </form>
-            <form v-if="currentGeneration" class="form-stack" @submit.prevent="submitPublishNovel()">
-              <label class="field"><span>作品标题</span><input v-model="publishForm.title" /></label>
-              <label class="field"><span>作者名</span><input v-model="publishForm.author_name" /></label>
-              <label class="field"><span>简介</span><textarea v-model="publishForm.summary" rows="4" /></label>
-              <label class="field"><span>宣传语</span><input v-model="publishForm.tagline" /></label>
-              <button class="primary-button" :disabled="loading">发布为作品</button>
-            </form>
-          </section>
-        </section>
-      </main>
-      <section v-else class="panel empty-state"><h2>先选择或创建一个项目。</h2></section>
-    </template>
+          </template>
 
-    <template v-else-if="currentView === 'novelEditor'">
-      <section v-if="currentNovel && isManagingCurrentNovel" class="novel-editor">
-        <section class="panel panel--paper">
-          <div class="section-head"><div><p class="panel-heading__kicker">作品编辑</p><h2>{{ currentNovel.title }}</h2></div><button class="ghost-button ghost-button--small" type="button" @click="goToView('detail')">查看作品</button></div>
-          <form class="form-stack" @submit.prevent="submitUpdateNovel()">
-            <label class="field"><span>作品标题</span><input v-model="manageNovelForm.title" /></label>
-            <label class="field"><span>作者名</span><input v-model="manageNovelForm.author_name" /></label>
-            <label class="field"><span>宣传语</span><input v-model="manageNovelForm.tagline" /></label>
-            <label class="field"><span>作品简介</span><textarea v-model="manageNovelForm.summary" rows="4" /></label>
-            <label class="field"><span>谁可以看</span><select v-model="manageNovelForm.visibility"><option value="public">公开</option><option value="private">仅自己可见</option></select></label>
-            <button class="primary-button" :disabled="loading">保存作品信息</button>
-          </form>
-        </section>
-        <section class="panel">
-          <div class="section-head"><div><p class="panel-heading__kicker">章节编辑</p><h2>修改已发布章节</h2></div></div>
-          <label v-if="sortedChapters.length" class="field"><span>选择章节</span><select :value="selectedChapter?.id" @change="selectChapterById(($event.target as HTMLSelectElement).value)"><option v-for="chapter in sortedChapters" :key="chapter.id" :value="chapter.id">第 {{ chapter.chapter_no }} 章 · {{ chapter.title }}</option></select></label>
-          <form v-if="selectedChapter" class="form-stack" @submit.prevent="submitUpdateChapter()">
-            <label class="field"><span>章节序号</span><input v-model.number="chapterEditForm.chapter_no" type="number" min="1" /></label>
-            <label class="field"><span>章节标题</span><input v-model="chapterEditForm.title" /></label>
-            <label class="field"><span>章节摘要</span><textarea v-model="chapterEditForm.summary" rows="3" /></label>
-            <label class="field"><span>正文内容</span><textarea v-model="chapterEditForm.content" rows="16" /></label>
-            <button class="primary-button" :disabled="loading">保存章节</button>
-          </form>
-        </section>
-        <section class="panel" v-if="currentGeneration">
-          <div class="section-head"><div><p class="panel-heading__kicker">追加章节</p><h2>把当前草稿加入这部作品</h2></div></div>
-          <form class="form-stack draft-editor" @submit.prevent="submitAppendChapter()">
-            <label class="field"><span>章节序号</span><input v-model.number="appendChapterForm.chapter_no" type="number" min="1" /></label>
-            <label class="field"><span>章节标题</span><input v-model="appendChapterForm.title" /></label>
-            <label class="field"><span>章节摘要</span><textarea v-model="draftForm.summary" rows="3" /></label>
-            <label class="field"><span>正文内容</span><textarea v-model="draftForm.content" rows="16" /></label>
-            <button class="primary-button" :disabled="loading || !activeProject">保存为新章节</button>
-          </form>
-        </section>
-      </section>
-      <section v-else class="panel empty-state"><h2>先从“我的小说”选择一部自己的作品。</h2></section>
-    </template>
+          <template v-else-if="currentView === 'projectCreate'">
+            <main v-if="isAuthenticated" class="workspace workspace--single">
+              <section class="panel panel--paper">
+                <div class="panel-heading"><div><p class="panel-heading__kicker">新建项目</p><h2>先把小说的核心设定立住</h2></div></div>
+                <form class="form-stack" @submit.prevent="submitCreateProject()">
+                  <label class="field"><span>小说标题</span><input v-model="projectForm.title" maxlength="255" /></label>
+                  <label class="field"><span>题材类型</span><input v-model="projectForm.genre" maxlength="100" /></label>
+                  <label class="field"><span>故事前提</span><textarea v-model="projectForm.premise" rows="5" maxlength="2000" /></label>
+                  <label class="field"><span>世界观</span><textarea v-model="projectForm.world_brief" rows="5" maxlength="4000" /></label>
+                  <label class="field"><span>写作偏好</span><textarea v-model="projectForm.writing_rules" rows="4" maxlength="2000" /></label>
+                  <label class="field"><span>文风预设</span><select v-model="projectForm.style_profile"><option value="light_novel">轻小说</option><option value="lyrical_restrained">抒情克制</option></select></label>
+                  <button class="primary-button" :disabled="loading">创建项目</button>
+                </form>
+              </section>
+            </main>
+          </template>
 
-    <template v-else-if="currentView === 'profile'">
-      <section class="panel panel--paper">
-        <div class="panel-heading"><div><p class="panel-heading__kicker">我的</p><h2>{{ isAuthenticated ? "管理个人资料" : "登录后再管理个人资料" }}</h2></div></div>
-        <form v-if="isAuthenticated" class="form-stack" @submit.prevent="submitProfile()">
-          <label class="field"><span>简介</span><textarea v-model="profileForm.bio" rows="4" /></label>
-          <label class="field"><span>Email</span><input v-model="profileForm.email" type="email" /></label>
-          <label class="field"><span>Phone</span><input v-model="profileForm.phone" /></label>
-          <button class="primary-button" :disabled="loading">保存资料</button>
-        </form>
-        <button v-else class="primary-button primary-button--compact" @click="openAuthPanel('login')">登录</button>
-      </section>
+          <template v-else-if="currentView === 'detail'">
+            <section v-if="currentNovel" class="novel-detail">
+              <section class="panel panel--paper novel-detail__hero">
+                <div class="section-head">
+                  <div><p class="panel-heading__kicker">作品</p><h2>{{ currentNovel.title }}</h2></div>
+                  <button class="ghost-button ghost-button--small" type="button" @click="goToView('discover')">返回发现</button>
+                </div>
+                <div class="novel-detail__meta">
+                  <div><span>作者</span><strong>{{ currentNovel.author }}</strong></div>
+                  <div><span>题材</span><strong>{{ currentNovel.genre }}</strong></div>
+                  <div><span>章节</span><strong>{{ currentNovel.chapters_count }}</strong></div>
+                  <div><span>创建</span><strong>{{ formatDateTime(currentNovel.created_at) }}</strong></div>
+                  <div><span>更新</span><strong>{{ formatDateTime(currentNovel.updated_at) }}</strong></div>
+                </div>
+                <p class="novel-detail__tagline">{{ currentNovel.tagline }}</p>
+                <p class="project-copy">{{ currentNovel.summary }}</p>
+              </section>
+            </section>
+          </template>
+        </main>
+      </div>
     </template>
   </div>
 </template>

@@ -21,7 +21,13 @@ import type {
   User,
   UserProfile,
   AppendNovelChapterPayload,
+  CreateFolderPayload,
+  DeletePayload,
   UpdateNovelChapterPayload,
+  MoveProjectFolderPayload,
+  MyWorkspaceResponse,
+  ProjectFolder,
+  RestoreTrashPayload,
 } from "./types";
 
 type RequestOptions = RequestInit & {
@@ -135,10 +141,17 @@ export const api = {
   updateMyProfile: (token: string, payload: UserProfile) =>
     request<UserProfile>("/api/me/profile", { method: "PUT", token, body: JSON.stringify(payload) }),
   listProjects: (token: string) => request<Project[]>("/api/projects", { token }),
+  myWorkspace: (token: string) => request<MyWorkspaceResponse>("/api/me/workspace", { token }),
+  createFolder: (token: string, payload: CreateFolderPayload) =>
+    request<ProjectFolder>("/api/me/folders", { method: "POST", token, body: JSON.stringify(payload) }),
   createProject: (token: string, payload: ProjectPayload) =>
     request<Project>("/api/projects", { method: "POST", token, body: JSON.stringify(payload) }),
   updateProject: (token: string, projectId: number, payload: ProjectPayload) =>
     request<Project>(`/api/projects/${projectId}`, { method: "PUT", token, body: JSON.stringify(payload) }),
+  moveProjectToFolder: (token: string, projectId: number, payload: MoveProjectFolderPayload) =>
+    request<Project>(`/api/projects/${projectId}/folder`, { method: "PUT", token, body: JSON.stringify(payload) }),
+  deleteProject: (token: string, projectId: number, payload: DeletePayload) =>
+    request<Project>(`/api/projects/${projectId}`, { method: "DELETE", token, body: JSON.stringify(payload) }),
   projectDetail: (token: string, projectId: number) =>
     request<ProjectDetailResponse>(`/api/projects/${projectId}`, { token }),
   addMemory: (
@@ -189,6 +202,8 @@ export const api = {
     request<NovelDetail>("/api/novels/from-generation", { method: "POST", token, body: JSON.stringify(payload) }),
   updateNovel: (token: string, novelId: number, payload: UpdateNovelPayload) =>
     request<NovelDetail>(`/api/novels/${novelId}`, { method: "PUT", token, body: JSON.stringify(payload) }),
+  deleteNovel: (token: string, novelId: number, payload: DeletePayload) =>
+    request<NovelDetail>(`/api/novels/${novelId}`, { method: "DELETE", token, body: JSON.stringify(payload) }),
   appendNovelChapterFromGeneration: (token: string, novelId: number, payload: AppendNovelChapterPayload) =>
     request<NovelDetail>(`/api/novels/${novelId}/chapters/from-generation`, {
       method: "POST",
@@ -198,6 +213,18 @@ export const api = {
   updateNovelChapter: (token: string, novelId: number, chapterId: number, payload: UpdateNovelChapterPayload) =>
     request<NovelDetail>(`/api/novels/${novelId}/chapters/${chapterId}`, {
       method: "PUT",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  deleteCharacterCard: (token: string, projectId: number, cardId: number, payload: DeletePayload) =>
+    request<CharacterCard>(`/api/projects/${projectId}/character-cards/${cardId}`, {
+      method: "DELETE",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  restoreTrashItem: (token: string, itemId: number, payload: RestoreTrashPayload) =>
+    request<{ status: string }>(`/api/trash/${itemId}/restore`, {
+      method: "POST",
       token,
       body: JSON.stringify(payload),
     }),

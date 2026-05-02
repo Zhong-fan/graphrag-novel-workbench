@@ -71,6 +71,7 @@ class ProjectOut(BaseModel):
     style_profile: str
     punctuation_rule: str
     indexing_status: str
+    folder_id: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -233,6 +234,46 @@ class ProjectDetailResponse(BaseModel):
     world_perception_updates: list[WorldPerceptionUpdateOut] = []
 
 
+class ProjectFolderCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+
+
+class ProjectFolderOut(BaseModel):
+    id: int
+    name: str
+    sort_order: int
+    is_default: bool
+    project_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MoveProjectFolderRequest(BaseModel):
+    folder_id: int | None = None
+
+
+class TrashItemOut(BaseModel):
+    item_type: str
+    item_id: int
+    title: str
+    subtitle: str = ""
+    deleted_at: datetime
+    project_id: int | None = None
+
+
+class RestoreTrashItemRequest(BaseModel):
+    item_type: str = Field(..., pattern="^(project|novel|character_card)$")
+
+
+class MyWorkspaceOut(BaseModel):
+    folders: list[ProjectFolderOut]
+    projects: list[ProjectOut]
+    trash: list[TrashItemOut]
+
+
 class NovelChapterOut(BaseModel):
     id: int
     title: str
@@ -317,6 +358,10 @@ class UpdateNovelRequest(BaseModel):
     visibility: str = Field(default="public", pattern="^(public|private)$")
 
 
+class DeleteNovelRequest(BaseModel):
+    hard_delete: bool = False
+
+
 class AppendNovelChapterRequest(BaseModel):
     project_id: int
     generation_id: int
@@ -331,6 +376,14 @@ class UpdateNovelChapterRequest(BaseModel):
     summary: str = Field(default="", max_length=5000)
     content: str = Field(..., min_length=1, max_length=200000)
     chapter_no: int = Field(..., ge=1, le=10000)
+
+
+class DeleteProjectRequest(BaseModel):
+    hard_delete: bool = False
+
+
+class DeleteCharacterCardRequest(BaseModel):
+    hard_delete: bool = False
 
 
 class BootstrapResponse(BaseModel):

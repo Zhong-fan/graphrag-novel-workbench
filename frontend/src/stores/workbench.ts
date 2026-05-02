@@ -5,7 +5,9 @@ import { api } from "../api";
 import type {
   BootstrapResponse,
   CaptchaChallenge,
+  CharacterCard,
   GenerationItem,
+  ProjectFolder,
   NovelCard,
   NovelComment,
   NovelDetail,
@@ -13,6 +15,8 @@ import type {
   Project,
   ProjectPayload,
   ProjectDetailResponse,
+  RestoreTrashPayload,
+  TrashItem,
   CharacterCardPayload,
   UpdateNovelPayload,
   AppendNovelChapterPayload,
@@ -37,6 +41,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
   const token = ref<string | null>(localStorage.getItem(tokenKey));
   const currentUser = ref<User | null>(null);
   const projects = ref<Project[]>([]);
+  const projectFolders = ref<ProjectFolder[]>([]);
+  const trashItems = ref<TrashItem[]>([]);
   const novels = ref<NovelCard[]>([]);
   const favoriteNovels = ref<NovelCard[]>([]);
   const myNovels = ref<NovelCard[]>([]);
@@ -133,7 +139,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       setToken(response.token);
       currentUser.value = response.user;
       profile.value = await api.myProfile(response.token);
-      await loadProjects();
+      await refreshWorkspace();
       await loadNovels();
       await loadFavorites();
       await loadMyNovels();
@@ -275,10 +281,23 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     if (!token.value) {
       return;
     }
-    projects.value = await api.listProjects(token.value);
+    const workspace = await api.myWorkspace(token.value);
+    projects.value = workspace.projects;
+    projectFolders.value = workspace.folders;
+    trashItems.value = workspace.trash;
     if (projects.value.length > 0 && !activeProject.value) {
       await selectProject(projects.value[0].id);
     }
+  }
+
+  async function refreshWorkspace() {
+    if (!token.value) {
+      return;
+    }
+    const workspace = await api.myWorkspace(token.value);
+    projects.value = workspace.projects;
+    projectFolders.value = workspace.folders;
+    trashItems.value = workspace.trash;
   }
 
   async function selectProject(projectId: number, options: SelectProjectOptions = {}) {
@@ -359,6 +378,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       const project = await api.updateProject(token.value, projectId, payload);
       activeProject.value.project = project;
       syncProjectSummary(project);
+      await refreshWorkspace();
       success.value = "项目设定已保存。";
       await selectProject(projectId, { showLoading: false, silent: true });
     } catch (err) {
@@ -584,6 +604,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       await loadNovels();
       await loadFavorites();
       await loadMyNovels();
+      await refreshWorkspace();
       novelComments.value = [];
       success.value = "作品已发布到书城。";
       return created;
@@ -610,6 +631,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       await loadNovels();
       await loadFavorites();
       await loadMyNovels();
+      await refreshWorkspace();
       success.value = "作品信息已更新。";
       return updated;
     } catch (err) {
@@ -635,6 +657,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       await loadNovels();
       await loadFavorites();
       await loadMyNovels();
+      await refreshWorkspace();
       success.value = "新章节已追加。";
       return updated;
     } catch (err) {
@@ -660,11 +683,147 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       await loadNovels();
       await loadFavorites();
       await loadMyNovels();
+      await refreshWorkspace();
       success.value = "章节已保存。";
       return updated;
     } catch (err) {
       error.value = err instanceof Error ? err.message : "保存章节失败。";
       return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function createFolder(name: string) {
+    if (!token.value) {
+      return null;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const folder = await api.createFolder(token.value, { name: name.trim() });
+      await refreshWorkspace();
+      success.value = "文件夹已创建。";
+      return folder;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "创建文件夹失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function moveProjectToFolder(projectId: number, folderId?: number | null) {
+    if (!token.value) {
+      return null;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const project = await api.moveProjectToFolder(token.value, projectId, { folder_id: folderId ?? null });
+      await refreshWorkspace();
+      success.value = "项目已移动。";
+      return project;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "移动项目失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function deleteProject(projectId: number) {
+    if (!token.value) {
+      return null;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const project = await api.deleteProject(token.value, projectId, {});
+      await refreshWorkspace();
+      if (activeProject.value?.project.id === projectId) {
+        activeProject.value = null;
+        currentGeneration.value = null;
+      }
+      success.value = "项目已移入回收站。";
+      return project;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "删除项目失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function deleteNovel(novelId: number) {
+    if (!token.value) {
+      return null;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const novel = await api.deleteNovel(token.value, novelId, {});
+      if (currentNovel.value?.id === novelId) {
+        currentNovel.value = null;
+        novelComments.value = [];
+      }
+      await loadNovels();
+      await loadFavorites();
+      await loadMyNovels();
+      await refreshWorkspace();
+      success.value = "作品已移入回收站。";
+      return novel;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "删除作品失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function deleteCharacterCard(projectId: number, cardId: number) {
+    if (!token.value) {
+      return null;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const card = await api.deleteCharacterCard(token.value, projectId, cardId, {});
+      await refreshWorkspace();
+      if (activeProject.value?.project.id === projectId) {
+        await selectProject(projectId, { showLoading: false, silent: true });
+      }
+      success.value = "人物卡已移入回收站。";
+      return card;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "删除人物卡失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function restoreTrashItem(itemId: number, itemType: RestoreTrashPayload["item_type"]) {
+    if (!token.value) {
+      return false;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      await api.restoreTrashItem(token.value, itemId, { item_type: itemType });
+      await refreshWorkspace();
+      await loadMyNovels();
+      success.value = "已恢复。";
+      return true;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "恢复失败。";
+      return false;
     } finally {
       loading.value = false;
     }
@@ -676,6 +835,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     token,
     currentUser,
     projects,
+    projectFolders,
+    trashItems,
     novels,
     favoriteNovels,
     myNovels,
@@ -700,7 +861,14 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     openNovel,
     submitNovelComment,
     selectProject,
+    refreshWorkspace,
     createProject,
+    createFolder,
+    moveProjectToFolder,
+    deleteProject,
+    deleteNovel,
+    deleteCharacterCard,
+    restoreTrashItem,
     updateProject,
     clearFeedback,
     addMemory,

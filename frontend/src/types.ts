@@ -38,6 +38,7 @@ export interface Project {
   style_profile: string;
   punctuation_rule: string;
   indexing_status: string;
+  folder_id?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -114,6 +115,31 @@ export interface ProjectDetailResponse {
   relationship_state_updates: RelationshipStateUpdate[];
   story_events: StoryEventItem[];
   world_perception_updates: WorldPerceptionUpdate[];
+}
+
+export interface ProjectFolder {
+  id: number;
+  name: string;
+  sort_order: number;
+  is_default: boolean;
+  project_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrashItem {
+  item_type: "project" | "novel" | "character_card";
+  item_id: number;
+  title: string;
+  subtitle: string;
+  deleted_at: string;
+  project_id?: number | null;
+}
+
+export interface MyWorkspaceResponse {
+  folders: ProjectFolder[];
+  projects: Project[];
+  trash: TrashItem[];
 }
 
 export interface IndexResponse {
@@ -197,6 +223,22 @@ export interface UpdateNovelPayload {
   summary: string;
   tagline: string;
   visibility: "public" | "private";
+}
+
+export interface CreateFolderPayload {
+  name: string;
+}
+
+export interface MoveProjectFolderPayload {
+  folder_id?: number | null;
+}
+
+export interface DeletePayload {
+  hard_delete?: boolean;
+}
+
+export interface RestoreTrashPayload {
+  item_type: "project" | "novel" | "character_card";
 }
 
 export interface AppendNovelChapterPayload {

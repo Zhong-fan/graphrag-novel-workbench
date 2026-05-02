@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,9 @@ from .contracts import (
     CharacterCardOut,
     CharacterCardUpdateRequest,
     CharacterStateUpdateOut,
+    DeleteCharacterCardRequest,
+    DeleteNovelRequest,
+    DeleteProjectRequest,
     FavoriteToggleResponse,
     GenerateRequest,
     GenerationOut,
@@ -36,6 +40,8 @@ from .contracts import (
     IndexResponse,
     LikeToggleResponse,
     LoginRequest,
+    MoveProjectFolderRequest,
+    MyWorkspaceOut,
     NovelCardOut,
     NovelChapterOut,
     NovelDetailOut,
@@ -44,15 +50,21 @@ from .contracts import (
     AppendNovelChapterRequest,
     NovelCommentCreateRequest,
     NovelCommentOut,
+    ProjectFolderCreateRequest,
+    ProjectFolderOut,
+    CharacterCardOut,
+    CharacterCardUpdateRequest,
     PublishNovelRequest,
     ProjectCreateRequest,
     ProjectDetailResponse,
     ProjectOut,
     ProjectUpdateRequest,
     RegisterRequest,
+    RestoreTrashItemRequest,
     SourceCreateRequest,
     SourceOut,
     StoryEventOut,
+    TrashItemOut,
     UpdateNovelChapterRequest,
     UpdateNovelRequest,
     UserOut,
@@ -76,6 +88,7 @@ from .models import (
     NovelFavorite,
     NovelLike,
     Project,
+    ProjectFolder,
     RelationshipStateUpdate,
     SourceDocument,
     StoryEvent,
@@ -95,7 +108,9 @@ def _username_to_internal_email(username: str) -> str:
 
 
 def _project_or_404(db: Session, user_id: int, project_id: int) -> Project:
-    project = db.scalar(select(Project).where(Project.id == project_id, Project.owner_id == user_id))
+    project = db.scalar(
+        select(Project).where(Project.id == project_id, Project.owner_id == user_id, Project.deleted_at.is_(None))
+    )
     if project is None:
         raise HTTPException(status_code=404, detail="项目不存在。")
     return project
@@ -117,7 +132,13 @@ def _mark_project_stale(project: Project) -> None:
 
 
 def _character_card_or_404(db: Session, project_id: int, card_id: int) -> CharacterCard:
-    card = db.scalar(select(CharacterCard).where(CharacterCard.project_id == project_id, CharacterCard.id == card_id))
+    card = db.scalar(
+        select(CharacterCard).where(
+            CharacterCard.project_id == project_id,
+            CharacterCard.id == card_id,
+            CharacterCard.deleted_at.is_(None),
+        )
+    )
     if card is None:
         raise HTTPException(status_code=404, detail="人物卡不存在。")
     return card
@@ -125,6 +146,85 @@ def _character_card_or_404(db: Session, project_id: int, card_id: int) -> Charac
 
 def _user_out(user: User) -> UserOut:
     return UserOut(id=user.id, username=user.display_name, email=user.email)
+
+
+def _ensure_default_folder(db: Session, user: User) -> ProjectFolder:
+    folder = db.scalar(
+        select(ProjectFolder).where(ProjectFolder.user_id == user.id, ProjectFolder.is_default.is_(True)).limit(1)
+    )
+    if folder is not None:
+        return folder
+
+    folder = ProjectFolder(user=user, name="默认文件夹", sort_order=0, is_default=True)
+    db.add(folder)
+    db.flush()
+    return folder
+
+
+def _folder_out(folder: ProjectFolder) -> ProjectFolderOut:
+    return ProjectFolderOut(
+        id=folder.id,
+        name=folder.name,
+        sort_order=folder.sort_order,
+        is_default=folder.is_default,
+        project_count=sum(1 for item in folder.projects if item.deleted_at is None),
+        created_at=folder.created_at,
+        updated_at=folder.updated_at,
+    )
+
+
+def _trash_items_for_user(db: Session, user_id: int) -> list[TrashItemOut]:
+    items: list[TrashItemOut] = []
+
+    deleted_projects = db.scalars(
+        select(Project).where(Project.owner_id == user_id, Project.deleted_at.is_not(None)).order_by(Project.deleted_at.desc())
+    ).all()
+    for item in deleted_projects:
+        items.append(
+            TrashItemOut(
+                item_type="project",
+                item_id=item.id,
+                title=item.title,
+                subtitle=item.genre,
+                deleted_at=item.deleted_at or item.updated_at,
+                project_id=item.id,
+            )
+        )
+
+    deleted_novels = db.scalars(
+        select(Novel).where(Novel.owner_id == user_id, Novel.deleted_at.is_not(None)).order_by(Novel.deleted_at.desc())
+    ).all()
+    for item in deleted_novels:
+        items.append(
+            TrashItemOut(
+                item_type="novel",
+                item_id=item.id,
+                title=item.title,
+                subtitle=item.genre,
+                deleted_at=item.deleted_at or item.updated_at,
+            )
+        )
+
+    deleted_cards = db.scalars(
+        select(CharacterCard)
+        .join(Project, CharacterCard.project_id == Project.id)
+        .where(Project.owner_id == user_id, CharacterCard.deleted_at.is_not(None))
+        .order_by(CharacterCard.deleted_at.desc())
+    ).all()
+    for item in deleted_cards:
+        items.append(
+            TrashItemOut(
+                item_type="character_card",
+                item_id=item.id,
+                title=item.name,
+                subtitle=item.story_role,
+                deleted_at=item.deleted_at or item.updated_at,
+                project_id=item.project_id,
+            )
+        )
+
+    items.sort(key=lambda item: item.deleted_at, reverse=True)
+    return items
 
 
 def _novel_excerpt(novel: Novel) -> str:
@@ -255,7 +355,7 @@ def _novel_viewable_or_404(db: Session, novel_id: int, current_user_id: int | No
             selectinload(Novel.favorites),
             selectinload(Novel.comments),
         )
-        .where(Novel.id == novel_id)
+        .where(Novel.id == novel_id, Novel.deleted_at.is_(None))
     )
     if novel is None:
         raise HTTPException(status_code=404, detail="作品不存在。")
@@ -274,7 +374,7 @@ def _novel_owned_or_404(db: Session, user_id: int, novel_id: int) -> Novel:
             selectinload(Novel.favorites),
             selectinload(Novel.comments),
         )
-        .where(Novel.id == novel_id, Novel.owner_id == user_id)
+        .where(Novel.id == novel_id, Novel.owner_id == user_id, Novel.deleted_at.is_(None))
     )
     if novel is None:
         raise HTTPException(status_code=404, detail="作品不存在或无权限。")
@@ -503,10 +603,56 @@ def create_app() -> FastAPI:
         db: Session = Depends(get_db),
         current_user: User = Depends(get_current_user),
     ) -> list[ProjectOut]:
+        _ensure_default_folder(db, current_user)
+        db.commit()
         projects = db.scalars(
-            select(Project).where(Project.owner_id == current_user.id).order_by(Project.updated_at.desc())
+            select(Project)
+            .where(Project.owner_id == current_user.id, Project.deleted_at.is_(None))
+            .order_by(Project.updated_at.desc())
         ).all()
         return [ProjectOut.model_validate(item) for item in projects]
+
+    @app.get("/api/me/workspace", response_model=MyWorkspaceOut)
+    def my_workspace(
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> MyWorkspaceOut:
+        default_folder = _ensure_default_folder(db, current_user)
+        projects = db.scalars(
+            select(Project)
+            .where(Project.owner_id == current_user.id, Project.deleted_at.is_(None))
+            .order_by(Project.updated_at.desc())
+        ).all()
+        folders = db.scalars(
+            select(ProjectFolder).where(ProjectFolder.user_id == current_user.id).order_by(ProjectFolder.sort_order.asc(), ProjectFolder.created_at.asc())
+        ).all()
+        for project in projects:
+            if project.folder_id is None:
+                project.folder = default_folder
+        db.commit()
+        return MyWorkspaceOut(
+            folders=[_folder_out(item) for item in folders],
+            projects=[ProjectOut.model_validate(item) for item in projects],
+            trash=_trash_items_for_user(db, current_user.id),
+        )
+
+    @app.post("/api/me/folders", response_model=ProjectFolderOut)
+    def create_project_folder(
+        payload: ProjectFolderCreateRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> ProjectFolderOut:
+        _ensure_default_folder(db, current_user)
+        name = payload.name.strip()
+        exists = db.scalar(select(ProjectFolder).where(ProjectFolder.user_id == current_user.id, ProjectFolder.name == name))
+        if exists is not None:
+            raise HTTPException(status_code=409, detail="文件夹名称已存在。")
+        max_order = db.scalar(select(ProjectFolder.sort_order).where(ProjectFolder.user_id == current_user.id).order_by(ProjectFolder.sort_order.desc()).limit(1))
+        folder = ProjectFolder(user=current_user, name=name, sort_order=(max_order or 0) + 1, is_default=False)
+        db.add(folder)
+        db.commit()
+        db.refresh(folder)
+        return _folder_out(folder)
 
     @app.post("/api/projects", response_model=ProjectOut)
     def create_project(
@@ -514,8 +660,10 @@ def create_app() -> FastAPI:
         db: Session = Depends(get_db),
         current_user: User = Depends(get_current_user),
     ) -> ProjectOut:
+        default_folder = _ensure_default_folder(db, current_user)
         project = Project(
             owner_id=current_user.id,
+            folder=default_folder,
             title=payload.title,
             genre=payload.genre,
             premise=payload.premise,
@@ -524,6 +672,28 @@ def create_app() -> FastAPI:
             style_profile=payload.style_profile,
         )
         db.add(project)
+        db.commit()
+        db.refresh(project)
+        return ProjectOut.model_validate(project)
+
+    @app.put("/api/projects/{project_id}/folder", response_model=ProjectOut)
+    def move_project_to_folder(
+        project_id: int,
+        payload: MoveProjectFolderRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> ProjectOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        folder = None
+        if payload.folder_id is None:
+            folder = _ensure_default_folder(db, current_user)
+        else:
+            folder = db.scalar(
+                select(ProjectFolder).where(ProjectFolder.user_id == current_user.id, ProjectFolder.id == payload.folder_id)
+            )
+            if folder is None:
+                raise HTTPException(status_code=404, detail="文件夹不存在。")
+        project.folder = folder
         db.commit()
         db.refresh(project)
         return ProjectOut.model_validate(project)
@@ -546,6 +716,56 @@ def create_app() -> FastAPI:
         db.commit()
         db.refresh(project)
         return ProjectOut.model_validate(project)
+
+    @app.delete("/api/projects/{project_id}", response_model=ProjectOut)
+    def delete_project(
+        project_id: int,
+        payload: DeleteProjectRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> ProjectOut:
+        project = db.scalar(select(Project).where(Project.id == project_id, Project.owner_id == current_user.id))
+        if project is None:
+            raise HTTPException(status_code=404, detail="项目不存在。")
+        if payload.hard_delete:
+            db.delete(project)
+            db.commit()
+            return ProjectOut.model_validate(project)
+        project.deleted_at = datetime.utcnow()
+        db.commit()
+        db.refresh(project)
+        return ProjectOut.model_validate(project)
+
+    @app.post("/api/trash/{item_id}/restore")
+    def restore_trash_item(
+        item_id: int,
+        payload: RestoreTrashItemRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> dict[str, str]:
+        if payload.item_type == "project":
+            item = db.scalar(select(Project).where(Project.id == item_id, Project.owner_id == current_user.id))
+            if item is None:
+                raise HTTPException(status_code=404, detail="项目不存在。")
+            item.deleted_at = None
+            if item.folder_id is None:
+                item.folder = _ensure_default_folder(db, current_user)
+        elif payload.item_type == "novel":
+            item = db.scalar(select(Novel).where(Novel.id == item_id, Novel.owner_id == current_user.id))
+            if item is None:
+                raise HTTPException(status_code=404, detail="作品不存在。")
+            item.deleted_at = None
+        else:
+            item = db.scalar(
+                select(CharacterCard)
+                .join(Project, CharacterCard.project_id == Project.id)
+                .where(CharacterCard.id == item_id, Project.owner_id == current_user.id)
+            )
+            if item is None:
+                raise HTTPException(status_code=404, detail="人物卡不存在。")
+            item.deleted_at = None
+        db.commit()
+        return {"status": "restored"}
 
     @app.get("/api/projects/{project_id}", response_model=ProjectDetailResponse)
     def project_detail(
@@ -578,7 +798,9 @@ def create_app() -> FastAPI:
         return ProjectDetailResponse(
             project=ProjectOut.model_validate(project),
             memories=[MemoryOut.model_validate(item) for item in project.memories],
-            character_cards=[CharacterCardOut.model_validate(item) for item in project.character_cards],
+            character_cards=[
+                CharacterCardOut.model_validate(item) for item in project.character_cards if item.deleted_at is None
+            ],
             sources=[SourceOut.model_validate(item) for item in project.source_documents],
             generations=[GenerationOut.model_validate(item) for item in generations],
             character_state_updates=[_character_state_out(item) for item in character_updates[:20]],
@@ -601,7 +823,7 @@ def create_app() -> FastAPI:
                 selectinload(Novel.favorites),
                 selectinload(Novel.comments),
             )
-            .where(Novel.visibility == "public")
+            .where(Novel.visibility == "public", Novel.deleted_at.is_(None))
             .order_by(Novel.updated_at.desc())
         ).unique().all()
         current_user_id = current_user.id if current_user is not None else None
@@ -634,7 +856,7 @@ def create_app() -> FastAPI:
             .where(NovelFavorite.user_id == current_user.id)
             .order_by(NovelFavorite.created_at.desc())
         ).all()
-        novels = [item.novel for item in favorites if item.novel.visibility == "public"]
+        novels = [item.novel for item in favorites if item.novel.visibility == "public" and item.novel.deleted_at is None]
         return [_novel_card_out(item, current_user_id=current_user.id) for item in novels]
 
     @app.get("/api/me/novels", response_model=list[NovelCardOut])
@@ -651,7 +873,7 @@ def create_app() -> FastAPI:
                 selectinload(Novel.favorites),
                 selectinload(Novel.comments),
             )
-            .where(Novel.owner_id == current_user.id)
+            .where(Novel.owner_id == current_user.id, Novel.deleted_at.is_(None))
             .order_by(Novel.updated_at.desc())
         ).unique().all()
         return [_novel_card_out(item, current_user_id=current_user.id) for item in novels]
@@ -843,6 +1065,36 @@ def create_app() -> FastAPI:
         db.refresh(novel)
         return _novel_detail_out(novel, current_user_id=current_user.id)
 
+    @app.delete("/api/novels/{novel_id}", response_model=NovelDetailOut)
+    def delete_novel(
+        novel_id: int,
+        payload: DeleteNovelRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> NovelDetailOut:
+        novel = db.scalar(
+            select(Novel)
+            .options(
+                selectinload(Novel.owner),
+                selectinload(Novel.chapters),
+                selectinload(Novel.likes),
+                selectinload(Novel.favorites),
+                selectinload(Novel.comments),
+            )
+            .where(Novel.id == novel_id, Novel.owner_id == current_user.id)
+        )
+        if novel is None:
+            raise HTTPException(status_code=404, detail="作品不存在。")
+        if payload.hard_delete:
+            result = _novel_detail_out(novel, current_user_id=current_user.id)
+            db.delete(novel)
+            db.commit()
+            return result
+        novel.deleted_at = datetime.utcnow()
+        db.commit()
+        db.refresh(novel)
+        return _novel_detail_out(novel, current_user_id=current_user.id)
+
     @app.post("/api/novels/{novel_id}/chapters/from-generation", response_model=NovelDetailOut)
     def append_novel_chapter_from_generation(
         novel_id: int,
@@ -953,6 +1205,30 @@ def create_app() -> FastAPI:
         card.personality = payload.personality.strip()
         card.story_role = payload.story_role.strip()
         card.background = payload.background.strip()
+        _mark_project_stale(project)
+        db.commit()
+        db.refresh(card)
+        return CharacterCardOut.model_validate(card)
+
+    @app.delete("/api/projects/{project_id}/character-cards/{card_id}", response_model=CharacterCardOut)
+    def delete_character_card(
+        project_id: int,
+        card_id: int,
+        payload: DeleteCharacterCardRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> CharacterCardOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        card = db.scalar(select(CharacterCard).where(CharacterCard.project_id == project.id, CharacterCard.id == card_id))
+        if card is None:
+            raise HTTPException(status_code=404, detail="人物卡不存在。")
+        if payload.hard_delete:
+            result = CharacterCardOut.model_validate(card)
+            db.delete(card)
+            _mark_project_stale(project)
+            db.commit()
+            return result
+        card.deleted_at = datetime.utcnow()
         _mark_project_stale(project)
         db.commit()
         db.refresh(card)
