@@ -2,8 +2,14 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 
+import ProfileSettingsPanel from "./components/workspace/ProfileSettingsPanel.vue";
+import NovelDetailPanel from "./components/workspace/NovelDetailPanel.vue";
+import NovelEditorPanel from "./components/workspace/NovelEditorPanel.vue";
+import NovelReaderPanel from "./components/workspace/NovelReaderPanel.vue";
+import StudioWorkspacePanel from "./components/workspace/StudioWorkspacePanel.vue";
+import WorkspaceSidebar from "./components/workspace/WorkspaceSidebar.vue";
 import { useWorkbenchStore } from "./stores/workbench";
-import type { CharacterCard, NovelCard, ProjectFolder, ProjectPayload, TrashItem } from "./types";
+import type { CharacterCard, NovelCard, ProjectPayload, TrashItem } from "./types";
 
 type ViewKey =
   | "home"
@@ -23,7 +29,6 @@ type ViewKey =
 
 const store = useWorkbenchStore();
 const {
-  bootstrap,
   captcha,
   currentUser,
   projects,
@@ -32,9 +37,7 @@ const {
   novels,
   favoriteNovels,
   myNovels,
-  profile,
   currentNovel,
-  novelComments,
   activeProject,
   currentGeneration,
   loading,
@@ -145,10 +148,10 @@ const searchedNovels = computed(() => {
   const keyword = novelSearch.value.trim().toLowerCase();
   return keyword ? novels.value.filter((novel) => matchesNovelSearch(novel, keyword)) : novels.value;
 });
-const sortedFolders = computed<ProjectFolder[]>(() =>
+const sortedFolders = computed(() =>
   [...projectFolders.value].sort((a, b) => a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at)),
 );
-const selectedWorkspaceFolder = computed<ProjectFolder | null>(() => {
+const selectedWorkspaceFolder = computed(() => {
   if (!sortedFolders.value.length) return null;
   return sortedFolders.value.find((item) => item.id === selectedWorkspaceFolderId.value) ?? sortedFolders.value[0] ?? null;
 });
@@ -718,13 +721,6 @@ watch(() => activeProject.value?.project.id, () => {
   }
 }, { immediate: true });
 
-watch(profile, (next) => {
-  if (!next) return;
-  profileForm.bio = next.bio ?? "";
-  profileForm.email = next.email ?? "";
-  profileForm.phone = next.phone ?? "";
-}, { immediate: true });
-
 watch(() => [authError.value, error.value, success.value], ([nextAuthError, nextError, nextSuccess]) => {
   if (feedbackTimer !== null) window.clearTimeout(feedbackTimer);
   if (nextAuthError || nextError || nextSuccess) {
@@ -997,10 +993,12 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
           </div>
           <nav class="sidebar-nav" aria-label="Primary">
             <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'home' }" @click="goToView('home')">首页</button>
-            <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'studio' }" @click="openWorkspace()">我的小说</button>
-            <div v-if="currentView === 'studio'" class="sidebar-nav__subtools">
-              <button class="ghost-button ghost-button--small" type="button" @click="showCreateFolder = !showCreateFolder">+ 文件夹</button>
-              <button class="ghost-button ghost-button--small" type="button" @click="toggleFolderPanel()">{{ folderPanelCollapsed ? "展开" : "收起" }}</button>
+            <div class="sidebar-nav__row">
+              <button class="sidebar-nav__item sidebar-nav__item--main" :class="{ 'sidebar-nav__item--active': currentView === 'studio' }" @click="openWorkspace()">我的小说</button>
+              <div v-if="currentView === 'studio'" class="sidebar-nav__inline-tools">
+                <button class="sidebar-nav__icon" type="button" @click="showCreateFolder = !showCreateFolder">+</button>
+                <button class="sidebar-nav__icon" type="button" @click="toggleFolderPanel()">{{ folderPanelCollapsed ? "∨" : "∧" }}</button>
+              </div>
             </div>
             <div v-if="currentView === 'studio' && !folderPanelCollapsed" class="folder-list">
               <button
@@ -1020,7 +1018,13 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
           </nav>
           <div class="sidebar__footer">
             <template v-if="isAuthenticated">
-              <span class="topbar__user">{{ currentUser?.username }}</span>
+              <div class="sidebar-user">
+                <div class="sidebar-user__avatar">{{ (currentUser?.username?.slice(0, 1) ?? "U").toUpperCase() }}</div>
+                <div class="sidebar-user__meta">
+                  <strong>{{ currentUser?.username }}</strong>
+                </div>
+              </div>
+              <button class="ghost-button ghost-button--small" @click="goToView('profile')">用户设置</button>
               <button class="ghost-button ghost-button--small" @click="store.logout()">退出</button>
             </template>
             <template v-else>
@@ -1164,6 +1168,24 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
                 </article>
               </div>
               <p v-else class="empty-text">回收站目前是空的。</p>
+            </section>
+          </template>
+
+          <template v-else-if="currentView === 'profile'">
+            <section class="panel panel--paper">
+              <div class="panel-heading">
+                <div>
+                  <p class="panel-heading__kicker">用户设置</p>
+                  <h2>{{ currentUser?.username ?? "未登录" }}</h2>
+                  <p class="panel-heading__desc">在这里维护你的简介、邮箱和联系方式。</p>
+                </div>
+              </div>
+              <form v-if="isAuthenticated" class="form-stack" @submit.prevent="submitProfile()">
+                <label class="field"><span>简介</span><textarea v-model="profileForm.bio" rows="4" /></label>
+                <label class="field"><span>Email</span><input v-model="profileForm.email" type="email" /></label>
+                <label class="field"><span>Phone</span><input v-model="profileForm.phone" /></label>
+                <button class="primary-button" :disabled="loading">保存资料</button>
+              </form>
             </section>
           </template>
 

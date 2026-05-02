@@ -1,0 +1,204 @@
+.feedback {
+  margin-bottom: var(--space-4);
+  padding: 0.9rem 1rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.feedback.error {
+  background: color-mix(in oklab, white 88%, var(--danger));
+  border-color: color-mix(in oklab, white 70%, var(--danger));
+  color: color-mix(in oklab, var(--danger) 74%, var(--ink));
+}
+
+.feedback.success {
+  background: color-mix(in oklab, white 90%, var(--success));
+  border-color: color-mix(in oklab, white 72%, var(--success));
+  color: color-mix(in oklab, var(--success) 72%, var(--ink));
+}
+
+.toast-stack {
+  position: fixed;
+  top: 22px;
+  right: 22px;
+  z-index: 50;
+  display: grid;
+  gap: 10px;
+  width: min(380px, calc(100vw - 32px));
+}
+
+.toast {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 0.9rem 1rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(14px);
+}
+
+.toast span {
+  line-height: 1.55;
+}
+
+.toast button {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  color: currentColor;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.toast--error {
+  background: color-mix(in oklab, white 82%, var(--danger));
+  border-color: color-mix(in oklab, white 62%, var(--danger));
+  color: color-mix(in oklab, var(--danger) 76%, var(--ink));
+}
+
+.toast--success {
+  background: color-mix(in oklab, white 84%, var(--success));
+  border-color: color-mix(in oklab, white 64%, var(--success));
+  color: color-mix(in oklab, var(--success) 74%, var(--ink));
+}
+
+.field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.field span {
+  font-size: 0.87rem;
+  color: var(--ink-soft);
+}
+
+.field input,
+.field textarea,
+.field select {
+  width: 100%;
+  padding: 0.82rem 0.95rem;
+  border: 1px solid rgba(255, 255, 255, 0.74);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  outline: none;
+  transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.field input:focus,
+.field textarea:focus,
+.field select:focus {
+  border-color: rgba(121, 183, 238, 0.72);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 0 0 4px rgba(121, 183, 238, 0.16);
+}
+
+.field textarea {
+  min-height: 120px;
+  resize: vertical;
+  line-height: 1.65;
+}
+
+.password-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+}
+
+.password-field input {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.password-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-left: 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: color-mix(in oklab, white 78%, var(--blue-soft));
+  color: var(--ink-soft);
+}
+
+.captcha-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.captcha-box {
+  padding: 0.82rem 0.95rem;
+  border: 1px dashed rgba(255, 255, 255, 0.74);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.66);
+  font-family: var(--font-display);
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.primary-button,
+.ghost-button,
+.project-item,
+.timeline-item {
+  border: 1px solid transparent;
+}
+
+.primary-button,
+.ghost-button {
+  padding: 0.82rem 1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.primary-button {
+  color: oklch(99% 0.004 20);
+  background: linear-gradient(135deg, color-mix(in oklab, var(--rose-strong) 88%, white), color-mix(in oklab, var(--rose) 70%, white));
+  box-shadow: 0 10px 22px color-mix(in oklab, var(--rose) 22%, transparent);
+}
+
+.primary-button--compact,
+.ghost-button--small {
+  padding-inline: 0.95rem;
+  white-space: nowrap;
+}
+
+.ghost-button {
+  color: color-mix(in oklab, var(--rose-strong) 52%, var(--ink));
+  background: rgba(255, 255, 255, 0.62);
+  border-color: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.primary-button,
+.ghost-button,
+.project-item,
+.timeline-item,
+.memory-card,
+.novel-card {
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+
+.primary-button:hover:not(:disabled),
+.ghost-button:hover:not(:disabled),
+.project-item:hover,
+.timeline-item:hover,
+.memory-card:hover,
+.novel-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.primary-button:disabled,
+.ghost-button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
