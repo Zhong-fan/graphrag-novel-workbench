@@ -7,6 +7,8 @@ import type {
   CaptchaChallenge,
   CharacterCard,
   GenerationItem,
+  GenerationProgress,
+  ProjectChapterPayload,
   ProjectFolder,
   NovelCard,
   NovelComment,
@@ -20,6 +22,7 @@ import type {
   CharacterCardPayload,
   UpdateNovelPayload,
   AppendNovelChapterPayload,
+  UpdateProjectChapterPayload,
   UpdateNovelChapterPayload,
   User,
   UserProfile,
@@ -31,6 +34,7 @@ type SelectProjectOptions = {
 };
 
 const tokenKey = "graph_mvp_token";
+const graphPrepareMessage = "GraphRAG 输入已准备好，请先检查整理结果，再决定是否开始索引。";
 const indexPendingMessage = "索引任务已提交，正在等待项目进入可写作状态。";
 const indexReadyMessage = "GraphRAG 索引已完成，现在可以开始生成内容。";
 const pollDelayMs = 3000;
@@ -51,11 +55,18 @@ export const useWorkbenchStore = defineStore("workbench", () => {
   const novelComments = ref<NovelComment[]>([]);
   const activeProject = ref<ProjectDetailResponse | null>(null);
   const currentGeneration = ref<GenerationItem | null>(null);
+  const generationProgress = ref<GenerationProgress>({
+    stage: "idle",
+    message: "",
+    trace: {},
+    logs: [],
+  });
   const loading = ref(false);
   const error = ref("");
   const success = ref("");
 
   let projectPollTimer: number | null = null;
+  let generationProgressTimer: number | null = null;
 
   const isAuthenticated = computed(() => Boolean(token.value && currentUser.value));
 
@@ -64,6 +75,28 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       window.clearTimeout(projectPollTimer);
       projectPollTimer = null;
     }
+  }
+
+  function stopGenerationProgressPolling() {
+    if (generationProgressTimer !== null) {
+      window.clearInterval(generationProgressTimer);
+      generationProgressTimer = null;
+    }
+  }
+
+  function startGenerationProgressPolling(projectId: number) {
+    stopGenerationProgressPolling();
+    generationProgressTimer = window.setInterval(() => {
+      if (!token.value) return;
+      void api
+        .generationProgress(token.value, projectId)
+        .then((progress) => {
+          generationProgress.value = progress;
+        })
+        .catch(() => {
+          // The main generate request owns user-facing errors.
+        });
+    }, 1500);
   }
 
   function scheduleProjectPolling(projectId: number) {
@@ -134,6 +167,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     loading.value = true;
     error.value = "";
     success.value = "";
+    generationProgress.value = { stage: "start", message: "开始生成", trace: {}, logs: [] };
     try {
       const response = await api.register(payload);
       setToken(response.token);
@@ -148,6 +182,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       await refreshCaptcha();
       error.value = err instanceof Error ? err.message : "Registration failed.";
     } finally {
+      stopGenerationProgressPolling();
       loading.value = false;
     }
   }
@@ -388,6 +423,46 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
+  async function createProjectChapter(payload: ProjectChapterPayload) {
+    if (!token.value || !activeProject.value) {
+      return null;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const chapter = await api.createProjectChapter(token.value, activeProject.value.project.id, payload);
+      await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
+      success.value = "章节已创建。";
+      return chapter;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "创建章节失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function updateProjectChapter(chapterId: number, payload: UpdateProjectChapterPayload) {
+    if (!token.value || !activeProject.value) {
+      return null;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const chapter = await api.updateProjectChapter(token.value, activeProject.value.project.id, chapterId, payload);
+      await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
+      success.value = "章节设定已保存。";
+      return chapter;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "保存章节设定失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
   function clearFeedback() {
     error.value = "";
     success.value = "";
@@ -483,7 +558,46 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
+  async function prepareGraphReview() {
+    if (!token.value || !activeProject.value) {
+      return;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const review = await api.prepareGraphReview(token.value, activeProject.value.project.id);
+      activeProject.value.graphrag_review = review;
+      await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
+      success.value = graphPrepareMessage;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "准备 GraphRAG 预览失败。";
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function updateGraphReviewFile(filename: string, content: string) {
+    if (!token.value || !activeProject.value) {
+      return;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const review = await api.updateGraphReviewFile(token.value, activeProject.value.project.id, filename, { content });
+      activeProject.value.graphrag_review = review;
+      await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
+      success.value = "GraphRAG 输入文件已保存，可以继续检查后再启动索引。";
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "保存 GraphRAG 输入文件失败。";
+    } finally {
+      loading.value = false;
+    }
+  }
+
   async function generate(payload: {
+    chapter_id: number;
     prompt: string;
     search_method: string;
     response_type: string;
@@ -498,12 +612,41 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     loading.value = true;
     error.value = "";
     success.value = "";
+    generationProgress.value = { stage: "start", message: "开始生成", trace: {}, logs: [] };
+    startGenerationProgressPolling(activeProject.value.project.id);
     try {
       currentGeneration.value = await api.generate(token.value, activeProject.value.project.id, payload);
       await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
+      generationProgress.value = { ...generationProgress.value, stage: "done", message: "生成流程完成" };
       success.value = "新内容已生成。";
     } catch (err) {
+      try {
+        if (token.value && activeProject.value) {
+          generationProgress.value = await api.generationProgress(token.value, activeProject.value.project.id);
+        }
+      } catch {
+        // Keep the original generate error visible.
+      }
       error.value = err instanceof Error ? err.message : "生成失败。";
+    } finally {
+      stopGenerationProgressPolling();
+      loading.value = false;
+    }
+  }
+
+  async function continueGeneration(generationId: number) {
+    if (!token.value || !activeProject.value) {
+      return;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      currentGeneration.value = await api.continueGeneration(token.value, activeProject.value.project.id, generationId);
+      await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
+      success.value = "草稿后续处理已完成。";
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "继续处理失败。";
     } finally {
       loading.value = false;
     }
@@ -845,6 +988,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     novelComments,
     activeProject,
     currentGeneration,
+    generationProgress,
     loading,
     error,
     success,
@@ -870,13 +1014,18 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     deleteCharacterCard,
     restoreTrashItem,
     updateProject,
+    createProjectChapter,
+    updateProjectChapter,
     clearFeedback,
     addMemory,
     addCharacterCard,
     updateCharacterCard,
     addSource,
+    prepareGraphReview,
+    updateGraphReviewFile,
     indexProject,
     generate,
+    continueGeneration,
     toggleFavoriteNovel,
     toggleLikeNovel,
     publishNovelFromGeneration,

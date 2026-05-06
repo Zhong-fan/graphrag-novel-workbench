@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import math
-import os
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -10,14 +9,11 @@ from typing import Any
 from graphrag.config.enums import ModelType
 from graphrag.language_model.factory import ModelFactory
 
+from .config import load_settings
+
 
 def local_embeddings_enabled() -> bool:
-    return os.getenv("GRAPH_MVP_LOCAL_EMBEDDINGS", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return load_settings().graphrag_local_embeddings
 
 
 @dataclass

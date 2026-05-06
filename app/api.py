@@ -4,6 +4,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,6 +37,10 @@ from .contracts import (
     FavoriteToggleResponse,
     GenerateRequest,
     GenerationOut,
+    GenerationProgressOut,
+    GraphReviewFileOut,
+    GraphReviewFileUpdateRequest,
+    GraphReviewOut,
     IndexRequest,
     IndexResponse,
     LikeToggleResponse,
@@ -55,6 +60,9 @@ from .contracts import (
     CharacterCardOut,
     CharacterCardUpdateRequest,
     PublishNovelRequest,
+    ProjectChapterCreateRequest,
+    ProjectChapterOut,
+    ProjectChapterUpdateRequest,
     ProjectCreateRequest,
     ProjectDetailResponse,
     ProjectOut,
@@ -88,6 +96,7 @@ from .models import (
     NovelFavorite,
     NovelLike,
     Project,
+    ProjectChapter,
     ProjectFolder,
     RelationshipStateUpdate,
     SourceDocument,
@@ -99,6 +108,14 @@ from .models import (
 from .story_service import StoryGenerationService
 
 logger = logging.getLogger(__name__)
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _china_timestamp() -> str:
+    return datetime.now(CHINA_TZ).isoformat(timespec="seconds")
+
+
+GENERATION_PROGRESS: dict[int, dict[str, object]] = {}
 
 
 def _username_to_internal_email(username: str) -> str:
@@ -116,6 +133,18 @@ def _project_or_404(db: Session, user_id: int, project_id: int) -> Project:
     return project
 
 
+def _project_chapter_or_404(db: Session, project_id: int, chapter_id: int) -> ProjectChapter:
+    chapter = db.scalar(
+        select(ProjectChapter).where(
+            ProjectChapter.project_id == project_id,
+            ProjectChapter.id == chapter_id,
+        )
+    )
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="章节不存在。")
+    return chapter
+
+
 def _workspace_record(db: Session, project: Project, workspace_path: Path) -> GraphWorkspace:
     if project.graph_workspace is not None:
         return project.graph_workspace
@@ -129,6 +158,33 @@ def _mark_project_stale(project: Project) -> None:
     project.indexing_status = "stale"
     if project.graph_workspace is not None:
         project.graph_workspace.neo4j_sync_status = "stale"
+
+
+def _graph_review_out(project: Project) -> GraphReviewOut | None:
+    record = project.graph_workspace
+    if record is None:
+        return None
+    workspace = Path(record.workspace_path)
+    settings = load_settings()
+    service = GraphRAGService(settings)
+    if not (workspace / "input").exists():
+        return GraphReviewOut(
+            workspace_path=record.workspace_path,
+            input_files=[],
+            files=[],
+            preview_text="",
+            neo4j_sync_status=record.neo4j_sync_status,
+            last_indexed_at=record.last_indexed_at,
+        )
+    payload = service.review_payload(workspace)
+    return GraphReviewOut(
+        workspace_path=record.workspace_path,
+        input_files=payload["input_files"],
+        files=[GraphReviewFileOut(**item) for item in payload["files"]],
+        preview_text=payload["preview_text"],
+        neo4j_sync_status=record.neo4j_sync_status,
+        last_indexed_at=record.last_indexed_at,
+    )
 
 
 def _character_card_or_404(db: Session, project_id: int, card_id: int) -> CharacterCard:
@@ -241,6 +297,8 @@ def _novel_card_out(novel: Novel, current_user_id: int | None = None) -> NovelCa
     like_user_ids = {item.user_id for item in novel.likes}
     return NovelCardOut(
         id=novel.id,
+        project_id=novel.project_id,
+        source_generation_id=novel.source_generation_id,
         title=novel.title,
         author=novel.author_name,
         summary=novel.summary,
@@ -345,6 +403,88 @@ def _generation_or_404(db: Session, project_id: int, generation_id: int) -> Gene
     return generation
 
 
+def _snapshot_with_process(evolution_payload, process: dict) -> str:
+    return json.dumps(
+        {
+            "process": process,
+            "characters": [
+                {
+                    "character_name": item.character_name,
+                    "emotion_state": item.emotion_state,
+                    "current_goal": item.current_goal,
+                    "self_view_shift": item.self_view_shift,
+                    "public_perception": item.public_perception,
+                    "summary": item.summary,
+                }
+                for item in evolution_payload.characters
+            ],
+            "relationships": [
+                {
+                    "source_character": item.source_character,
+                    "target_character": item.target_character,
+                    "change_type": item.change_type,
+                    "direction": item.direction,
+                    "intensity": item.intensity,
+                    "summary": item.summary,
+                }
+                for item in evolution_payload.relationships
+            ],
+            "events": [
+                {
+                    "title": item.title,
+                    "summary": item.summary,
+                    "impact_summary": item.impact_summary,
+                    "participants": item.participants,
+                    "location_hint": item.location_hint,
+                }
+                for item in evolution_payload.events
+            ],
+            "world_updates": [
+                {
+                    "subject_name": item.subject_name,
+                    "observer_group": item.observer_group,
+                    "direction": item.direction,
+                    "change_summary": item.change_summary,
+                }
+                for item in evolution_payload.world_updates
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+def _build_generation_trace(
+    *,
+    project: Project,
+    project_chapter: ProjectChapter,
+    payload: GenerateRequest,
+) -> dict[str, object]:
+    return {
+        "project": {
+            "id": project.id,
+            "title": project.title,
+            "genre": project.genre,
+        },
+        "chapter": {
+            "id": project_chapter.id,
+            "chapter_no": project_chapter.chapter_no,
+            "title": project_chapter.title,
+            "premise": project_chapter.premise,
+        },
+        "request": {
+            "prompt": payload.prompt,
+            "search_method": payload.search_method,
+            "response_type": payload.response_type,
+            "use_global_search": payload.use_global_search,
+            "use_scene_card": payload.use_scene_card,
+            "use_refiner": payload.use_refiner,
+            "write_evolution": payload.write_evolution,
+        },
+        "context": {},
+        "steps": {},
+    }
+
+
 def _novel_viewable_or_404(db: Session, novel_id: int, current_user_id: int | None = None) -> Novel:
     novel = db.scalar(
         select(Novel)
@@ -382,10 +522,6 @@ def _novel_owned_or_404(db: Session, user_id: int, novel_id: int) -> Novel:
 
 
 def _ensure_seed_novels(db: Session) -> None:
-    published_exists = db.scalar(select(Novel.id).where(Novel.visibility == "public").limit(1))
-    if published_exists is not None:
-        return
-
     seed_user = db.scalar(select(User).where(User.display_name == "书城编辑部"))
     if seed_user is None:
         password_hash, password_salt = hash_password("SeedUser123")
@@ -400,57 +536,86 @@ def _ensure_seed_novels(db: Session) -> None:
 
     seed_payloads = [
         {
-            "title": "雨停之前的十分钟",
+            "title": "晚一点下雨的城市",
             "genre": "都市情感",
-            "tagline": "高架桥下的重逢，像一场迟来的告白。",
-            "summary": "一场暴雨把多年未见的两个人重新推回同一片屋檐下。",
-            "content": "雨水从广告牌边缘一滴一滴落下来，她撑着伞站在便利店门口，看见那个人从街对面跑来，像从很多年前的傍晚里穿出来。",
+            "tagline": "天气预报总在推迟，很多没说出口的话也是。",
+            "summary": "回到旧城后的那个夏天，她在反复延后的雨里，再次遇见多年未见的人。",
+            "content": "傍晚的风先一步穿过高架桥底，把便利店门口的塑料帘吹得轻轻作响。她站在檐下等雨，看见街对面有人沿着亮起来的斑马线慢慢走近，像从很久以前那段并不清晰的夏天里重新显影出来。",
         },
         {
-            "title": "深蓝地铁终点站",
+            "title": "海雾停在末班车后",
             "genre": "轻科幻",
-            "tagline": "所有错过的人，都在最后一站留下回声。",
-            "summary": "一列地铁在城市深夜尽头缓缓停下，把遗失的记忆推回现实。",
-            "content": "列车驶入终点站时，车窗外的城市灯光像浸在海里。她听见广播报站，却突然觉得这声音像在叫很久以前的自己。",
+            "tagline": "有些记忆不像闪回，更像列车进站前玻璃上的一层雾。",
+            "summary": "深夜地铁停进终点站时，一个总在同一节车厢出现的陌生人，开始把她带回一段被自己主动忘掉的过去。",
+            "content": "列车减速时，车窗外的灯光被潮湿空气晕开，远远看去像浮在海面上。广播报出终点站名，她抬起头，正好看见对面玻璃里那个人的倒影，安静得像已经在那里等了很多天。",
         },
         {
-            "title": "春天先路过阳台",
+            "title": "春天先落在阳台上",
             "genre": "治愈日常",
-            "tagline": "两个人和一盆快要枯萎的栀子花，慢慢学会重新生活。",
-            "summary": "一次普通的照料，让两个人重新学会把生活扶正。",
-            "content": "清晨六点，阳光落在洗净的玻璃杯上，像把整个房间擦亮了一遍。她忽然想起，已经很久没有认真看过窗外。",
+            "tagline": "生活没有一下子变好，只是光重新照进了房间。",
+            "summary": "搬进旧公寓后，她和隔壁安静的住户因为轮流照看一排植物，慢慢把各自散乱的生活重新扶正。",
+            "content": "清晨六点多，阳光先落在阳台边缘，再慢慢移到洗净的玻璃杯上。她给土有些发硬的栀子浇水时，隔壁窗户正好被推开，风带来一点潮湿的青草味，整栋楼像因此轻了一些。",
         },
         {
-            "title": "夏夜失物招领",
+            "title": "夏夜失物招领处",
             "genre": "青春悬疑",
-            "tagline": "有人在失物招领处寄存了一封没有收件人的信。",
-            "summary": "一封没有署名的信，把平静夏夜撕开了一道口子。",
-            "content": "他把信封翻过来时，封口处还带着一点潮湿，像刚从河边的风里带回来。没有名字，没有地址，只有一句手写的『如果你看见月亮，请替我保密。』",
+            "tagline": "没有署名的信，比大声说出口的话更让人无法回避。",
+            "summary": "暑假在车站做值班志愿者时，他收到一封存放在失物招领处、却没有收件人的信，信里的线索把几个熟悉的人重新连到了一起。",
+            "content": "他把那只浅灰色信封拿起来时，纸面还带着一点夜风留下的潮气。候车厅已经没有多少人，顶灯把地砖照得发白，只有信封背面那行很轻的字在灯下显得格外清楚: 如果你今晚看见月亮，请先不要告诉别人。",
         },
     ]
 
     for idx, item in enumerate(seed_payloads, start=1):
-        novel = Novel(
-            owner=seed_user,
-            author_name=seed_user.display_name,
-            title=item["title"],
-            summary=item["summary"],
-            genre=item["genre"],
-            tagline=item["tagline"],
-            status="published",
-            visibility="public",
-        )
-        db.add(novel)
-        db.flush()
-        db.add(
-            NovelChapter(
-                novel=novel,
-                title=f"第{idx}章",
-                summary=item["summary"],
-                content=item["content"],
-                chapter_no=1,
+        novel = db.scalar(
+            select(Novel).where(
+                Novel.owner_id == seed_user.id,
+                Novel.title == item["title"],
+                Novel.visibility == "public",
+                Novel.deleted_at.is_(None),
             )
         )
+        if novel is None:
+            novel = Novel(
+                owner=seed_user,
+                author_name=seed_user.display_name,
+                title=item["title"],
+                summary=item["summary"],
+                genre=item["genre"],
+                tagline=item["tagline"],
+                status="published",
+                visibility="public",
+            )
+            db.add(novel)
+            db.flush()
+        else:
+            novel.author_name = seed_user.display_name
+            novel.summary = item["summary"]
+            novel.genre = item["genre"]
+            novel.tagline = item["tagline"]
+            novel.status = "published"
+            novel.visibility = "public"
+            novel.deleted_at = None
+
+        chapter = db.scalar(
+            select(NovelChapter).where(
+                NovelChapter.novel_id == novel.id,
+                NovelChapter.chapter_no == 1,
+            )
+        )
+        if chapter is None:
+            db.add(
+                NovelChapter(
+                    novel=novel,
+                    title=f"第{idx}章",
+                    summary=item["summary"],
+                    content=item["content"],
+                    chapter_no=1,
+                )
+            )
+        else:
+            chapter.title = f"第{idx}章"
+            chapter.summary = item["summary"]
+            chapter.content = item["content"]
     db.commit()
 
 
@@ -666,7 +831,6 @@ def create_app() -> FastAPI:
             folder=default_folder,
             title=payload.title,
             genre=payload.genre,
-            premise=payload.premise,
             world_brief=payload.world_brief,
             writing_rules=payload.writing_rules,
             style_profile=payload.style_profile,
@@ -708,7 +872,6 @@ def create_app() -> FastAPI:
         project = _project_or_404(db, current_user.id, project_id)
         project.title = payload.title.strip()
         project.genre = payload.genre.strip()
-        project.premise = payload.premise.strip()
         project.world_brief = payload.world_brief.strip()
         project.writing_rules = payload.writing_rules.strip()
         project.style_profile = payload.style_profile
@@ -716,6 +879,49 @@ def create_app() -> FastAPI:
         db.commit()
         db.refresh(project)
         return ProjectOut.model_validate(project)
+
+    @app.post("/api/projects/{project_id}/chapters", response_model=ProjectChapterOut)
+    def create_project_chapter(
+        project_id: int,
+        payload: ProjectChapterCreateRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> ProjectChapterOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        chapter_no = payload.chapter_no or (max((item.chapter_no for item in project.project_chapters), default=0) + 1)
+        if any(item.chapter_no == chapter_no for item in project.project_chapters):
+            raise HTTPException(status_code=409, detail=f"第 {chapter_no} 章已经存在。")
+        chapter = ProjectChapter(
+            project=project,
+            title=payload.title.strip(),
+            premise=payload.premise.strip(),
+            chapter_no=chapter_no,
+        )
+        db.add(chapter)
+        _mark_project_stale(project)
+        db.commit()
+        db.refresh(chapter)
+        return ProjectChapterOut.model_validate(chapter)
+
+    @app.put("/api/projects/{project_id}/chapters/{chapter_id}", response_model=ProjectChapterOut)
+    def update_project_chapter(
+        project_id: int,
+        chapter_id: int,
+        payload: ProjectChapterUpdateRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> ProjectChapterOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        chapter = _project_chapter_or_404(db, project.id, chapter_id)
+        if any(item.id != chapter.id and item.chapter_no == payload.chapter_no for item in project.project_chapters):
+            raise HTTPException(status_code=409, detail=f"第 {payload.chapter_no} 章已经存在。")
+        chapter.title = payload.title.strip()
+        chapter.premise = payload.premise.strip()
+        chapter.chapter_no = payload.chapter_no
+        _mark_project_stale(project)
+        db.commit()
+        db.refresh(chapter)
+        return ProjectChapterOut.model_validate(chapter)
 
     @app.delete("/api/projects/{project_id}", response_model=ProjectOut)
     def delete_project(
@@ -742,7 +948,7 @@ def create_app() -> FastAPI:
         payload: RestoreTrashItemRequest,
         db: Session = Depends(get_db),
         current_user: User = Depends(get_current_user),
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         if payload.item_type == "project":
             item = db.scalar(select(Project).where(Project.id == item_id, Project.owner_id == current_user.id))
             if item is None:
@@ -797,12 +1003,16 @@ def create_app() -> FastAPI:
         ).all()
         return ProjectDetailResponse(
             project=ProjectOut.model_validate(project),
+            project_chapters=[
+                ProjectChapterOut.model_validate(item) for item in sorted(project.project_chapters, key=lambda chapter: chapter.chapter_no)
+            ],
             memories=[MemoryOut.model_validate(item) for item in project.memories],
             character_cards=[
                 CharacterCardOut.model_validate(item) for item in project.character_cards if item.deleted_at is None
             ],
             sources=[SourceOut.model_validate(item) for item in project.source_documents],
             generations=[GenerationOut.model_validate(item) for item in generations],
+            graphrag_review=_graph_review_out(project),
             character_state_updates=[_character_state_out(item) for item in character_updates[:20]],
             relationship_state_updates=[_relationship_state_out(item) for item in relationship_updates[:20]],
             story_events=[_story_event_out(item) for item in story_events[:20]],
@@ -1004,10 +1214,15 @@ def create_app() -> FastAPI:
         current_user: User = Depends(get_current_user),
     ) -> NovelDetailOut:
         project = _project_or_404(db, current_user.id, payload.project_id)
+        project_chapter = _project_chapter_or_404(db, project.id, payload.project_chapter_id)
         generation = _generation_or_404(db, project.id, payload.generation_id)
+        if generation.project_chapter_id != project_chapter.id:
+            raise HTTPException(status_code=409, detail="Generation does not belong to the selected project chapter.")
 
         novel = Novel(
             owner=current_user,
+            project=project,
+            source_generation=generation,
             author_name=payload.author_name.strip(),
             title=payload.title.strip(),
             summary=payload.summary.strip() or generation.summary,
@@ -1104,7 +1319,12 @@ def create_app() -> FastAPI:
     ) -> NovelDetailOut:
         novel = _novel_owned_or_404(db, current_user.id, novel_id)
         project = _project_or_404(db, current_user.id, payload.project_id)
+        if novel.project_id is not None and novel.project_id != project.id:
+            raise HTTPException(status_code=409, detail="Novel does not belong to the selected project.")
+        project_chapter = _project_chapter_or_404(db, project.id, payload.project_chapter_id)
         generation = _generation_or_404(db, project.id, payload.generation_id)
+        if generation.project_chapter_id != project_chapter.id:
+            raise HTTPException(status_code=409, detail="Generation does not belong to the selected project chapter.")
         next_chapter_no = payload.chapter_no or max((item.chapter_no for item in novel.chapters), default=0) + 1
         if any(item.chapter_no == next_chapter_no for item in novel.chapters):
             raise HTTPException(status_code=409, detail=f"第 {next_chapter_no} 章已经存在。")
@@ -1278,6 +1498,61 @@ def create_app() -> FastAPI:
             neo4j_sync_status=record.neo4j_sync_status,
         )
 
+    @app.post("/api/projects/{project_id}/graphrag/prepare-review", response_model=GraphReviewOut)
+    def prepare_graphrag_review(
+        project_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> GraphReviewOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        graphrag = GraphRAGService(settings)
+        workspace = graphrag.prepare_project_inputs(
+            project,
+            list(project.memories),
+            list(project.source_documents),
+            character_cards=[item for item in project.character_cards if item.deleted_at is None],
+            character_updates=list(project.character_state_updates),
+            relationship_updates=list(project.relationship_state_updates),
+            story_events=list(project.story_events),
+            world_updates=list(project.world_perception_updates),
+        )
+        record = _workspace_record(db, project, workspace)
+        record.workspace_path = str(workspace)
+        if record.neo4j_sync_status == "idle":
+            record.neo4j_sync_status = "stale"
+        db.commit()
+        db.refresh(project)
+        review = _graph_review_out(project)
+        if review is None:
+            raise HTTPException(status_code=500, detail="GraphRAG 预览生成失败。")
+        return review
+
+    @app.put("/api/projects/{project_id}/graphrag/files/{filename}", response_model=GraphReviewOut)
+    def update_graphrag_review_file(
+        project_id: int,
+        filename: str,
+        payload: GraphReviewFileUpdateRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> GraphReviewOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        record = project.graph_workspace
+        if record is None:
+            raise HTTPException(status_code=404, detail="GraphRAG 工作区不存在，请先准备预览。")
+        workspace = Path(record.workspace_path)
+        target = workspace / "input" / filename
+        if not target.exists() or target.suffix != ".txt":
+            raise HTTPException(status_code=404, detail="目标输入文件不存在。")
+        target.write_text(payload.content.strip() + "\n", encoding="utf-8")
+        record.neo4j_sync_status = "stale"
+        project.indexing_status = "stale"
+        db.commit()
+        db.refresh(project)
+        review = _graph_review_out(project)
+        if review is None:
+            raise HTTPException(status_code=500, detail="GraphRAG 预览刷新失败。")
+        return review
+
     @app.post("/api/projects/{project_id}/generate", response_model=GenerationOut)
     def generate(
         project_id: int,
@@ -1285,7 +1560,39 @@ def create_app() -> FastAPI:
         db: Session = Depends(get_db),
         current_user: User = Depends(get_current_user),
     ) -> GenerationOut:
+        trace: dict[str, object] = {}
+        logs: list[dict[str, object]] = []
+
+        def set_progress(
+            stage: str,
+            message: str,
+            *,
+            level: str = "info",
+            details: dict[str, object] | None = None,
+        ) -> None:
+            entry = {
+                "timestamp": _china_timestamp(),
+                "stage": stage,
+                "level": level,
+                "message": message,
+                "details": details or {},
+            }
+            logs.append(entry)
+            GENERATION_PROGRESS[current_user.id] = {"stage": stage, "message": message, "trace": trace, "logs": logs}
+            log_method = logger.warning if level == "warning" else logger.error if level == "error" else logger.info
+            log_method(
+                "Generate progress updated: project=%s chapter=%s user=%s stage=%s message=%s",
+                project_id,
+                payload.chapter_id,
+                current_user.id,
+                stage,
+                message,
+            )
+
         project = _project_or_404(db, current_user.id, project_id)
+        project_chapter = _project_chapter_or_404(db, project.id, payload.chapter_id)
+        set_progress("start", "开始生成")
+        logger.info("Generate started: project=%s chapter=%s", project.id, project_chapter.id)
 
         graphrag = GraphRAGService(settings)
         can_use_retrieval = project.indexing_status == "ready"
@@ -1301,6 +1608,14 @@ def create_app() -> FastAPI:
         global_result = None
         if payload.use_global_search and can_use_retrieval:
             global_result = graphrag.query(project, payload.prompt, "global", payload.response_type)
+        logger.info(
+            "Generate retrieval completed: project=%s chapter=%s retrieval=%s global=%s",
+            project.id,
+            project_chapter.id,
+            "graphrag" if can_use_retrieval else "direct",
+            bool(global_result),
+        )
+        set_progress("retrieval", "参考资料已处理" if can_use_retrieval else "资料库未就绪，直接生成")
         recent_character_updates = db.scalars(
             select(CharacterStateUpdate)
             .where(CharacterStateUpdate.project_id == project.id)
@@ -1362,24 +1677,41 @@ def create_app() -> FastAPI:
             )
 
         writer = StoryGenerationService(settings)
-        title, summary, content = writer.generate(
-            project_title=project.title,
-            genre=project.genre,
-            premise=project.premise,
-            world_brief=project.world_brief,
-            writing_rules=project.writing_rules,
-            style_profile=project.style_profile,
-            user_prompt=payload.prompt,
-            scene_card=scene_card,
-            memories=[
-                {"title": memory.title, "content": memory.content}
-                for memory in sorted(project.memories, key=lambda item: item.importance, reverse=True)
-            ],
-            use_refiner=payload.use_refiner,
-        )
+        try:
+            logger.info("Generate draft writing started: project=%s chapter=%s", project.id, project_chapter.id)
+            title, summary, content = writer.generate(
+                project_title=project.title,
+                genre=project.genre,
+                premise=project_chapter.premise,
+                world_brief=project.world_brief,
+                writing_rules=project.writing_rules,
+                style_profile=project.style_profile,
+                user_prompt=payload.prompt,
+                response_type=payload.response_type,
+                scene_card=scene_card,
+                memories=[
+                    {"title": memory.title, "content": memory.content}
+                    for memory in sorted(project.memories, key=lambda item: item.importance, reverse=True)
+                ],
+                use_refiner=payload.use_refiner,
+                progress=set_progress,
+                trace=trace,
+            )
+            logger.info("Generate draft writing completed: project=%s chapter=%s", project.id, project_chapter.id)
+        except RuntimeError as exc:
+            detail = str(exc)
+            set_progress("failed", detail, level="error")
+            logger.warning(
+                "Draft generation failed for project %s chapter %s: %s",
+                project.id,
+                project_chapter.id,
+                detail,
+            )
+            raise HTTPException(status_code=502, detail=detail) from exc
 
         generation = GenerationRun(
             project=project,
+            project_chapter=project_chapter,
             prompt=payload.prompt,
             search_method=payload.search_method,
             response_type=payload.response_type,
@@ -1389,7 +1721,21 @@ def create_app() -> FastAPI:
                 else f"[Local]\n{local_result.text}\n\n[Global]\n未启用全局检索。"
             ),
             scene_card=scene_card,
-            evolution_snapshot="",
+            evolution_snapshot=json.dumps(
+                {
+                    "process": {
+                        "draft": {"status": "done", "message": "初稿已保存"},
+                        "refine": {"status": "done" if payload.use_refiner else "skipped", "message": "润色已完成" if payload.use_refiner else "未启用润色"},
+                        "evolution": {"status": "pending", "message": "等待抽取变化"},
+                    },
+                    "characters": [],
+                    "relationships": [],
+                    "events": [],
+                    "world_updates": [],
+                },
+                ensure_ascii=False,
+            ),
+            generation_trace=json.dumps(trace, ensure_ascii=False),
             title=title,
             summary=summary,
             content=content,
@@ -1397,17 +1743,39 @@ def create_app() -> FastAPI:
         db.add(generation)
         db.commit()
         db.refresh(generation)
+        set_progress("saved", f"草稿已保存，编号 {generation.id}")
+        logger.info("Generate draft saved: project=%s chapter=%s generation=%s", project.id, project_chapter.id, generation.id)
 
         if payload.write_evolution:
-            evolution_payload = evolution.extract_evolution(
-                project_title=project.title,
-                genre=project.genre,
-                premise=project.premise,
-                user_prompt=payload.prompt,
-                title=title,
-                summary=summary,
-                content=content,
-            )
+            try:
+                set_progress("evolution", "正在抽取人物、关系和事件变化")
+                logger.info("Generate evolution extraction started: generation=%s", generation.id)
+                evolution_payload = evolution.extract_evolution(
+                    project_title=project.title,
+                    genre=project.genre,
+                    premise=project_chapter.premise,
+                    user_prompt=payload.prompt,
+                    title=title,
+                    summary=summary,
+                    content=content,
+                    trace=trace,
+                )
+                set_progress("evolution_done", "变化抽取已完成")
+                logger.info("Generate evolution extraction completed: generation=%s", generation.id)
+            except RuntimeError:
+                set_progress("evolution_failed", "变化抽取失败，草稿已保留")
+                logger.warning("Evolution extraction failed for generation %s.", generation.id)
+                evolution_payload = evolution.empty_payload()
+                generation.evolution_snapshot = _snapshot_with_process(
+                    evolution_payload,
+                    {
+                        "draft": {"status": "done", "message": "初稿已保存"},
+                        "refine": {"status": "done" if payload.use_refiner else "skipped", "message": "润色已完成" if payload.use_refiner else "未启用润色"},
+                        "evolution": {"status": "failed", "message": "变化抽取失败，可继续处理"},
+                    },
+                )
+                db.commit()
+                return GenerationOut.model_validate(generation)
         else:
             evolution_payload = evolution.empty_payload()
 
@@ -1472,53 +1840,134 @@ def create_app() -> FastAPI:
                 )
             )
 
-        generation.evolution_snapshot = json.dumps(
+        generation.evolution_snapshot = _snapshot_with_process(
+            evolution_payload,
             {
-                "characters": [
-                    {
-                        "character_name": item.character_name,
-                        "emotion_state": item.emotion_state,
-                        "current_goal": item.current_goal,
-                        "self_view_shift": item.self_view_shift,
-                        "public_perception": item.public_perception,
-                        "summary": item.summary,
-                    }
-                    for item in evolution_payload.characters
-                ],
-                "relationships": [
-                    {
-                        "source_character": item.source_character,
-                        "target_character": item.target_character,
-                        "change_type": item.change_type,
-                        "direction": item.direction,
-                        "intensity": item.intensity,
-                        "summary": item.summary,
-                    }
-                    for item in evolution_payload.relationships
-                ],
-                "events": [
-                    {
-                        "title": item.title,
-                        "summary": item.summary,
-                        "impact_summary": item.impact_summary,
-                        "participants": item.participants,
-                        "location_hint": item.location_hint,
-                    }
-                    for item in evolution_payload.events
-                ],
-                "world_updates": [
-                    {
-                        "subject_name": item.subject_name,
-                        "observer_group": item.observer_group,
-                        "direction": item.direction,
-                        "change_summary": item.change_summary,
-                    }
-                    for item in evolution_payload.world_updates
-                ],
+                "draft": {"status": "done", "message": "初稿已保存"},
+                "refine": {"status": "done" if payload.use_refiner else "skipped", "message": "润色已完成" if payload.use_refiner else "未启用润色"},
+                "evolution": {"status": "done" if payload.write_evolution else "skipped", "message": "变化抽取已完成" if payload.write_evolution else "未启用变化抽取"},
             },
-            ensure_ascii=False,
         )
         db.commit()
+        set_progress("done", "生成流程完成")
+        return GenerationOut.model_validate(generation)
+
+    @app.get("/api/projects/{project_id}/generate/progress", response_model=GenerationProgressOut)
+    def generation_progress(
+        project_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> GenerationProgressOut:
+        _project_or_404(db, current_user.id, project_id)
+        payload = GENERATION_PROGRESS.get(current_user.id, {"stage": "idle", "message": "暂无生成任务", "trace": {}})
+        payload.setdefault("trace", {})
+        payload.setdefault("logs", [])
+        return GenerationProgressOut.model_validate(payload)
+
+    @app.post("/api/projects/{project_id}/generations/{generation_id}/continue", response_model=GenerationOut)
+    def continue_generation(
+        project_id: int,
+        generation_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> GenerationOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        generation = _generation_or_404(db, project.id, generation_id)
+        project_chapter = _project_chapter_or_404(db, project.id, generation.project_chapter_id) if generation.project_chapter_id else None
+        evolution = EvolutionService(settings)
+        try:
+            logger.info("Continue generation evolution started: generation=%s", generation.id)
+            evolution_payload = evolution.extract_evolution(
+                project_title=project.title,
+                genre=project.genre,
+                premise=project_chapter.premise if project_chapter is not None else "",
+                user_prompt=generation.prompt,
+                title=generation.title,
+                summary=generation.summary,
+                content=generation.content,
+            )
+        except RuntimeError as exc:
+            logger.warning("Continue generation failed: generation=%s error=%s", generation.id, exc)
+            generation.evolution_snapshot = _snapshot_with_process(
+                evolution.empty_payload(),
+                {
+                    "draft": {"status": "done", "message": "初稿已保存"},
+                    "refine": {"status": "done", "message": "正文可用"},
+                    "evolution": {"status": "failed", "message": str(exc)},
+                },
+            )
+            db.commit()
+            db.refresh(generation)
+            return GenerationOut.model_validate(generation)
+
+        for item in evolution_payload.characters:
+            if item.character_name:
+                db.add(
+                    CharacterStateUpdate(
+                        project=project,
+                        generation_run=generation,
+                        character_name=item.character_name,
+                        emotion_state=item.emotion_state,
+                        current_goal=item.current_goal,
+                        self_view_shift=item.self_view_shift,
+                        public_perception=item.public_perception,
+                        summary=item.summary,
+                    )
+                )
+
+        for item in evolution_payload.relationships:
+            if item.source_character and item.target_character:
+                db.add(
+                    RelationshipStateUpdate(
+                        project=project,
+                        generation_run=generation,
+                        source_character=item.source_character,
+                        target_character=item.target_character,
+                        change_type=item.change_type,
+                        direction=item.direction,
+                        intensity=item.intensity,
+                        summary=item.summary,
+                    )
+                )
+
+        for item in evolution_payload.events:
+            if item.title:
+                db.add(
+                    StoryEvent(
+                        project=project,
+                        generation_run=generation,
+                        title=item.title,
+                        summary=item.summary,
+                        impact_summary=item.impact_summary,
+                        participants_json=json.dumps(item.participants, ensure_ascii=False),
+                        location_hint=item.location_hint,
+                    )
+                )
+
+        for item in evolution_payload.world_updates:
+            if item.subject_name and item.observer_group:
+                db.add(
+                    WorldPerceptionUpdate(
+                        project=project,
+                        generation_run=generation,
+                        subject_name=item.subject_name,
+                        observer_group=item.observer_group,
+                        direction=item.direction,
+                        change_summary=item.change_summary,
+                    )
+                )
+
+        generation.evolution_snapshot = _snapshot_with_process(
+            evolution_payload,
+            {
+                "draft": {"status": "done", "message": "初稿已保存"},
+                "refine": {"status": "done", "message": "正文可用"},
+                "evolution": {"status": "done", "message": "变化抽取已完成"},
+            },
+        )
+        db.commit()
+        db.refresh(generation)
+        logger.info("Continue generation completed: generation=%s", generation.id)
         return GenerationOut.model_validate(generation)
 
     dist_dir = settings.root_dir / "frontend" / "dist"

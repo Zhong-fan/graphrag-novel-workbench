@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,10 +52,12 @@ class CaptchaChallenge(BaseModel):
 class ProjectCreateRequest(BaseModel):
     title: str = Field(..., min_length=2, max_length=255)
     genre: str = Field(..., min_length=2, max_length=100)
-    premise: str = Field(..., min_length=12, max_length=2000)
     world_brief: str = Field(default="", max_length=4000)
     writing_rules: str = Field(default="", max_length=2000)
-    style_profile: str = Field(default="light_novel", pattern="^(light_novel|lyrical_restrained)$")
+    style_profile: str = Field(
+        default="light_novel",
+        pattern="^(light_novel|lyrical_restrained|dialogue_driven|cinematic_tense|warm_healing|epic_serious)$",
+    )
 
 
 class ProjectUpdateRequest(ProjectCreateRequest):
@@ -65,7 +68,6 @@ class ProjectOut(BaseModel):
     id: int
     title: str
     genre: str
-    premise: str
     world_brief: str
     writing_rules: str
     style_profile: str
@@ -155,7 +157,28 @@ class IndexResponse(BaseModel):
     neo4j_sync_status: str
 
 
+class GraphReviewOut(BaseModel):
+    workspace_path: str
+    input_files: list[str]
+    files: list["GraphReviewFileOut"] = []
+    preview_text: str
+    neo4j_sync_status: str
+    last_indexed_at: datetime | None = None
+
+
+class GraphReviewFileOut(BaseModel):
+    filename: str
+    title: str
+    category: str
+    content: str
+
+
+class GraphReviewFileUpdateRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=200000)
+
+
 class GenerateRequest(BaseModel):
+    chapter_id: int
     prompt: str = Field(..., min_length=12)
     search_method: str = Field(default="local")
     response_type: str = Field(default="Multiple Paragraphs")
@@ -167,18 +190,27 @@ class GenerateRequest(BaseModel):
 
 class GenerationOut(BaseModel):
     id: int
+    project_chapter_id: int | None = None
     title: str
     content: str
     summary: str
     retrieval_context: str
     scene_card: str
     evolution_snapshot: str
+    generation_trace: str
     search_method: str
     response_type: str
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class GenerationProgressOut(BaseModel):
+    stage: str
+    message: str
+    trace: dict[str, Any] = Field(default_factory=dict)
+    logs: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CharacterStateUpdateOut(BaseModel):
@@ -224,10 +256,12 @@ class WorldPerceptionUpdateOut(BaseModel):
 
 class ProjectDetailResponse(BaseModel):
     project: ProjectOut
+    project_chapters: list["ProjectChapterOut"] = []
     memories: list[MemoryOut]
     character_cards: list[CharacterCardOut] = []
     sources: list[SourceOut]
     generations: list[GenerationOut]
+    graphrag_review: GraphReviewOut | None = None
     character_state_updates: list[CharacterStateUpdateOut] = []
     relationship_state_updates: list[RelationshipStateUpdateOut] = []
     story_events: list[StoryEventOut] = []
@@ -274,6 +308,31 @@ class MyWorkspaceOut(BaseModel):
     trash: list[TrashItemOut]
 
 
+class ProjectChapterCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    premise: str = Field(..., min_length=12, max_length=2000)
+    chapter_no: int | None = Field(default=None, ge=1, le=10000)
+
+
+class ProjectChapterUpdateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    premise: str = Field(..., min_length=12, max_length=2000)
+    chapter_no: int = Field(..., ge=1, le=10000)
+
+
+class ProjectChapterOut(BaseModel):
+    id: int
+    project_id: int
+    title: str
+    premise: str
+    chapter_no: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class NovelChapterOut(BaseModel):
     id: int
     title: str
@@ -289,6 +348,8 @@ class NovelChapterOut(BaseModel):
 
 class NovelCardOut(BaseModel):
     id: int
+    project_id: int | None = None
+    source_generation_id: int | None = None
     title: str
     author: str
     summary: str
@@ -338,6 +399,7 @@ class NovelCommentOut(BaseModel):
 
 class PublishNovelRequest(BaseModel):
     project_id: int
+    project_chapter_id: int
     generation_id: int
     title: str = Field(..., min_length=2, max_length=255)
     author_name: str = Field(..., min_length=1, max_length=100)
@@ -364,6 +426,7 @@ class DeleteNovelRequest(BaseModel):
 
 class AppendNovelChapterRequest(BaseModel):
     project_id: int
+    project_chapter_id: int
     generation_id: int
     title: str = Field(default="", max_length=255)
     summary: str = Field(default="", max_length=5000)

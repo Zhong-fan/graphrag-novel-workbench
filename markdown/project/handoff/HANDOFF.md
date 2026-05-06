@@ -1,259 +1,288 @@
 # Handoff
 
-## Current Repo State
+## Repo State
 
 - Workspace: `E:\Computer\Wyc_Xc\MVP`
 - Branch: `main`
-- Remote: `origin` -> `https://github.com/Zhong-fan/graphrag-novel-workbench.git`
-- Latest known pushed commit before this handoff: `64a50626a245726322b4c9d1e60e8e9fb8111a56`
-- There are uncommitted changes in:
+- Working tree is dirty.
+- Current changed files from `git status --short`:
   - `app/api.py`
   - `app/contracts.py`
+  - `app/db.py`
+  - `app/models.py`
+  - `frontend/package-lock.json`
+  - `frontend/package.json`
   - `frontend/src/App.vue`
-  - `frontend/src/api.ts`
-  - `frontend/src/stores/workbench.ts`
   - `frontend/src/style.css`
+  - `frontend/src/styles/workspace.css`
   - `frontend/src/types.ts`
+  - `scripts/playwright_audit.mjs` is untracked
 
-Do not assume the working tree is clean. Review `git status --short` and `git diff` before continuing.
+Do not assume the tree is clean. Review diffs before continuing.
 
-## User Direction
+## What The User Wants
 
-The user wants the novel site to feel less like a backend/admin tool and more like a simple reader/writer product.
+Primary user direction tonight:
 
-Important product preferences:
+- Keep iterating directly, not just suggesting.
+- Use Playwright repeatedly as a real user to find UX problems.
+- `写作` and `作品编辑` must be conceptually separated.
+- `作品编辑` means managing already published work.
+- `写作` means creating new drafts.
+- The editor sidebar navigation should not be pushed to the bottom.
+- Frontend-only fallback is not acceptable as the long-term solution.
+- Backend must contain a real project-to-published-work association.
 
-- Avoid confusing technical terms in the UI.
-- Prefer vertical/top-bottom layouts over left-right split layouts.
-- Use floating toast messages for success/error feedback, not inline status text.
-- Keep cards looking like cards, but allow users to switch between grid and list layout.
-- For novel cards, clicking the card body should open the novel detail page. Like/favorite controls should stay fixed at the bottom-right of the card.
-- The reading page can be wider than the normal app shell.
-- Separate novel overview, reading, and editing into different pages.
+Latest explicit request before sleep:
 
-Latest explicit request, translated:
+> 再用 Playwright 找一遍问题，然后写一个 handoff 文件，方便明天开始
 
-> The novel detail overview page and the active reading page should be separate. The novel editing page should be a standalone top navigation page.
+## Playwright Findings Tonight
 
-Meaning:
+### Confirmed Fixed
 
-- Novel overview/detail page: metadata, summary, stats, actions, chapter index, and maybe comments.
-- Reading page: chapter reading only, with top and bottom chapter navigation.
-- Novel editor page: separate top navigation item, focused on owner editing for novel metadata and chapters.
+- `我的小说` left sidebar is back to pure navigation only.
+- Folder actions were moved out of the sidebar into the main content header.
+- Editor back button is no longer stretched vertically.
+- In the draft creation view, the editor sidebar nav is visible near the top instead of being crushed to the bottom.
+- `草稿创作` page now has:
+  - clearer naming
+  - draft status strip
+  - collapsed publish area by default
+- `已发布作品` no longer shows a blank screen for the current dataset.
+  - Playwright path used:
+    - `首页 -> 打开工作区 -> 继续创作 -> 已发布作品`
+  - Result:
+    - The page rendered the current published work form for `雨停前的告白`
+    - Fields visible:
+      - title
+      - author
+      - tagline
+      - summary
+      - visibility
+      - save/delete buttons
 
-## Work Completed In This Session
+### Still Wrong / Risky
 
-### Auth and Feedback
+- `frontend/src/App.vue` is structurally messy right now.
+- There are leftover dead template blocks accidentally inserted under the `home` branch area.
+- Build currently passes, but the file contains obvious garbage blocks that should be cleaned immediately tomorrow.
+- Exact suspicious area observed:
+  - around `App.vue` lines `1254` to at least `1315`
+  - multiple nested `template v-if="false"` / `section v-if="false" class="novel-editor"` blocks
+  - one stray `section v-else class="novel-editor"` also exists in that area
+- These dead blocks are not supposed to remain in the file even if they currently do not render.
 
-- Login/register were moved toward a standalone auth page instead of a small modal-like flow.
-- Register form now includes:
-  - confirm password
-  - password visibility toggle
-  - password/username requirement hints
-  - copy changed from "open your writing space" to "create your writing space"
-- Password visibility control uses a small eye-style icon instead of plain text.
-- Error/success feedback was moved toward floating toast UI.
-- Raw object errors such as `[object Object]` were addressed by normalizing displayed error messages.
+## Backend Work Completed Tonight
 
-### Background and Visual Polish
+A real backend association started replacing the frontend guesswork.
 
-- Added animated page background work.
-- User disliked the first obvious stripe-like ripple style and asked for a more natural, transparent water-like movement.
-- The current style has been adjusted, but visual quality should still be checked in browser.
+### Added Model Fields
 
-### Home, Store, Shelf, Cards
+In `app/models.py`:
 
-- The home hot/discussed novels layout was widened so it does not occupy only half the page.
-- Home/store/shelf novel cards were adjusted.
-- User later asked to restore card-like appearance while keeping a list option.
-- Current direction implemented in progress:
-  - `novelLayout = ref<"grid" | "list">("grid")`
-  - layout toggle controls added for home/store/shelf
-  - card/list CSS partially restored
-- Shelf was split into:
-  - favorites
-  - likes
-- Search was added over title/author/genre/tagline/summary/latest excerpt.
-- Novel card body opens detail.
-- Favorite/like buttons were fixed toward card bottom-right.
+- `Novel.project_id`
+- `Novel.source_generation_id`
+- `Project.published_novels`
+- `GenerationRun.published_novels`
 
-### My Novels / Creation / Writing
+### Added API Contract Fields
 
-- "My Novels" was changed toward a management page instead of putting the whole creation workflow there.
-- Creation/workflow moved toward a separate writing/workshop page.
-- Added two writing modes:
-  - simplified AI mode for users who only provide a paragraph and expect AI to infer/write more
-  - advanced mode for users with more detailed ideas
-- Added guidance/constraints/examples in project creation fields so users are not guessing required length and format.
-- Some backend/system-level writing rules were moved out of user-facing prompt language:
-  - dialogue should use corner brackets
-  - nested quotes should use double corner brackets
-  - character emotion should usually be conveyed through environment/action before dialogue, but not as a rigid rule
+In `app/contracts.py`:
 
-### Novel/Chapter Editing and Publishing
+- `NovelCardOut.project_id`
+- `NovelCardOut.source_generation_id`
 
-- Generated text can now be edited before being published/appended.
-- Generated content can be assigned chapter metadata such as chapter number/title/summary.
-- Backend additions include:
-  - `UpdateNovelChapterRequest`
-  - `PUT /api/novels/{novel_id}/chapters/{chapter_id}`
-- Frontend API/store support added for updating a novel chapter.
-- Current generated text is being split conceptually into:
-  - novel body with chapters
-  - temporary draft text that can be edited and appended into the novel
+### Added Serialization
 
-### Reading / Detail
+In `app/api.py`:
 
-- Chapter list became clickable/readable.
-- Reading UI got top and bottom chapter navigation:
-  - previous chapter
-  - next chapter
-  - chapter select dropdown
-  - chapter number jump
-- If there is only one chapter, navigation controls should not show.
-- User then clarified that overview and reading should be separate pages.
+- `_novel_card_out()` now includes:
+  - `project_id`
+  - `source_generation_id`
 
-## Important Current Code Context
+### Added Publish Linking
 
-Most of the frontend is still in `frontend/src/App.vue`.
+In `app/api.py`, when publishing from generation:
 
-Current `ViewKey` is still expected to look like:
+- `Novel.project = project`
+- `Novel.source_generation = generation`
 
-```ts
-type ViewKey = "home" | "store" | "detail" | "shelf" | "studio" | "workshop" | "profile" | "auth";
-```
+So newly published works should now carry real associations.
 
-It still needs new views, likely:
+### Added DB Migration
 
-```ts
-type ViewKey =
-  | "home"
-  | "store"
-  | "detail"
-  | "reader"
-  | "shelf"
-  | "studio"
-  | "workshop"
-  | "novelEditor"
-  | "profile"
-  | "auth";
-```
+In `app/db.py`:
 
-Relevant state/computed/functions already exist in `App.vue`:
+- `ALTER TABLE novels ADD COLUMN project_id`
+- `ALTER TABLE novels ADD COLUMN source_generation_id`
 
-- `currentNovel`
-- `selectedChapterId`
-- `chapterJumpNo`
-- `chapterEditForm`
-- `selectedChapter`
-- `sortedChapters`
-- `previousChapter`
-- `nextChapter`
-- `hasChapterNavigation`
-- `selectChapterById`
-- `jumpToChapterNo`
-- `submitUpdateChapter`
-- `submitAppendChapter`
-- `submitUpdateNovel`
-- `isManagingCurrentNovel`
+Also added a best-effort backfill query:
 
-The current `detail` template still mixes:
+- joins `novels`
+- `novel_chapters` first chapter
+- `generation_runs`
+- tries to infer:
+  - `novels.project_id`
+  - `novels.source_generation_id`
 
-- novel overview hero/metadata/actions
-- reader section
-- chapter editor
-- novel metadata editor
-- append generated draft form
-- comments
+Important:
 
-This is the main unfinished task.
+- this backfill is heuristic, not guaranteed perfect
+- it has not yet been fully verified against the running local DB through a full app restart + API inspection
 
-## Recommended Next Implementation
+## Frontend Work Completed Tonight
 
-1. Add `reader` and `novelEditor` to `ViewKey`.
-2. Add top navigation item `Novel Editor` using the app's Chinese UI copy.
-3. Keep `detail` as the overview page only:
-   - title, author, genre, tagline, summary
-   - chapter count/date/stat actions
-   - like/favorite/comment count
-   - compact chapter index
-   - clicking a chapter should call something like `openReader(chapter.id)`
-4. Create a `reader` view:
-   - show current chapter title/summary/content only
-   - include chapter navigation above and below content
-   - include a back-to-detail action
-   - include edit action only if the current user owns the novel
-5. Create a `novelEditor` view:
-   - if no editable current novel is selected, show an empty state telling the user to choose a novel from My Novels
-   - if the user owns the current novel, show:
-     - novel metadata edit form
-     - chapter selector
-     - chapter edit form
-     - append generated draft form when a draft exists
-6. Move wide layout styling away from generic `.novel-detail` and apply it to the reader page instead.
-7. Run verification:
-   - `npm run build`
-   - `python -m compileall app`
+### Naming Split
 
-## Suggested Helper Functions
+In `frontend/src/App.vue`:
 
-Add functions similar to:
+- `写作` became `草稿创作`
+- `作品编辑` became `已发布作品`
+- Home CTA copy was adjusted toward draft creation instead of ambiguous “write”
 
-```ts
-function openReader(chapterId?: number) {
-  if (chapterId) {
-    selectedChapterId.value = chapterId;
-  }
-  currentView.value = "reader";
-}
+### Project / Draft Flow
 
-function openNovelEditor() {
-  currentView.value = "novelEditor";
-}
-```
+- `我的小说` cards now point toward continuing draft creation
+- draft view shows draft status and clearer publish actions
 
-When opening a novel detail:
+### Published Work Selection Logic
 
-```ts
-selectedChapterId.value = currentNovel.value?.chapters[0]?.id ?? null;
-currentView.value = "detail";
-```
+Frontend started moving away from “only one novel, just open it” logic.
 
-The chapter index on detail should not render the full chapter body.
+In `frontend/src/types.ts`:
 
-## Files To Review First Next Time
+- `NovelCard.project_id`
+- `NovelCard.source_generation_id`
 
-- `frontend/src/App.vue`
-- `frontend/src/style.css`
-- `frontend/src/stores/workbench.ts`
-- `frontend/src/api.ts`
-- `frontend/src/types.ts`
-- `app/api.py`
-- `app/contracts.py`
+In `frontend/src/App.vue`:
 
-Useful commands:
+- `managedNovels` now prefers filtering by `activeProject.project.id`
+- `openNovelEditor()` now tries to use the project-linked set instead of generic my-novels guessing
+
+However:
+
+- the final cleanup of the published-work branch in `App.vue` is not complete because the file structure became messy during iterative patching
+
+## CSS / Layout Work Completed Tonight
+
+In `frontend/src/styles/workspace.css`:
+
+- `.editor-sidebar` was changed so it no longer uses the same row layout as the general sidebar
+- current state:
+  - `.sidebar` uses `grid-template-rows: auto 1fr auto`
+  - `.editor-sidebar` uses `grid-template-rows: auto auto auto`
+
+This is the reason the editor nav is no longer forced downward by a middle `1fr` row.
+
+## Validation Run Tonight
+
+### Passed
+
+- `python -m compileall app`
+- `npm run build`
+
+These passed after:
+
+- backend association field additions
+- sidebar layout fix
+- frontend type updates
+
+### Browser Validation
+
+Repeated Playwright checks were done on:
+
+- home
+- my novels
+- draft creation
+- published work editor
+
+Key confirmed path:
+
+1. `首页`
+2. `打开工作区`
+3. `继续创作`
+4. `已发布作品`
+
+Observed result:
+
+- published work editor rendered a real form instead of a blank page
+
+## Most Important Thing To Do First Tomorrow
+
+Clean `frontend/src/App.vue` template structure before anything else.
+
+Specifically:
+
+1. Open around lines `1248-1315`
+2. Remove all stray dead inserted blocks:
+   - nested `template v-if="false"`
+   - duplicated `section v-if="false" class="novel-editor"`
+   - stray `section v-else class="novel-editor"` in the wrong branch
+3. Ensure:
+   - `home` template ends cleanly
+   - `novelEditor` template contains exactly:
+     - one `v-if` branch for an opened managed novel
+     - one `v-else` branch for published-work selection / empty state
+   - no published-work fallback UI remains under the `home` branch
+
+Only after that should more UX polishing continue.
+
+## Recommended Next Steps Tomorrow
+
+1. Clean `frontend/src/App.vue` structure first.
+2. Restart the backend so `init_db()` runs and applies the new migration.
+3. Verify API responses now include real associations:
+   - `/api/me/novels`
+   - `/api/novels/{id}`
+4. Use Playwright to re-run:
+   - `首页 -> 打开工作区 -> 继续创作 -> 已发布作品`
+   - `首页 -> 打开工作区 -> 新建项目`
+   - `草稿创作 -> 发布这份草稿 -> 已发布作品`
+5. If old published works still do not link correctly:
+   - inspect actual DB rows
+   - improve the backfill query instead of adding more frontend guesses
+6. After association is stable:
+   - simplify `openNovelEditor()`
+   - remove any remaining frontend fallback behavior that was only there to mask missing backend linkage
+7. Continue layout cleanup:
+   - published work manager should look less like a raw form
+   - draft editor should reduce the feeling of one enormous textarea wall
+   - project cards in `我的小说` can still be denser and cleaner
+
+## Commands To Run First Tomorrow
+
+From `E:\Computer\Wyc_Xc\MVP\frontend`:
 
 ```powershell
-git status --short
-git diff --stat
-rg -n "type ViewKey|currentView|novel-detail|selectedChapter|submitUpdateChapter|submitAppendChapter|novelEditor" frontend/src/App.vue
-rg -n "\.novel-detail|\.novel-reader|\.chapter-nav|\.reader" frontend/src/style.css frontend/src/App.vue
+git -C .. status --short
+git -C .. diff -- app/api.py app/contracts.py app/db.py app/models.py frontend/src/App.vue frontend/src/style.css frontend/src/styles/workspace.css frontend/src/types.ts
 ```
 
-## Verification Status
-
-Before the final split request, these passed earlier:
+Then after cleaning `App.vue`:
 
 ```powershell
+python -m compileall ..\app
 npm run build
-python -m compileall app
 ```
 
-After the latest request, implementation was stopped by the user before code changes were made. Re-run both after continuing work.
+Then run the app and re-check with Playwright.
+
+## File Priority Tomorrow
+
+Open in this order:
+
+1. `frontend/src/App.vue`
+2. `app/models.py`
+3. `app/db.py`
+4. `app/api.py`
+5. `app/contracts.py`
+6. `frontend/src/types.ts`
+7. `frontend/src/styles/workspace.css`
+8. `frontend/src/style.css`
 
 ## Notes
 
-- Do not commit or push unless the user asks again.
-- There may be unrelated/generated files in the workspace. Review before staging.
-- Avoid reverting user changes. Work with the current dirty tree.
-- If committing later, inspect `git status --short` carefully and stage only intended files.
+- Do not commit or push unless the user asks.
+- `frontend/package.json` and `frontend/package-lock.json` are marked modified in the worktree; review whether those changes are intentional before staging anything.
+- The backend association is the correct direction. Keep pushing that, and remove fallback logic rather than expanding it.

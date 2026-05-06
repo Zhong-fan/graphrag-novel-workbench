@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from textwrap import dedent
 
 from .config import Settings
 from .llm import OpenAIResponsesLLM
+from .prompts import evolution_system_prompt, evolution_user_prompt
 
 
 @dataclass
@@ -58,7 +58,16 @@ class EvolutionService:
         if settings.llm_mode != "openai" or not settings.openai_api_key:
             raise RuntimeError("当前项目只支持真实模型模式。")
         self.settings = settings
-        self.llm = OpenAIResponsesLLM(settings.openai_api_key, settings.openai_base_url)
+        self.llm = OpenAIResponsesLLM(
+            settings.openai_api_key,
+            settings.openai_base_url,
+            use_system_proxy=settings.openai_use_system_proxy,
+            use_responses=settings.llm_use_responses,
+            stream_responses=settings.llm_stream_responses,
+            request_timeout_seconds=settings.llm_request_timeout_seconds,
+            max_attempts=settings.llm_max_attempts,
+            retry_max_sleep_seconds=settings.llm_retry_max_sleep_seconds,
+        )
 
     def build_scene_card(
         self,
@@ -78,7 +87,12 @@ class EvolutionService:
 
         if recent_character_updates:
             character_section = "\n".join(
-                f"- {item['character_name']}：当前情绪={item['emotion_state'] or '未记录'}；当前目标={item['current_goal'] or '未记录'}；状态变化={item['summary'] or '未记录'}"
+                (
+                    f"- {item['character_name']}："
+                    f"当前情绪 {item['emotion_state'] or '未记录'}；"
+                    f"当前目标 {item['current_goal'] or '未记录'}；"
+                    f"状态变化 {item['summary'] or '未记录'}"
+                )
                 for item in recent_character_updates[:6]
             )
 
@@ -96,11 +110,11 @@ class EvolutionService:
 
         if recent_world_updates:
             world_section = "\n".join(
-                f"- {item['observer_group']} 对 {item['subject_name']}：{item['change_summary'] or '未记录'}"
+                f"- {item['observer_group']} 看待 {item['subject_name']}：{item['change_summary'] or '未记录'}"
                 for item in recent_world_updates[:4]
             )
 
-        return dedent(
+        return (
             f"""
             当前场景写作卡
 
@@ -122,7 +136,7 @@ class EvolutionService:
             六、连续性提醒
             - 优先沿用最近状态变化，不要把角色重新写回初始设定。
             - 如果关系已经发生变化，优先承接这种变化，不要假装什么都没发生。
-            - 如果最近事件已经带来后果，下一章应体现这种后果，而不是跳过。
+            - 如果最近事件已经带来后果，下一章应体现这种后果，而不是直接跳过。
 
             七、GraphRAG Local Search
             {local_context}
@@ -145,89 +159,35 @@ class EvolutionService:
         title: str,
         summary: str,
         content: str,
+        trace: dict | None = None,
     ) -> EvolutionPayload:
-        system_prompt = dedent(
-            """
-            你是中文小说系统里的状态演化分析器。
-            你的任务不是润色正文，而是从本章内容里提取会持续影响后文的变化。
-            只返回 JSON。
-            """
-        ).strip()
-
-        prompt = dedent(
-            f"""
-            项目：{project_title}
-            类型：{genre}
-            项目前提：{premise}
-            用户本次目标：{user_prompt}
-
-            本章标题：
-            {title}
-
-            本章摘要：
-            {summary}
-
-            本章正文：
-            {content}
-
-            请提取“持续影响后文”的变化，输出 JSON：
-            {{
-              "characters": [
-                {{
-                  "character_name": "...",
-                  "emotion_state": "...",
-                  "current_goal": "...",
-                  "self_view_shift": "...",
-                  "public_perception": "...",
-                  "summary": "..."
-                }}
-              ],
-              "relationships": [
-                {{
-                  "source_character": "...",
-                  "target_character": "...",
-                  "change_type": "...",
-                  "direction": "up/down/stable",
-                  "intensity": 1,
-                  "summary": "..."
-                }}
-              ],
-              "events": [
-                {{
-                  "title": "...",
-                  "summary": "...",
-                  "impact_summary": "...",
-                  "participants": ["..."],
-                  "location_hint": "..."
-                }}
-              ],
-              "world_updates": [
-                {{
-                  "subject_name": "...",
-                  "observer_group": "...",
-                  "direction": "positive/negative/stable",
-                  "change_summary": "..."
-                }}
-              ]
-            }}
-
-            约束：
-            - 每类最多输出 5 条
-            - 只保留会持续影响后文的变化
-            - 角色变化优先输出“状态变化”，不要重写基础人设
-            - 不要写空泛总结，例如“情绪有变化”“关系更复杂了”。
-            - 要写成下一章真的能继续用的信息，例如“开始回避对方”“不再完全信任”“第一次意识到自己做错了”。
-            - 如果没有明确变化，就不要硬造。
-            - 所有自然语言内容使用简体中文
-            """
-        ).strip()
+        system_prompt = evolution_system_prompt()
+        prompt = evolution_user_prompt(
+            project_title=project_title,
+            genre=genre,
+            premise=premise,
+            user_prompt=user_prompt,
+            title=title,
+            summary=summary,
+            content=content,
+        )
 
         response = self.llm.generate(
             model=self.settings.utility_model,
             system_prompt=system_prompt,
             user_prompt=prompt,
         )
+        if trace is not None:
+            trace["evolution"] = {
+                "status": "succeeded",
+                "model": self.settings.utility_model,
+                "system_prompt": system_prompt,
+                "user_prompt": prompt,
+                "raw_output": response.text,
+            }
         data = self._parse_json(response.text)
+        if trace is not None:
+            trace["evolution"]["parsed"] = data
         return EvolutionPayload(
             characters=[self._character(item) for item in data.get("characters", [])[:5] if isinstance(item, dict)],
             relationships=[self._relationship(item) for item in data.get("relationships", [])[:5] if isinstance(item, dict)],

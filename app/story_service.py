@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 import json
-from textwrap import dedent
+import logging
+from typing import Any, Callable
 
 from .config import Settings
 from .llm import OpenAIResponsesLLM
+from .prompts import (
+    light_refine_system_prompt,
+    light_refine_user_prompt,
+    story_generation_system_prompt,
+    story_generation_user_prompt,
+    style_instructions,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class StoryGenerationService:
@@ -12,7 +22,16 @@ class StoryGenerationService:
         if settings.llm_mode != "openai" or not settings.openai_api_key:
             raise RuntimeError("当前项目只支持真实模型模式。")
         self.settings = settings
-        self.llm = OpenAIResponsesLLM(settings.openai_api_key, settings.openai_base_url)
+        self.llm = OpenAIResponsesLLM(
+            settings.openai_api_key,
+            settings.openai_base_url,
+            use_system_proxy=settings.openai_use_system_proxy,
+            use_responses=settings.llm_use_responses,
+            stream_responses=settings.llm_stream_responses,
+            request_timeout_seconds=settings.llm_request_timeout_seconds,
+            max_attempts=settings.llm_max_attempts,
+            retry_max_sleep_seconds=settings.llm_retry_max_sleep_seconds,
+        )
 
     def generate(
         self,
@@ -24,97 +43,99 @@ class StoryGenerationService:
         writing_rules: str,
         style_profile: str,
         user_prompt: str,
+        response_type: str,
         scene_card: str,
         memories: list[dict[str, str]],
         use_refiner: bool,
+        progress: Callable[..., None] | None = None,
+        trace: dict | None = None,
     ) -> tuple[str, str, str]:
         memory_lines = "\n".join(
             f"- {item['title']}：{item['content']}" for item in memories[:10]
         ) or "- 暂无额外长期设定。"
 
-        style_instructions = self._style_instructions(style_profile)
-        system_prompt = dedent(
-            f"""
-            你是一名中文小说写作者。
-            你要根据 GraphRAG 检索结果、项目设定和用户目标，写出原创中文小说正文。
+        system_prompt = story_generation_system_prompt(style_instructions(style_profile), writing_rules)
+        prompt = story_generation_user_prompt(
+            project_title=project_title,
+            genre=genre,
+            premise=premise,
+            world_brief=world_brief,
+            user_prompt=user_prompt,
+            response_type=response_type,
+            memory_lines=memory_lines,
+            scene_card=scene_card,
+        )
 
-            强制规则：
-            - 普通对话必须使用「」。
-            - 引号内嵌套引号必须使用『』。
-            - 不要输出英文双引号，不要输出中文弯引号。
-            - 不要模仿任何在世作者。
-            - 不要解释你是如何写作的。
-            - 正文必须自然、连续、可直接阅读。
-
-            系统写作策略：
-            - 人物情绪可以通过动作、停顿、对白、视线、场景互动、内心闪念或叙述节奏表达。
-            - 根据场景选择最自然的表达方式，不要固定成单一公式。
-            - 避免直接堆叠抽象情绪标签，也避免每句对白后都解释情绪。
-
-            当前文风预设：
-            {style_instructions}
-
-            项目自定义偏好：
-            {writing_rules or "保持轻盈、自然、叙事连续，以人物互动推动场景。"}
-            """
-        ).strip()
-
-        prompt = dedent(
-            f"""
-            项目：{project_title}
-            类型：{genre}
-            项目前提：{premise}
-            世界设定：{world_brief}
-
-            用户当前写作目标：
-            {user_prompt}
-
-            用户长期设定：
-            {memory_lines}
-
-            写作上下文卡：
-            {scene_card}
-
-            任务：
-            1. 先写一个简洁标题。
-            2. 再写一段 60 字以内的摘要。
-            3. 再写完整正文。
-
-            正文额外要求：
-            - 对白要自然，避免每句都带重情绪说明。
-            - 一章里允许有空气感，但不要连续三段都在抒情。
-            - 表现情绪时优先选择适合当前场景的动作、对白、停顿、视线、环境互动或短促内心反应。
-            - 不要把人物情绪写成厚重散文。
-
-            输出格式必须严格是 JSON：
-            {{
-              "title": "...",
-              "summary": "...",
-              "content": "..."
-            }}
-            """
-        ).strip()
-
+        if progress:
+            progress(
+                "draft",
+                f"正在调用写作模型 {self.settings.writer_model} 生成初稿",
+                details={"model": self.settings.writer_model, "phase": "draft"},
+            )
+        logger.info("Draft base generation started: project=%s response_type=%s", project_title, response_type)
         response = self.llm.generate(
             model=self.settings.writer_model,
             system_prompt=system_prompt,
             user_prompt=prompt,
+            event_callback=self._model_event_callback(progress, "draft"),
         )
+        if trace is not None:
+            trace["draft"] = {
+                "status": "succeeded",
+                "model": self.settings.writer_model,
+                "system_prompt": system_prompt,
+                "user_prompt": prompt,
+                "raw_output": response.text,
+            }
         payload = self._parse_json(response.text)
         title = str(payload.get("title", "")).strip() or "未命名章节"
         summary = str(payload.get("summary", "")).strip() or user_prompt[:80]
         draft_content = str(payload.get("content", "")).strip() or response.text.strip()
+        if trace is not None:
+            trace["draft"]["parsed"] = {
+                "title": title,
+                "summary": summary,
+                "content": draft_content,
+            }
+        if progress:
+            progress("draft_saved", "初稿已生成，准备保存")
+        logger.info("Draft base generation completed: title=%s chars=%s", title, len(draft_content))
+
         refined_content = draft_content
         if use_refiner:
-            refined_content = self._refine_light_novel_prose(
-                project_title=project_title,
-                genre=genre,
-                style_profile=style_profile,
-                title=title,
-                summary=summary,
-                user_prompt=user_prompt,
-                draft_content=draft_content,
-            )
+            try:
+                if progress:
+                    progress("refine", "正在润色正文")
+                logger.info("Draft refinement started: title=%s", title)
+                refined_content = self._refine_light_novel_prose(
+                    project_title=project_title,
+                    genre=genre,
+                    style_profile=style_profile,
+                    title=title,
+                    summary=summary,
+                    user_prompt=user_prompt,
+                    draft_content=draft_content,
+                    trace=trace,
+                    progress=progress,
+                )
+                logger.info("Draft refinement completed: title=%s chars=%s", title, len(refined_content))
+            except RuntimeError as exc:
+                if trace is not None:
+                    trace["refine"] = {
+                        "status": "failed",
+                        "model": self.settings.writer_model,
+                        "error": str(exc),
+                    }
+                if progress:
+                    progress("refine_failed", "润色失败，将保留初稿")
+                logger.warning("Draft refinement failed; saving unrefined draft instead: %s", exc)
+        elif trace is not None:
+            trace["refine"] = {
+                "status": "skipped",
+                "model": self.settings.writer_model,
+                "reason": "disabled",
+            }
+
         refined_content = self._normalize_dialogue(refined_content)
         return title, summary, refined_content
 
@@ -140,8 +161,7 @@ class StoryGenerationService:
     def _normalize_dialogue(self, text: str) -> str:
         normalized = text.replace("“", "「").replace("”", "」")
         normalized = normalized.replace('"', "「")
-        # Replace alternating fallback quotes with Japanese-style nested quotes when possible.
-        normalized = normalized.replace("『「", "『").replace("」』", "』")
+        normalized = normalized.replace("『「", "『").replace("』」", "』")
         return normalized
 
     def _refine_light_novel_prose(
@@ -154,96 +174,56 @@ class StoryGenerationService:
         summary: str,
         user_prompt: str,
         draft_content: str,
+        trace: dict | None = None,
+        progress: Callable[..., None] | None = None,
     ) -> str:
-        system_prompt = dedent(
-            """
-            你是中文轻小说润色编辑。
-            你的任务不是重写剧情，而是在保持事件、人物关系、先后顺序完全不变的前提下，
-            把初稿润色得更轻、更顺、更自然、更适合现代轻小说阅读。
-
-            强制规则：
-            - 不改变剧情事实。
-            - 不新增不存在的重要设定。
-            - 不删掉关键事件。
-            - 对话继续使用「」。
-            - 所有内容使用简体中文。
-
-            润色目标：
-            - 降低抒情密度。
-            - 减少连续的抽象意象和“像、仿佛、似乎”类堆叠。
-            - 根据场景补足人物动作、对白、停顿、视线或叙述节奏带来的情绪表达。
-            - 保持空气感，但不要沉重。
-            - 让句子更轻、更好读、更像轻小说。
-            """
-        ).strip()
-
-        if style_profile == "lyrical_restrained":
-            system_prompt = dedent(
-                """
-                你是中文小说润色编辑。
-                你的任务不是重写剧情，而是在保持事件、人物关系、先后顺序完全不变的前提下，
-                把初稿润色得更细腻、克制、带有轻微抒情感，但不能过度沉重。
-
-                强制规则：
-                - 不改变剧情事实。
-                - 不新增不存在的重要设定。
-                - 不删掉关键事件。
-                - 对话继续使用「」。
-                - 所有内容使用简体中文。
-
-                润色目标：
-                - 保留细微情绪潜流。
-                - 保留适量意象，但避免堆叠。
-                - 让语言更顺，更有呼吸感。
-                - 不要把文本写成厚重散文。
-                """
-            ).strip()
-
-        prompt = dedent(
-            f"""
-            项目：{project_title}
-            类型：{genre}
-            本章标题：{title}
-            本章摘要：{summary}
-            用户目标：{user_prompt}
-
-            下面是初稿，请进行“轻量减重润色”：
-
-            {draft_content}
-
-            输出要求：
-            - 只输出润色后的正文
-            - 不要解释修改思路
-            - 不要加额外标题
-            """
-        ).strip()
+        system_prompt = light_refine_system_prompt(style_profile)
+        prompt = light_refine_user_prompt(
+            project_title=project_title,
+            genre=genre,
+            title=title,
+            summary=summary,
+            user_prompt=user_prompt,
+            draft_content=draft_content,
+        )
 
         response = self.llm.generate(
             model=self.settings.writer_model,
             system_prompt=system_prompt,
             user_prompt=prompt,
+            event_callback=self._model_event_callback(progress, "refine"),
         )
-        return response.text.strip() or draft_content
+        refined = response.text.strip() or draft_content
+        if trace is not None:
+            trace["refine"] = {
+                "status": "succeeded",
+                "model": self.settings.writer_model,
+                "system_prompt": system_prompt,
+                "user_prompt": prompt,
+                "raw_output": response.text,
+                "output": refined,
+            }
+        return refined
 
-    def _style_instructions(self, style_profile: str) -> str:
-        if style_profile == "lyrical_restrained":
-            return dedent(
-                """
-                - 允许保留细微意象和情绪潜流。
-                - 可以通过环境、动作、对白、视线、停顿或叙述节奏折射情绪，不要堆叠抽象比喻。
-                - 语言要克制、透明、细腻，不要写成沉重散文。
-                - 场景推进仍然要清楚，不能只有氛围没有动作。
-                """
-            ).strip()
+    def _model_event_callback(
+        self,
+        progress: Callable[..., None] | None,
+        phase: str,
+    ) -> Callable[[dict[str, Any]], None] | None:
+        if progress is None:
+            return None
 
-        return dedent(
-            """
-            - 优先选择人物动作、对白、停顿、视线、场景互动或短促内心反应来表现情绪。
-            - 不要过度抒情，不要连续堆叠抽象意象。
-            - 情感要轻、准、自然，不要写成沉重散文化 prose。
-            - 句子尽量轻，少用过长复句。
-            - 每一段都要推动场景、关系或信息，而不是只营造氛围。
-            - 优先写人物之间的互动，再补环境细节。
-            - 允许保留青春感、透明感和轻微口语节奏，但不要油腻。
-            """
-        ).strip()
+        def emit(event: dict[str, Any]) -> None:
+            endpoint = event.get("endpoint") or "unknown"
+            attempt = event.get("attempt")
+            message = str(event.get("message") or "模型调用事件")
+            if attempt:
+                message = f"{message}：{endpoint} / 第 {attempt} 次"
+            progress(
+                f"{phase}_model",
+                message,
+                level=str(event.get("level") or "info"),
+                details={"phase": phase, **event},
+            )
+
+        return emit

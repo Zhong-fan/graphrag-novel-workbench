@@ -56,7 +56,7 @@ class Project(Base, TimestampMixin):
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     genre: Mapped[str] = mapped_column(String(100), nullable=False)
-    premise: Mapped[str] = mapped_column(Text, nullable=False)
+    premise: Mapped[str] = mapped_column(Text, default="", nullable=False)
     world_brief: Mapped[str] = mapped_column(Text, default="", nullable=False)
     writing_rules: Mapped[str] = mapped_column(Text, default="", nullable=False)
     style_profile: Mapped[str] = mapped_column(String(40), default="light_novel", nullable=False)
@@ -80,6 +80,10 @@ class Project(Base, TimestampMixin):
         back_populates="project",
         cascade="all, delete-orphan",
     )
+    project_chapters: Mapped[list["ProjectChapter"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
     graph_workspace: Mapped["GraphWorkspace"] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
@@ -89,6 +93,7 @@ class Project(Base, TimestampMixin):
         back_populates="project",
         cascade="all, delete-orphan",
     )
+    published_novels: Mapped[list["Novel"]] = relationship(back_populates="project")
     character_state_updates: Mapped[list["CharacterStateUpdate"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
@@ -175,22 +180,39 @@ class GraphWorkspace(Base, TimestampMixin):
     project: Mapped["Project"] = relationship(back_populates="graph_workspace")
 
 
+class ProjectChapter(Base, TimestampMixin):
+    __tablename__ = "project_chapters"
+    __table_args__ = (UniqueConstraint("project_id", "chapter_no", name="uq_project_chapters_project_chapter_no"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    premise: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    chapter_no: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    project: Mapped["Project"] = relationship(back_populates="project_chapters")
+    generations: Mapped[list["GenerationRun"]] = relationship(back_populates="project_chapter")
+
+
 class GenerationRun(Base, TimestampMixin):
     __tablename__ = "generation_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    project_chapter_id: Mapped[int | None] = mapped_column(ForeignKey("project_chapters.id"), nullable=True)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     search_method: Mapped[str] = mapped_column(String(30), default="local", nullable=False)
     response_type: Mapped[str] = mapped_column(String(120), default="Multiple Paragraphs", nullable=False)
     retrieval_context: Mapped[str] = mapped_column(Text, default="", nullable=False)
     scene_card: Mapped[str] = mapped_column(Text, default="", nullable=False)
     evolution_snapshot: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    generation_trace: Mapped[str] = mapped_column(Text, default="", nullable=False)
     title: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
 
     project: Mapped["Project"] = relationship(back_populates="generations")
+    project_chapter: Mapped["ProjectChapter | None"] = relationship(back_populates="generations")
     character_state_updates: Mapped[list["CharacterStateUpdate"]] = relationship(
         back_populates="generation_run",
         cascade="all, delete-orphan",
@@ -207,6 +229,7 @@ class GenerationRun(Base, TimestampMixin):
         back_populates="generation_run",
         cascade="all, delete-orphan",
     )
+    published_novels: Mapped[list["Novel"]] = relationship(back_populates="source_generation")
 
 
 class UserProfile(Base, TimestampMixin):
@@ -227,6 +250,8 @@ class Novel(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
+    source_generation_id: Mapped[int | None] = mapped_column(ForeignKey("generation_runs.id"), nullable=True)
     author_name: Mapped[str] = mapped_column(String(100), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -238,6 +263,8 @@ class Novel(Base, TimestampMixin):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     owner: Mapped["User"] = relationship(back_populates="owned_novels")
+    project: Mapped["Project | None"] = relationship(back_populates="published_novels")
+    source_generation: Mapped["GenerationRun | None"] = relationship(back_populates="published_novels")
     chapters: Mapped[list["NovelChapter"]] = relationship(back_populates="novel", cascade="all, delete-orphan")
     likes: Mapped[list["NovelLike"]] = relationship(back_populates="novel", cascade="all, delete-orphan")
     favorites: Mapped[list["NovelFavorite"]] = relationship(back_populates="novel", cascade="all, delete-orphan")

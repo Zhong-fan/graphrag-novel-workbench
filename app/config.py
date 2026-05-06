@@ -1,14 +1,7 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
-
-DEFAULT_OLLAMA_EMBEDDING_MODEL = "bge-m3"
-DEFAULT_OLLAMA_EMBEDDING_BASE_URL = "http://127.0.0.1:11434/v1"
-DEFAULT_TEI_EMBEDDING_MODEL = "BAAI/bge-m3"
-DEFAULT_TEI_EMBEDDING_BASE_URL = "http://127.0.0.1:8090/v1"
-
 
 @dataclass(frozen=True)
 class Settings:
@@ -22,6 +15,12 @@ class Settings:
     embedding_model: str
     openai_api_key: str | None
     openai_base_url: str
+    openai_use_system_proxy: bool
+    llm_use_responses: bool
+    llm_stream_responses: bool
+    llm_request_timeout_seconds: int
+    llm_max_attempts: int
+    llm_retry_max_sleep_seconds: int
     embedding_api_key: str | None
     embedding_base_url: str
     mysql_host: str
@@ -69,7 +68,7 @@ def _normalize_index_method(method: str) -> str:
     normalized = method.strip().lower()
     if normalized in allowed:
         return normalized
-    return "fast"
+    raise RuntimeError(f"MVP/.env 中 GRAPH_MVP_GRAPHRAG_INDEX_METHOD 非法: {method}")
 
 
 def _is_ollama_base_url(url: str) -> bool:
@@ -84,6 +83,18 @@ def _parse_bool(value: str | None, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_positive_int(value: str | None, default: int) -> int:
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = int(value.strip())
+    except ValueError as exc:
+        raise RuntimeError(f"Expected a positive integer, got: {value}") from exc
+    if parsed <= 0:
+        raise RuntimeError(f"Expected a positive integer, got: {value}")
+    return parsed
 
 
 def _load_dotenv(path: Path) -> dict[str, str]:
@@ -101,7 +112,14 @@ def _load_dotenv(path: Path) -> dict[str, str]:
 
 
 def _resolve(name: str, dotenv_values: dict[str, str], default: str | None = None) -> str | None:
-    return dotenv_values.get(name) or os.getenv(name) or default
+    return dotenv_values.get(name, default)
+
+
+def _require(name: str, dotenv_values: dict[str, str]) -> str:
+    value = dotenv_values.get(name)
+    if value is None or not value.strip():
+        raise RuntimeError(f"MVP/.env 缺少必填配置: {name}")
+    return value.strip()
 
 
 def _resolve_embedding_settings(
@@ -109,25 +127,18 @@ def _resolve_embedding_settings(
     openai_api_key: str | None,
     openai_base_url: str,
 ) -> tuple[str, str | None, str]:
-    embedding_base_url = _normalize_base_url(
-        _resolve("GRAPH_MVP_EMBEDDING_BASE_URL", dotenv_values, DEFAULT_OLLAMA_EMBEDDING_BASE_URL)
-        or DEFAULT_OLLAMA_EMBEDDING_BASE_URL
-    )
+    embedding_base_url = _normalize_base_url(_require("GRAPH_MVP_EMBEDDING_BASE_URL", dotenv_values))
 
     if _is_ollama_base_url(embedding_base_url):
-        default_model = DEFAULT_OLLAMA_EMBEDDING_MODEL
         default_api_key = "ollama"
     elif _is_tei_base_url(embedding_base_url):
-        default_model = DEFAULT_TEI_EMBEDDING_MODEL
         default_api_key = "dummy"
     elif embedding_base_url == openai_base_url:
-        default_model = "text-embedding-3-large"
         default_api_key = openai_api_key or "ollama"
     else:
-        default_model = "text-embedding-3-large"
         default_api_key = openai_api_key
 
-    embedding_model = _resolve("GRAPH_MVP_EMBEDDING_MODEL", dotenv_values, default_model) or default_model
+    embedding_model = _require("GRAPH_MVP_EMBEDDING_MODEL", dotenv_values)
     embedding_api_key = _resolve("GRAPH_MVP_EMBEDDING_API_KEY", dotenv_values, default_api_key)
     return embedding_model, embedding_api_key, embedding_base_url
 
@@ -137,10 +148,8 @@ def load_settings() -> Settings:
     env_path = root_dir / ".env"
     dotenv_values = _load_dotenv(env_path)
 
-    openai_api_key = _resolve("OPENAI_API_KEY", dotenv_values)
-    openai_base_url = _normalize_base_url(
-        _resolve("OPENAI_BASE_URL", dotenv_values, "https://api.openai.com/v1") or "https://api.openai.com/v1"
-    )
+    openai_api_key = _require("OPENAI_API_KEY", dotenv_values)
+    openai_base_url = _normalize_base_url(_require("OPENAI_BASE_URL", dotenv_values))
     embedding_model, embedding_api_key, embedding_base_url = _resolve_embedding_settings(
         dotenv_values,
         openai_api_key,
@@ -152,32 +161,38 @@ def load_settings() -> Settings:
         env_path=env_path,
         output_dir=root_dir / "output",
         graphrag_root=root_dir / "workspace" / "graphrag_projects",
-        llm_mode=(_resolve("GRAPH_MVP_LLM_MODE", dotenv_values, "openai") or "openai").strip().lower(),
-        writer_model=_resolve("GRAPH_MVP_WRITER_MODEL", dotenv_values, "gpt-5.5") or "gpt-5.5",
-        utility_model=_resolve("GRAPH_MVP_UTILITY_MODEL", dotenv_values, "gpt-5.4-mini") or "gpt-5.4-mini",
+        llm_mode=_require("GRAPH_MVP_LLM_MODE", dotenv_values).strip().lower(),
+        writer_model=_require("GRAPH_MVP_WRITER_MODEL", dotenv_values),
+        utility_model=_require("GRAPH_MVP_UTILITY_MODEL", dotenv_values),
         embedding_model=embedding_model,
         openai_api_key=openai_api_key,
         openai_base_url=openai_base_url,
+        openai_use_system_proxy=_parse_bool(_resolve("GRAPH_MVP_OPENAI_USE_SYSTEM_PROXY", dotenv_values), default=False),
+        llm_use_responses=_parse_bool(_resolve("GRAPH_MVP_LLM_USE_RESPONSES", dotenv_values), default=True),
+        llm_stream_responses=_parse_bool(_resolve("GRAPH_MVP_LLM_STREAM_RESPONSES", dotenv_values), default=True),
+        llm_request_timeout_seconds=_parse_positive_int(
+            _resolve("GRAPH_MVP_LLM_REQUEST_TIMEOUT_SECONDS", dotenv_values),
+            120,
+        ),
+        llm_max_attempts=_parse_positive_int(_resolve("GRAPH_MVP_LLM_MAX_ATTEMPTS", dotenv_values), 3),
+        llm_retry_max_sleep_seconds=_parse_positive_int(
+            _resolve("GRAPH_MVP_LLM_RETRY_MAX_SLEEP_SECONDS", dotenv_values),
+            120,
+        ),
         embedding_api_key=embedding_api_key,
         embedding_base_url=embedding_base_url,
-        mysql_host=_resolve("MYSQL_HOST", dotenv_values, "127.0.0.1") or "127.0.0.1",
-        mysql_port=int(_resolve("MYSQL_PORT", dotenv_values, "3306") or "3306"),
-        mysql_user=_resolve("MYSQL_USER", dotenv_values, "graph_user") or "graph_user",
-        mysql_password=_resolve("MYSQL_PASSWORD", dotenv_values, "graph_password") or "graph_password",
-        mysql_database=_resolve("MYSQL_DATABASE", dotenv_values, "graphrag_novel") or "graphrag_novel",
-        neo4j_uri=_resolve("NEO4J_URI", dotenv_values, "neo4j://127.0.0.1:7687") or "neo4j://127.0.0.1:7687",
-        neo4j_user=_resolve("NEO4J_USER", dotenv_values, "neo4j") or "neo4j",
-        neo4j_password=_resolve("NEO4J_PASSWORD", dotenv_values, "graphrag-password") or "graphrag-password",
-        neo4j_database=_resolve("NEO4J_DATABASE", dotenv_values, "neo4j") or "neo4j",
-        auth_secret=_resolve("AUTH_SECRET", dotenv_values, "replace-me-with-a-long-secret") or "replace-me-with-a-long-secret",
-        auth_exp_hours=int(_resolve("AUTH_EXP_HOURS", dotenv_values, "168") or "168"),
-        graphrag_response_type=_resolve("GRAPH_MVP_GRAPHRAG_RESPONSE_TYPE", dotenv_values, "Multiple Paragraphs")
-        or "Multiple Paragraphs",
-        graphrag_index_method=_normalize_index_method(
-            _resolve("GRAPH_MVP_GRAPHRAG_INDEX_METHOD", dotenv_values, "fast") or "fast"
-        ),
-        graphrag_local_embeddings=_parse_bool(
-            _resolve("GRAPH_MVP_LOCAL_EMBEDDINGS", dotenv_values, "false"),
-            default=False,
-        ),
+        mysql_host=_require("MYSQL_HOST", dotenv_values),
+        mysql_port=int(_require("MYSQL_PORT", dotenv_values)),
+        mysql_user=_require("MYSQL_USER", dotenv_values),
+        mysql_password=_require("MYSQL_PASSWORD", dotenv_values),
+        mysql_database=_require("MYSQL_DATABASE", dotenv_values),
+        neo4j_uri=_require("NEO4J_URI", dotenv_values),
+        neo4j_user=_require("NEO4J_USER", dotenv_values),
+        neo4j_password=_require("NEO4J_PASSWORD", dotenv_values),
+        neo4j_database=_require("NEO4J_DATABASE", dotenv_values),
+        auth_secret=_require("AUTH_SECRET", dotenv_values),
+        auth_exp_hours=int(_require("AUTH_EXP_HOURS", dotenv_values)),
+        graphrag_response_type=_require("GRAPH_MVP_GRAPHRAG_RESPONSE_TYPE", dotenv_values),
+        graphrag_index_method=_normalize_index_method(_require("GRAPH_MVP_GRAPHRAG_INDEX_METHOD", dotenv_values)),
+        graphrag_local_embeddings=_parse_bool(_require("GRAPH_MVP_LOCAL_EMBEDDINGS", dotenv_values), default=False),
     )

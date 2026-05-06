@@ -48,7 +48,7 @@ class GraphRAGService:
                 ["init", "--root", str(workspace), "--force"],
                 cwd=self.settings.root_dir,
             )
-        self._write_workspace_env(workspace)
+        self._remove_workspace_env(workspace)
         self._patch_settings(workspace)
         return workspace
 
@@ -76,7 +76,6 @@ class GraphRAGService:
                     [
                         f"项目名：{project.title}",
                         f"类型：{project.genre}",
-                        f"核心前提：{project.premise}",
                         f"世界设定：{project.world_brief}",
                         f"用户自定义偏好：{project.writing_rules or '无'}",
                     ]
@@ -199,6 +198,79 @@ class GraphRAGService:
             (input_dir / filename).write_text(content.strip() + "\n", encoding="utf-8")
         return workspace
 
+    def prepare_project_inputs(
+        self,
+        project: Project,
+        memories: list[Memory],
+        sources: list[SourceDocument],
+        character_cards: list[CharacterCard] | None = None,
+        character_updates: list[CharacterStateUpdate] | None = None,
+        relationship_updates: list[RelationshipStateUpdate] | None = None,
+        story_events: list[StoryEvent] | None = None,
+        world_updates: list[WorldPerceptionUpdate] | None = None,
+    ) -> Path:
+        return self.rebuild_inputs(
+            project,
+            memories,
+            sources,
+            character_cards=character_cards,
+            character_updates=character_updates,
+            relationship_updates=relationship_updates,
+            story_events=story_events,
+            world_updates=world_updates,
+        )
+
+    def review_payload(self, workspace: Path) -> dict[str, object]:
+        input_dir = workspace / "input"
+        files = sorted(item.name for item in input_dir.glob("*.txt")) if input_dir.exists() else []
+        file_payloads: list[dict[str, str]] = []
+        preview_blocks: list[str] = []
+        for name in files:
+            content = (input_dir / name).read_text(encoding="utf-8").strip()
+            category = self._review_category(name)
+            title = self._review_title(name, content)
+            file_payloads.append(
+                {
+                    "filename": name,
+                    "title": title,
+                    "category": category,
+                    "content": content,
+                }
+            )
+        for item in file_payloads[:6]:
+            preview_blocks.append(f"# {item['filename']}\n{item['content'][:1200]}")
+        return {
+            "workspace_path": str(workspace),
+            "input_files": files,
+            "files": file_payloads,
+            "preview_text": "\n\n".join(preview_blocks).strip(),
+        }
+
+    def _review_category(self, filename: str) -> str:
+        if filename.startswith("00_project_profile"):
+            return "project"
+        if filename.startswith("memory_"):
+            return "memory"
+        if filename.startswith("source_"):
+            return "source"
+        if filename.startswith("character_card_"):
+            return "character"
+        if filename.startswith("state_character_"):
+            return "character_state"
+        if filename.startswith("state_relationship_"):
+            return "relationship_state"
+        if filename.startswith("story_event_"):
+            return "story_event"
+        if filename.startswith("world_update_"):
+            return "world_update"
+        return "other"
+
+    def _review_title(self, filename: str, content: str) -> str:
+        first_line = next((line.strip() for line in content.splitlines() if line.strip()), filename)
+        if "：" in first_line:
+            return first_line.split("：", 1)[1].strip() or filename
+        return first_line
+
     def index_project(
         self,
         project: Project,
@@ -241,6 +313,7 @@ class GraphRAGService:
         workspace = self.workspace_path(project)
         if not workspace.exists():
             raise RuntimeError("GraphRAG 工作区不存在，请先索引项目。")
+        self._remove_workspace_env(workspace)
         stdout = self._run_graphrag_command(
             [
                 "query",
@@ -336,18 +409,10 @@ class GraphRAGService:
             return None
         return max(matches, key=lambda item: item.stat().st_mtime)
 
-    def _write_workspace_env(self, workspace: Path) -> None:
-        content = "\n".join(
-            [
-                f"GRAPHRAG_CHAT_API_KEY={self.settings.openai_api_key or ''}",
-                f"GRAPHRAG_CHAT_API_BASE={self.settings.openai_base_url}",
-                f"GRAPHRAG_CHAT_MODEL={self.settings.utility_model}",
-                f"GRAPHRAG_EMBEDDING_API_KEY={self.settings.embedding_api_key or ''}",
-                f"GRAPHRAG_EMBEDDING_API_BASE={self.settings.embedding_base_url}",
-                f"GRAPHRAG_EMBEDDING_MODEL={self.settings.embedding_model}",
-            ]
-        )
-        (workspace / ".env").write_text(content + "\n", encoding="utf-8")
+    def _remove_workspace_env(self, workspace: Path) -> None:
+        workspace_env = workspace / ".env"
+        if workspace_env.exists():
+            workspace_env.unlink()
 
     def _patch_settings(self, workspace: Path) -> None:
         settings_path = workspace / "settings.yaml"

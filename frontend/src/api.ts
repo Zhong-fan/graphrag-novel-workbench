@@ -5,7 +5,9 @@ import type {
   CharacterCard,
   CharacterCardPayload,
   FavoriteToggleResponse,
+  GraphReviewPayload,
   GenerationItem,
+  GenerationProgress,
   IndexResponse,
   LikeToggleResponse,
   MemoryItem,
@@ -15,6 +17,8 @@ import type {
   UpdateNovelPayload,
   PublishNovelPayload,
   Project,
+  ProjectChapter,
+  ProjectChapterPayload,
   ProjectDetailResponse,
   ProjectPayload,
   SourceItem,
@@ -24,6 +28,7 @@ import type {
   CreateFolderPayload,
   DeletePayload,
   UpdateNovelChapterPayload,
+  UpdateProjectChapterPayload,
   MoveProjectFolderPayload,
   MyWorkspaceResponse,
   ProjectFolder,
@@ -154,6 +159,10 @@ export const api = {
     request<Project>(`/api/projects/${projectId}`, { method: "DELETE", token, body: JSON.stringify(payload) }),
   projectDetail: (token: string, projectId: number) =>
     request<ProjectDetailResponse>(`/api/projects/${projectId}`, { token }),
+  createProjectChapter: (token: string, projectId: number, payload: ProjectChapterPayload) =>
+    request<ProjectChapter>(`/api/projects/${projectId}/chapters`, { method: "POST", token, body: JSON.stringify(payload) }),
+  updateProjectChapter: (token: string, projectId: number, chapterId: number, payload: UpdateProjectChapterPayload) =>
+    request<ProjectChapter>(`/api/projects/${projectId}/chapters/${chapterId}`, { method: "PUT", token, body: JSON.stringify(payload) }),
   addMemory: (
     token: string,
     projectId: number,
@@ -168,12 +177,21 @@ export const api = {
     projectId: number,
     payload: { title: string; content: string; source_kind: string },
   ) => request<SourceItem>(`/api/projects/${projectId}/sources`, { method: "POST", token, body: JSON.stringify(payload) }),
+  prepareGraphReview: (token: string, projectId: number) =>
+    request<GraphReviewPayload>(`/api/projects/${projectId}/graphrag/prepare-review`, { method: "POST", token }),
+  updateGraphReviewFile: (token: string, projectId: number, filename: string, payload: { content: string }) =>
+    request<GraphReviewPayload>(`/api/projects/${projectId}/graphrag/files/${encodeURIComponent(filename)}`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(payload),
+    }),
   indexProject: (token: string, projectId: number, payload: { force_rebuild: boolean }) =>
     request<IndexResponse>(`/api/projects/${projectId}/index`, { method: "POST", token, body: JSON.stringify(payload) }),
   generate: (
     token: string,
     projectId: number,
     payload: {
+      chapter_id: number;
       prompt: string;
       search_method: string;
       response_type: string;
@@ -183,6 +201,13 @@ export const api = {
       write_evolution: boolean;
     },
   ) => request<GenerationItem>(`/api/projects/${projectId}/generate`, { method: "POST", token, body: JSON.stringify(payload) }),
+  generationProgress: (token: string, projectId: number) =>
+    request<GenerationProgress>(
+      `/api/projects/${projectId}/generate/progress`,
+      { token },
+    ),
+  continueGeneration: (token: string, projectId: number, generationId: number) =>
+    request<GenerationItem>(`/api/projects/${projectId}/generations/${generationId}/continue`, { method: "POST", token }),
   listNovels: (token?: string | null) => request<NovelCard[]>("/api/novels", { token }),
   novelDetail: (novelId: number, token?: string | null) => request<NovelDetail>(`/api/novels/${novelId}`, { token }),
   listFavorites: (token: string) => request<NovelCard[]>("/api/me/favorites", { token }),

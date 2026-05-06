@@ -16,6 +16,12 @@ def build_llm(settings: Settings):
         return OpenAIResponsesLLM(
             api_key=settings.openai_api_key,
             base_url=settings.openai_base_url,
+            use_system_proxy=settings.openai_use_system_proxy,
+            use_responses=settings.llm_use_responses,
+            stream_responses=settings.llm_stream_responses,
+            request_timeout_seconds=settings.llm_request_timeout_seconds,
+            max_attempts=settings.llm_max_attempts,
+            retry_max_sleep_seconds=settings.llm_retry_max_sleep_seconds,
         )
     return MockLLM()
 

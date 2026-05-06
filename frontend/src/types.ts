@@ -32,7 +32,6 @@ export interface Project {
   id: number;
   title: string;
   genre: string;
-  premise: string;
   world_brief: string;
   writing_rules: string;
   style_profile: string;
@@ -46,10 +45,31 @@ export interface Project {
 export interface ProjectPayload {
   title: string;
   genre: string;
-  premise: string;
   world_brief: string;
   writing_rules: string;
   style_profile: string;
+}
+
+export interface ProjectChapter {
+  id: number;
+  project_id: number;
+  title: string;
+  premise: string;
+  chapter_no: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectChapterPayload {
+  title: string;
+  premise: string;
+  chapter_no?: number | null;
+}
+
+export interface UpdateProjectChapterPayload {
+  title: string;
+  premise: string;
+  chapter_no: number;
 }
 
 export interface MemoryItem {
@@ -94,23 +114,42 @@ export interface SourceItem {
 
 export interface GenerationItem {
   id: number;
+  project_chapter_id?: number | null;
   title: string;
   content: string;
   summary: string;
   retrieval_context: string;
   scene_card: string;
   evolution_snapshot: string;
+  generation_trace: string;
   search_method: string;
   response_type: string;
   created_at: string;
 }
 
+export interface GenerationProgressLog {
+  timestamp: string;
+  stage: string;
+  level: "info" | "warning" | "error" | string;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface GenerationProgress {
+  stage: string;
+  message: string;
+  trace?: Record<string, unknown>;
+  logs?: GenerationProgressLog[];
+}
+
 export interface ProjectDetailResponse {
   project: Project;
+  project_chapters: ProjectChapter[];
   memories: MemoryItem[];
   character_cards: CharacterCard[];
   sources: SourceItem[];
   generations: GenerationItem[];
+  graphrag_review?: GraphReviewPayload | null;
   character_state_updates: CharacterStateUpdate[];
   relationship_state_updates: RelationshipStateUpdate[];
   story_events: StoryEventItem[];
@@ -148,6 +187,22 @@ export interface IndexResponse {
   neo4j_sync_status: string;
 }
 
+export interface GraphReviewPayload {
+  workspace_path: string;
+  input_files: string[];
+  files: GraphReviewFile[];
+  preview_text: string;
+  neo4j_sync_status: string;
+  last_indexed_at?: string | null;
+}
+
+export interface GraphReviewFile {
+  filename: string;
+  title: string;
+  category: string;
+  content: string;
+}
+
 export interface NovelChapter {
   id: number;
   title: string;
@@ -160,6 +215,8 @@ export interface NovelChapter {
 
 export interface NovelCard {
   id: number;
+  project_id?: number | null;
+  source_generation_id?: number | null;
   title: string;
   author: string;
   summary: string;
@@ -205,6 +262,7 @@ export interface LikeToggleResponse {
 
 export interface PublishNovelPayload {
   project_id: number;
+  project_chapter_id: number;
   generation_id: number;
   title: string;
   author_name: string;
@@ -243,6 +301,7 @@ export interface RestoreTrashPayload {
 
 export interface AppendNovelChapterPayload {
   project_id: number;
+  project_chapter_id: number;
   generation_id: number;
   title: string;
   summary: string;
