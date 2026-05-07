@@ -210,6 +210,7 @@ class GenerationRun(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    canonicalized_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="generations")
     project_chapter: Mapped["ProjectChapter | None"] = relationship(back_populates="generations")
@@ -333,6 +334,7 @@ class CharacterStateUpdate(Base, TimestampMixin):
     self_view_shift: Mapped[str] = mapped_column(Text, default="", nullable=False)
     public_perception: Mapped[str] = mapped_column(Text, default="", nullable=False)
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="character_state_updates")
     generation_run: Mapped["GenerationRun"] = relationship(back_populates="character_state_updates")
@@ -350,6 +352,7 @@ class RelationshipStateUpdate(Base, TimestampMixin):
     direction: Mapped[str] = mapped_column(String(20), default="stable", nullable=False)
     intensity: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="relationship_state_updates")
     generation_run: Mapped["GenerationRun"] = relationship(back_populates="relationship_state_updates")
@@ -366,6 +369,7 @@ class StoryEvent(Base, TimestampMixin):
     impact_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
     participants_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     location_hint: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="story_events")
     generation_run: Mapped["GenerationRun"] = relationship(back_populates="story_events")
@@ -381,6 +385,7 @@ class WorldPerceptionUpdate(Base, TimestampMixin):
     observer_group: Mapped[str] = mapped_column(String(100), nullable=False)
     direction: Mapped[str] = mapped_column(String(20), default="stable", nullable=False)
     change_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="world_perception_updates")
     generation_run: Mapped["GenerationRun"] = relationship(back_populates="world_perception_updates")

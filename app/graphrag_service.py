@@ -130,6 +130,8 @@ class GraphRAGService:
             )
 
         for update in (character_updates or [])[:40]:
+            if getattr(update, "deleted_at", None) is not None:
+                continue
             documents.append(
                 (
                     f"state_character_{update.id:04d}.txt",
@@ -147,6 +149,8 @@ class GraphRAGService:
             )
 
         for update in (relationship_updates or [])[:40]:
+            if getattr(update, "deleted_at", None) is not None:
+                continue
             documents.append(
                 (
                     f"state_relationship_{update.id:04d}.txt",
@@ -164,6 +168,8 @@ class GraphRAGService:
             )
 
         for event in (story_events or [])[:40]:
+            if getattr(event, "deleted_at", None) is not None:
+                continue
             documents.append(
                 (
                     f"story_event_{event.id:04d}.txt",
@@ -180,6 +186,8 @@ class GraphRAGService:
             )
 
         for update in (world_updates or [])[:40]:
+            if getattr(update, "deleted_at", None) is not None:
+                continue
             documents.append(
                 (
                     f"world_update_{update.id:04d}.txt",

@@ -299,7 +299,7 @@ class TrashItemOut(BaseModel):
 
 
 class RestoreTrashItemRequest(BaseModel):
-    item_type: str = Field(..., pattern="^(project|novel|character_card)$")
+    item_type: str = Field(..., pattern="^(project|novel|character_card|dirty_evolution)$")
 
 
 class MyWorkspaceOut(BaseModel):

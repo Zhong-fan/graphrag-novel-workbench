@@ -273,6 +273,7 @@ const trashSummary = computed<Record<TrashItem["item_type"], number>>(() => ({
   project: trashItems.value.filter((item) => item.item_type === "project").length,
   novel: trashItems.value.filter((item) => item.item_type === "novel").length,
   character_card: trashItems.value.filter((item) => item.item_type === "character_card").length,
+  dirty_evolution: trashItems.value.filter((item) => item.item_type === "dirty_evolution").length,
 }));
 const managedNovels = computed(() => {
   const activeProjectId = activeProject.value?.project.id ?? null;
@@ -332,7 +333,7 @@ const currentStep = computed(() => {
   if (!hasProject.value) return "先新建项目，确定标题、题材和世界设定。";
   if (!(activeProject.value?.character_cards.length ?? 0)) return "先添加主要人物卡，再开始规划章节。";
   if (!selectedProjectChapter.value) return "先新建一个章节，写清这一章的故事前提。";
-  if (activeProject.value?.project.indexing_status !== "ready") return "整理资料后，项目会进入可生成章节草稿状态。";
+  if (activeProject.value?.project.indexing_status !== "ready") return "先准备并完成 GraphRAG 索引；未就绪时不能生成草稿。";
   return "选中章节后输入这一章想怎么写，草稿会进入当前章节的草稿箱。";
 });
 
@@ -355,7 +356,7 @@ function formatDateTime(value: string | undefined) {
 
 function projectStatusLabel(status: string | undefined) {
   if (!status) return "未开始";
-  if (status === "ready") return "可创作草稿";
+  if (status === "ready") return "可生成草稿";
   if (status === "indexing") return "资料准备中";
   if (status === "failed") return "准备失败";
   if (status === "stale") return "资料待更新";
@@ -1254,7 +1255,7 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               @save-chapter="submitUpdateProjectChapter()"
               @save-prompt="saveGenerationPromptDraft()"
               @generate-draft="submitAutoGenerate()"
-              @continue-draft="store.continueGeneration($event)"
+              @continue-draft="store.refreshGenerationEvolution($event)"
               @publish-draft="submitPublishNovel()"
               @append-draft="submitAppendChapter()"
             />
@@ -1499,6 +1500,7 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
                 <span>项目 {{ trashSummary.project }}</span>
                 <span>作品 {{ trashSummary.novel }}</span>
                 <span>人物卡 {{ trashSummary.character_card }}</span>
+                <span>脏演化 {{ trashSummary.dirty_evolution }}</span>
               </div>
             </section>
             <section class="panel">

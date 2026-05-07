@@ -206,8 +206,8 @@ export const api = {
       `/api/projects/${projectId}/generate/progress`,
       { token },
     ),
-  continueGeneration: (token: string, projectId: number, generationId: number) =>
-    request<GenerationItem>(`/api/projects/${projectId}/generations/${generationId}/continue`, { method: "POST", token }),
+  refreshGenerationEvolution: (token: string, projectId: number, generationId: number) =>
+    request<GenerationItem>(`/api/projects/${projectId}/generations/${generationId}/refresh-evolution`, { method: "POST", token }),
   listNovels: (token?: string | null) => request<NovelCard[]>("/api/novels", { token }),
   novelDetail: (novelId: number, token?: string | null) => request<NovelDetail>(`/api/novels/${novelId}`, { token }),
   listFavorites: (token: string) => request<NovelCard[]>("/api/me/favorites", { token }),
@@ -252,5 +252,10 @@ export const api = {
       method: "POST",
       token,
       body: JSON.stringify(payload),
+    }),
+  trashDirtyEvolution: (token: string, projectId: number) =>
+    request<{ status: string; stats: Record<string, number> }>(`/api/projects/${projectId}/dirty-evolution/trash`, {
+      method: "POST",
+      token,
     }),
 };

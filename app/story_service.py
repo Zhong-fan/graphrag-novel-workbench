@@ -137,6 +137,23 @@ class StoryGenerationService:
             }
 
         refined_content = self._normalize_dialogue(refined_content)
+        title, summary, refined_content = self._enforce_user_intent_coverage(
+            project_title=project_title,
+            genre=genre,
+            premise=premise,
+            world_brief=world_brief,
+            writing_rules=writing_rules,
+            style_profile=style_profile,
+            user_prompt=user_prompt,
+            response_type=response_type,
+            memory_lines=memory_lines,
+            scene_card=scene_card,
+            title=title,
+            summary=summary,
+            content=refined_content,
+            trace=trace,
+            progress=progress,
+        )
         return title, summary, refined_content
 
     def _parse_json(self, text: str) -> dict:
@@ -204,6 +221,120 @@ class StoryGenerationService:
                 "output": refined,
             }
         return refined
+
+    def _enforce_user_intent_coverage(
+        self,
+        *,
+        project_title: str,
+        genre: str,
+        premise: str,
+        world_brief: str,
+        writing_rules: str,
+        style_profile: str,
+        user_prompt: str,
+        response_type: str,
+        memory_lines: str,
+        scene_card: str,
+        title: str,
+        summary: str,
+        content: str,
+        trace: dict | None = None,
+        progress: Callable[..., None] | None = None,
+    ) -> tuple[str, str, str]:
+        system_prompt = (
+            "你是中文小说草稿质检与修订助手。"
+            "你的任务是检查草稿正文是否真正覆盖了用户要求这一章发生的内容。"
+            "如果没有覆盖，就在不偏离项目设定和章节前提的前提下重写为更贴合要求的版本。"
+            "输出必须是严格 JSON，字段只包含 title、summary、content、covered、reason。"
+        )
+        user_prompt_text = f"""
+项目：{project_title}
+类型：{genre}
+章节前提：
+{premise}
+
+世界设定：
+{world_brief or "暂无额外世界设定。"}
+
+项目自定义偏好：
+{writing_rules or "保持轻盈、自然、叙事连续，以人物互动推动场景。"}
+
+用户明确希望这一章发生什么：
+{user_prompt}
+
+长期设定与资料：
+{memory_lines}
+
+写作上下文卡：
+{scene_card}
+
+当前草稿标题：
+{title}
+
+当前草稿摘要：
+{summary}
+
+当前草稿正文：
+{content}
+
+任务：
+1. 判断当前草稿是否真正覆盖了用户要求这一章发生的关键内容。
+2. 如果已经覆盖，保留并返回等价内容。
+3. 如果没有覆盖，就重写标题、摘要、正文，让用户要求的关键推进点在正文里真实发生。
+
+判定标准：
+- “覆盖”指正文里实际发生了相关行动、冲突、对话、决定或结果。
+- 不能只写成计划、暗示、回忆、旁白说明或未来伏笔。
+- 不要为了补覆盖而脱离章节前提或项目资料。
+
+输出格式：
+{{
+  "title": "...",
+  "summary": "...",
+  "content": "...",
+  "covered": true,
+  "reason": "..."
+}}
+""".strip()
+
+        if progress:
+            progress("intent_check", "正在检查草稿是否覆盖本章要求")
+        response = self.llm.generate(
+            model=self.settings.utility_model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt_text,
+            event_callback=self._model_event_callback(progress, "intent_check"),
+        )
+        payload = self._parse_json(response.text)
+        next_title = str(payload.get("title", "")).strip() or title
+        next_summary = str(payload.get("summary", "")).strip() or summary
+        next_content = self._normalize_dialogue(str(payload.get("content", "")).strip() or content)
+        covered = bool(payload.get("covered", False))
+        reason = str(payload.get("reason", "")).strip()
+
+        if trace is not None:
+            trace["intent_check"] = {
+                "status": "succeeded",
+                "model": self.settings.utility_model,
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt_text,
+                "raw_output": response.text,
+                "parsed": {
+                    "title": next_title,
+                    "summary": next_summary,
+                    "content": next_content,
+                    "covered": covered,
+                    "reason": reason,
+                },
+            }
+
+        if progress:
+            progress(
+                "intent_check_done",
+                "本章要求已覆盖" if covered else "已按本章要求补写草稿",
+                details={"covered": covered, "reason": reason},
+            )
+        return next_title, next_summary, next_content
 
     def _model_event_callback(
         self,

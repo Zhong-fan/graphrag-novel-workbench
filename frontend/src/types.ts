@@ -167,7 +167,7 @@ export interface ProjectFolder {
 }
 
 export interface TrashItem {
-  item_type: "project" | "novel" | "character_card";
+  item_type: "project" | "novel" | "character_card" | "dirty_evolution";
   item_id: number;
   title: string;
   subtitle: string;
@@ -296,7 +296,7 @@ export interface DeletePayload {
 }
 
 export interface RestoreTrashPayload {
-  item_type: "project" | "novel" | "character_card";
+  item_type: "project" | "novel" | "character_card" | "dirty_evolution";
 }
 
 export interface AppendNovelChapterPayload {

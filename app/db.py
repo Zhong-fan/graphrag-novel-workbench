@@ -142,11 +142,24 @@ def _migrate_schema() -> None:
         if "generation_trace" not in generation_columns:
             connection.execute(text("ALTER TABLE generation_runs ADD COLUMN generation_trace TEXT NULL"))
             connection.execute(text("UPDATE generation_runs SET generation_trace = '' WHERE generation_trace IS NULL"))
+        if "canonicalized_at" not in generation_columns:
+            connection.execute(text("ALTER TABLE generation_runs ADD COLUMN canonicalized_at DATETIME NULL"))
 
         if "character_cards" in inspector.get_table_names():
             character_columns = {column["name"] for column in inspector.get_columns("character_cards")}
             if "deleted_at" not in character_columns:
                 connection.execute(text("ALTER TABLE character_cards ADD COLUMN deleted_at DATETIME NULL"))
+
+        for table_name in (
+            "character_state_updates",
+            "relationship_state_updates",
+            "story_events",
+            "world_perception_updates",
+        ):
+            if table_name in inspector.get_table_names():
+                table_columns = {column["name"] for column in inspector.get_columns(table_name)}
+                if "deleted_at" not in table_columns:
+                    connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN deleted_at DATETIME NULL"))
 
 
 def db_session() -> Session:

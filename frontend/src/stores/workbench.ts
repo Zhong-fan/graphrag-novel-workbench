@@ -634,7 +634,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
-  async function continueGeneration(generationId: number) {
+  async function refreshGenerationEvolution(generationId: number) {
     if (!token.value || !activeProject.value) {
       return;
     }
@@ -642,11 +642,11 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     error.value = "";
     success.value = "";
     try {
-      currentGeneration.value = await api.continueGeneration(token.value, activeProject.value.project.id, generationId);
+      currentGeneration.value = await api.refreshGenerationEvolution(token.value, activeProject.value.project.id, generationId);
       await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
-      success.value = "草稿后续处理已完成。";
+      success.value = "草稿变化快照已重新抽取。";
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "继续处理失败。";
+      error.value = err instanceof Error ? err.message : "重新抽取草稿变化失败。";
     } finally {
       loading.value = false;
     }
@@ -972,6 +972,30 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
+  async function trashDirtyEvolution(projectId: number) {
+    if (!token.value) {
+      return false;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const result = await api.trashDirtyEvolution(token.value, projectId);
+      await refreshWorkspace();
+      if (activeProject.value?.project.id === projectId) {
+        await selectProject(projectId, { showLoading: false, silent: true });
+      }
+      const total = Object.values(result.stats || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+      success.value = total ? `已将 ${total} 条脏演化移入回收站。` : "没有检测到需要清理的脏演化。";
+      return true;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "清理脏演化失败。";
+      return false;
+    } finally {
+      loading.value = false;
+    }
+  }
+
   return {
     bootstrap,
     captcha,
@@ -1013,6 +1037,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     deleteNovel,
     deleteCharacterCard,
     restoreTrashItem,
+    trashDirtyEvolution,
     updateProject,
     createProjectChapter,
     updateProjectChapter,
@@ -1025,7 +1050,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     updateGraphReviewFile,
     indexProject,
     generate,
-    continueGeneration,
+    refreshGenerationEvolution,
     toggleFavoriteNovel,
     toggleLikeNovel,
     publishNovelFromGeneration,
