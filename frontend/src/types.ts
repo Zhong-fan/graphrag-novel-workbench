@@ -185,6 +185,7 @@ export interface IndexResponse {
   status: string;
   workspace_path: string;
   neo4j_sync_status: string;
+  last_error: string;
 }
 
 export interface GraphReviewPayload {
@@ -193,6 +194,7 @@ export interface GraphReviewPayload {
   files: GraphReviewFile[];
   preview_text: string;
   neo4j_sync_status: string;
+  last_error: string;
   last_indexed_at?: string | null;
 }
 

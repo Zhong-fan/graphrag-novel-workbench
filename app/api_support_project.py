@@ -74,6 +74,7 @@ def _mark_project_stale(project: Project) -> None:
     project.indexing_status = "stale"
     if project.graph_workspace is not None:
         project.graph_workspace.neo4j_sync_status = "stale"
+        project.graph_workspace.last_error = ""
 
 
 def _graph_review_out(project: Project) -> GraphReviewOut | None:
@@ -90,6 +91,7 @@ def _graph_review_out(project: Project) -> GraphReviewOut | None:
             files=[],
             preview_text="",
             neo4j_sync_status=record.neo4j_sync_status,
+            last_error=record.last_error,
             last_indexed_at=record.last_indexed_at,
         )
     payload = service.review_payload(workspace)
@@ -99,6 +101,7 @@ def _graph_review_out(project: Project) -> GraphReviewOut | None:
         files=[GraphReviewFileOut(**item) for item in payload["files"]],
         preview_text=payload["preview_text"],
         neo4j_sync_status=record.neo4j_sync_status,
+        last_error=record.last_error,
         last_indexed_at=record.last_indexed_at,
     )
 

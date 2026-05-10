@@ -448,6 +448,35 @@ button {
   place-items: start;
 }
 
+.empty-panel {
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+  max-width: 640px;
+  padding: var(--space-6);
+  border: 1px solid rgba(255, 255, 255, 0.86);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: var(--shadow-sm);
+}
+
+.empty-panel h2 {
+  margin: 0;
+  font-size: 1.45rem;
+}
+
+.empty-panel p {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.empty-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
 .guide-card h2 {
   font-size: 1.4rem;
   line-height: 1.4;

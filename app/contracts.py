@@ -155,6 +155,7 @@ class IndexResponse(BaseModel):
     status: str
     workspace_path: str
     neo4j_sync_status: str
+    last_error: str = ""
 
 
 class GraphReviewOut(BaseModel):
@@ -163,6 +164,7 @@ class GraphReviewOut(BaseModel):
     files: list["GraphReviewFileOut"] = []
     preview_text: str
     neo4j_sync_status: str
+    last_error: str = ""
     last_indexed_at: datetime | None = None
 
 

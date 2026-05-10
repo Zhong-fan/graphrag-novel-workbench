@@ -1633,52 +1633,15 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               @update:comment-content="commentForm.content = $event"
               @submit-comment="submitComment()"
             />
-            <NovelEditorPanel
-              v-else
-              :managed-novels="managedNovels"
-              :novel="null"
-              :projects="projects"
-              :selected-chapter="selectedChapter"
-              :sorted-chapters="sortedChapters"
-              :manage-title="manageNovelForm.title"
-              :manage-author-name="manageNovelForm.author_name"
-              :manage-summary="manageNovelForm.summary"
-              :manage-tagline="manageNovelForm.tagline"
-              :manage-visibility="manageNovelForm.visibility"
-              :chapter-title="chapterEditForm.title"
-              :chapter-summary="chapterEditForm.summary"
-              :chapter-content="chapterEditForm.content"
-              :chapter-no="chapterEditForm.chapter_no"
-              :append-title="appendChapterForm.title"
-              :append-summary="draftForm.summary"
-              :append-content="draftForm.content"
-              :append-chapter-no="appendChapterForm.chapter_no"
-              :selected-project-chapter="selectedProjectChapter"
-              :selected-draft-generation="selectedDraftGeneration"
-              :loading="loading"
-              @open-novel="openManagedNovelEditor"
-              @open-detail="goToView('detail')"
-              @open-workshop="activeProject?.project.id && openWorkshop(activeProject.project.id)"
-              @update:manage-title="manageNovelForm.title = $event"
-              @update:manage-author-name="manageNovelForm.author_name = $event"
-              @update:manage-summary="manageNovelForm.summary = $event"
-              @update:manage-tagline="manageNovelForm.tagline = $event"
-              @update:manage-visibility="manageNovelForm.visibility = $event"
-              @update:chapter-title="chapterEditForm.title = $event"
-              @update:chapter-summary="chapterEditForm.summary = $event"
-              @update:chapter-content="chapterEditForm.content = $event"
-              @update:chapter-no="chapterEditForm.chapter_no = $event"
-              @update:append-title="appendChapterForm.title = $event"
-              @update:append-summary="draftForm.summary = $event"
-              @update:append-content="draftForm.content = $event"
-              @update:append-chapter-no="appendChapterForm.chapter_no = $event"
-              @select-chapter="selectedChapterId = Number($event)"
-              @save-novel="submitUpdateNovel()"
-              @delete-novel="deleteCurrentNovel()"
-              @save-chapter="submitUpdateChapter()"
-              @append-chapter="submitAppendChapter()"
-              @back="goToView('detail')"
-            />
+            <section v-else class="empty-panel">
+              <p class="eyebrow">作品详情</p>
+              <h2>没有打开的作品</h2>
+              <p>从发现页、收藏或已发布作品列表中选择一部作品。</p>
+              <div class="empty-panel__actions">
+                <button class="ghost-button" type="button" @click="goToView(detailReturnView)">返回</button>
+                <button class="primary-button" type="button" @click="goToView('discover')">去发现</button>
+              </div>
+            </section>
           </template>
         </main>
       </div>

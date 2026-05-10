@@ -44,10 +44,12 @@ def create_run_index_job(settings: Settings):
                 )
                 project.indexing_status = "ready"
                 record.neo4j_sync_status = "synced"
+                record.last_error = ""
                 record.last_indexed_at = datetime.utcnow()
                 db.commit()
-            except Exception:
-                logger.exception("Background GraphRAG index failed for project_id=%s", project_id)
+            except Exception as exc:
+                detail = str(exc)
+                logger.exception("Background GraphRAG index failed for project_id=%s: %s", project_id, detail)
                 db.rollback()
                 project = db.get(Project, project_id)
                 if project is None:
@@ -56,6 +58,7 @@ def create_run_index_job(settings: Settings):
                 project.indexing_status = "failed"
                 if record is not None:
                     record.neo4j_sync_status = "failed"
+                    record.last_error = detail[:5000]
                 db.commit()
 
     return run_index_job

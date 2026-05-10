@@ -33,6 +33,31 @@ class QueryResult:
     text: str
 
 
+def diagnose_graphrag_error(message: str, settings: Settings | None = None) -> str:
+    normalized = message.lower()
+    provider_hint = ""
+    if settings is not None:
+        provider_hint = (
+            f"当前配置：chat={settings.openai_base_url} / {settings.utility_model}；"
+            f"embedding={settings.embedding_base_url} / {settings.embedding_model} "
+            f"({settings.embedding_provider_label})。"
+        )
+
+    if "neo4j" in normalized:
+        return "GraphRAG 索引可能已完成，但 Neo4j 同步失败。请检查 NEO4J_URI、账号密码和 Neo4j 服务状态。"
+    if "response_format" in normalized:
+        return f"GraphRAG 索引模型不兼容 response_format。请为 GraphRAG 切换到兼容 OpenAI response_format 的 chat provider。{provider_hint}"
+    if "model_not_found" in normalized or "model not found" in normalized or "404" in normalized:
+        return f"模型不可用或名称不被 provider 支持。请分别检查 chat 模型和 embedding 模型配置。{provider_hint}"
+    if "embedding" in normalized and any(token in normalized for token in ("503", "404", "not found", "connection", "connect")):
+        return f"Embedding provider 不可用。请确认 embedding 服务已启动、base_url 含 /v1，且模型名称正确。{provider_hint}"
+    if any(token in normalized for token in ("unauthorized", "invalid api key", "authentication", "401")):
+        return f"API key 无效或缺失。请检查 OPENAI_API_KEY 或 GRAPH_MVP_EMBEDDING_API_KEY。{provider_hint}"
+    if any(token in normalized for token in ("connection refused", "failed to establish", "name resolution", "timed out", "timeout")):
+        return f"无法连接到模型或 embedding 服务。请检查网络、Docker 服务和 base_url。{provider_hint}"
+    return f"GraphRAG 执行失败。请查看后端日志中的原始错误。{provider_hint}"
+
+
 class GraphRAGService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -470,5 +495,6 @@ class GraphRAGService:
         )
         if completed.returncode != 0:
             stderr = completed.stderr.strip() or completed.stdout.strip()
-            raise RuntimeError(f"GraphRAG 命令失败：{' '.join(args)}\n{stderr}")
+            diagnosis = diagnose_graphrag_error(stderr, self.settings)
+            raise RuntimeError(f"{diagnosis}\n\n原始错误：GraphRAG 命令失败：{' '.join(args)}\n{stderr}")
         return completed.stdout

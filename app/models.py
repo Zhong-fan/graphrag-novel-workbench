@@ -175,6 +175,7 @@ class GraphWorkspace(Base, TimestampMixin):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
     workspace_path: Mapped[str] = mapped_column(String(500), nullable=False)
     neo4j_sync_status: Mapped[str] = mapped_column(String(40), default="idle", nullable=False)
+    last_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
     last_indexed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="graph_workspace")

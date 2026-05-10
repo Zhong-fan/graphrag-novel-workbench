@@ -59,6 +59,7 @@ def register_graphrag_generation_routes(
         if project.indexing_status != "indexing" or payload.force_rebuild:
             project.indexing_status = "indexing"
             record.neo4j_sync_status = "indexing"
+            record.last_error = ""
             db.commit()
             background_tasks.add_task(run_index_job, project.id)
 
@@ -66,6 +67,7 @@ def register_graphrag_generation_routes(
             status=project.indexing_status,
             workspace_path=record.workspace_path,
             neo4j_sync_status=record.neo4j_sync_status,
+            last_error=record.last_error,
         )
 
     @router.post("/api/projects/{project_id}/graphrag/prepare-review", response_model=GraphReviewOut)
@@ -91,6 +93,7 @@ def register_graphrag_generation_routes(
         record.workspace_path = str(workspace)
         if record.neo4j_sync_status == "idle":
             record.neo4j_sync_status = "stale"
+        record.last_error = ""
         db.commit()
         db.refresh(project)
         review = _graph_review_out(project)
@@ -116,6 +119,7 @@ def register_graphrag_generation_routes(
             raise HTTPException(status_code=404, detail="目标输入文件不存在。")
         target.write_text(payload.content.strip() + "\n", encoding="utf-8")
         record.neo4j_sync_status = "stale"
+        record.last_error = ""
         project.indexing_status = "stale"
         db.commit()
         db.refresh(project)

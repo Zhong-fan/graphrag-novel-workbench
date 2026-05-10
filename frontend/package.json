@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "check:template": "node ../scripts/check-app-template.mjs",
+    "build": "npm run check:template && vue-tsc --noEmit && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
