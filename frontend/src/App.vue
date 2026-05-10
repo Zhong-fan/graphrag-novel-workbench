@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 
+import AuthModal from "./components/auth/AuthModal.vue";
 import ProfileSettingsPanel from "./components/workspace/ProfileSettingsPanel.vue";
 import NovelDetailPanel from "./components/workspace/NovelDetailPanel.vue";
 import NovelEditorPanel from "./components/workspace/NovelEditorPanel.vue";
@@ -11,25 +12,9 @@ import ProjectSettingsPanel from "./components/workspace/ProjectSettingsPanel.vu
 import NovelReaderPanel from "./components/workspace/NovelReaderPanel.vue";
 import StudioWorkspacePanel from "./components/workspace/StudioWorkspacePanel.vue";
 import WorkspaceSidebar from "./components/workspace/WorkspaceSidebar.vue";
+import { useAuthFlow } from "./composables/useAuthFlow";
 import { useWorkbenchStore } from "./stores/workbench";
-import type { CharacterCard, NovelCard, ProjectChapter, ProjectPayload, TrashItem } from "./types";
-
-type ViewKey =
-  | "home"
-  | "discover"
-  | "favorites"
-  | "studio"
-  | "trash"
-  | "projectCreate"
-  | "projectSettings"
-  | "characters"
-  | "workshop"
-  | "generationTrace"
-  | "novelEditor"
-  | "reader"
-  | "detail"
-  | "profile"
-  | "auth";
+import type { CharacterCard, NovelCard, ProjectChapter, ProjectPayload, TrashItem, ViewKey } from "./types";
 
 const store = useWorkbenchStore();
 const {
@@ -53,10 +38,7 @@ const {
 } = storeToRefs(store);
 
 const currentView = ref<ViewKey>("home");
-const authMode = ref<"register" | "login">("register");
 const authError = ref("");
-const showRegisterPassword = ref(false);
-const showLoginPassword = ref(false);
 const favoritesTab = ref<"liked" | "favorited">("favorited");
 const novelLayout = ref<"grid" | "list">("grid");
 const novelSearch = ref("");
@@ -69,9 +51,8 @@ const movingProjectId = ref<number | null>(null);
 const selectedWorkspaceFolderId = ref<number | null>(null);
 const workspacePage = ref(1);
 const workspacePageSize = ref(6);
-const authReturnView = ref<ViewKey>("home");
-const authRequestedView = ref<ViewKey | null>(null);
 const hasRestoredViewState = ref(false);
+const mobileSidebarOpen = ref(false);
 let feedbackTimer: number | null = null;
 const persistedViewKey = "graph_mvp_current_view";
 const persistedProjectIdKey = "graph_mvp_active_project_id";
@@ -90,9 +71,6 @@ const restorableViews: ViewKey[] = [
   "workshop",
   "profile",
 ];
-
-const loginForm = reactive({ username: "", password: "" });
-const registerForm = reactive({ username: "", password: "", confirmPassword: "", captcha_answer: "" });
 
 const genreOptions = [
   "现代都市轻小说",
@@ -282,6 +260,8 @@ const managedNovels = computed(() => {
     : myNovels.value;
   return [...source].sort((a, b) => parseServerTime(b.updated_at).getTime() - parseServerTime(a.updated_at).getTime());
 });
+const activeProjectNovel = computed(() => managedNovels.value[0] ?? null);
+const hasPublishedNovelForProject = computed(() => Boolean(activeProjectNovel.value));
 
 function matchesNovelSearch(novel: NovelCard, keyword: string) {
   return [novel.title, novel.author, novel.genre, novel.tagline, novel.summary, novel.latest_excerpt]
@@ -338,10 +318,55 @@ const currentStep = computed(() => {
 });
 
 const publishDefaults = computed(() => ({
-  title: activeProject.value?.project.title || selectedDraftGeneration.value?.title || "",
+  title: activeProject.value?.project.title || "",
   summary: selectedDraftGeneration.value?.summary || "",
   author_name: currentUser.value?.username || "",
 }));
+
+const {
+  authMode,
+  authFieldErrors,
+  authRequestedView,
+  openAuthPanel,
+  closeAuthPanel,
+  clearAuthFeedback,
+  requestLikeLogin,
+  requestFavoriteLogin,
+  requestCommentLogin,
+  submitRegister,
+  submitLogin,
+} = useAuthFlow({
+  currentView,
+  authError,
+  loading,
+  error,
+  success,
+  isAuthenticated,
+  captcha,
+  refreshCaptcha: () => store.refreshCaptcha(),
+  login: (payload) => store.login(payload),
+  register: (payload) => store.register(payload),
+  clearFeedback: () => store.clearFeedback(),
+  afterLike: async (novelId) => {
+    await store.toggleLikeNovel(novelId);
+  },
+  afterFavorite: async (novelId) => {
+    await store.toggleFavoriteNovel(novelId);
+  },
+  afterComment: async (novelId, content) => {
+    if (currentNovel.value?.id !== novelId) {
+      await store.openNovel(novelId);
+    }
+    currentView.value = "detail";
+    commentForm.content = content;
+    await store.submitNovelComment(content);
+    if (!error.value) {
+      commentForm.content = "";
+      return true;
+    }
+    return false;
+  },
+});
 
 function formatDateTime(value: string | undefined) {
   if (!value) return "-";
@@ -369,6 +394,7 @@ function goToView(view: ViewKey) {
     return;
   }
   currentView.value = view;
+  mobileSidebarOpen.value = false;
 }
 
 function readPersistedNumber(key: string) {
@@ -430,26 +456,32 @@ async function restoreViewState() {
 
 function openWorkspace() {
   if (!isAuthenticated.value) {
+    authError.value = "请先登录后再进入我的小说。";
     openAuthPanel("login", "studio");
     return;
   }
   currentView.value = "studio";
+  mobileSidebarOpen.value = false;
 }
 
 function openFavorites() {
   if (!isAuthenticated.value) {
+    authError.value = "请先登录后再查看喜欢和收藏。";
     openAuthPanel("login", "favorites");
     return;
   }
   currentView.value = "favorites";
+  mobileSidebarOpen.value = false;
 }
 
 function openTrash() {
   if (!isAuthenticated.value) {
+    authError.value = "请先登录后再查看回收站。";
     openAuthPanel("login", "trash");
     return;
   }
   currentView.value = "trash";
+  mobileSidebarOpen.value = false;
 }
 
 function requireAuth(nextView: ViewKey) {
@@ -460,17 +492,8 @@ function requireAuth(nextView: ViewKey) {
   currentView.value = nextView;
 }
 
-function openAuthPanel(mode: "register" | "login", nextView?: ViewKey) {
-  if (currentView.value !== "auth") authReturnView.value = currentView.value;
-  authRequestedView.value = nextView ?? null;
-  authMode.value = mode;
-  currentView.value = "auth";
-}
-
-function closeAuthPanel() {
-  authError.value = "";
-  currentView.value = authReturnView.value;
-  authRequestedView.value = null;
+function toggleMobileSidebar() {
+  mobileSidebarOpen.value = !mobileSidebarOpen.value;
 }
 
 function openProjectCreate() {
@@ -496,7 +519,7 @@ async function openContinueWriting(projectId?: number) {
 
 function clearToasts() {
   authError.value = "";
-  store.clearFeedback();
+  clearAuthFeedback();
 }
 
 function syncProjectSettingsForm() {
@@ -670,7 +693,7 @@ function openGeneration(id: number) {
   showPublishPanel.value = false;
   showAppendPanel.value = false;
   if (found) {
-    publishForm.title = activeProject.value?.project.title || found.title || "";
+    publishForm.title = activeProject.value?.project.title || "";
     publishForm.summary = found.summary || "";
     syncDraftFromGeneration(found);
   }
@@ -728,42 +751,19 @@ async function restoreTrash(item: TrashItem) {
 }
 
 async function likeNovel(novelId: number) {
+  if (!isAuthenticated.value) {
+    requestLikeLogin(novelId);
+    return;
+  }
   await store.toggleLikeNovel(novelId);
 }
 
 async function toggleSaveNovel(novelId: number) {
+  if (!isAuthenticated.value) {
+    requestFavoriteLogin(novelId);
+    return;
+  }
   await store.toggleFavoriteNovel(novelId);
-}
-
-async function submitRegister() {
-  authError.value = "";
-  if (registerForm.password !== registerForm.confirmPassword) {
-    authError.value = "两次输入的密码不一致。";
-    return;
-  }
-  if (!captcha.value) {
-    await store.refreshCaptcha();
-    return;
-  }
-  await store.register({
-    username: registerForm.username,
-    password: registerForm.password,
-    captcha_answer: registerForm.captcha_answer,
-    captcha_token: captcha.value.token,
-  });
-  if (isAuthenticated.value) {
-    currentView.value = authRequestedView.value ?? "studio";
-    authRequestedView.value = null;
-  }
-}
-
-async function submitLogin() {
-  authError.value = "";
-  await store.login(loginForm);
-  if (isAuthenticated.value) {
-    currentView.value = authRequestedView.value ?? "studio";
-    authRequestedView.value = null;
-  }
 }
 
 async function submitCreateProject() {
@@ -863,17 +863,29 @@ async function submitAutoGenerate() {
 }
 
 async function submitComment() {
+  if (!isAuthenticated.value) {
+    requestCommentLogin(currentNovel.value?.id ?? null, commentForm.content);
+    return;
+  }
+  if (!commentForm.content.trim()) {
+    authError.value = "评论不能为空。";
+    return;
+  }
   await store.submitNovelComment(commentForm.content);
   if (!error.value) commentForm.content = "";
 }
 
 async function submitPublishNovel() {
   if (!activeProject.value?.project || !selectedProjectChapter.value || !selectedDraftGeneration.value) return;
+  if (hasPublishedNovelForProject.value) {
+    authError.value = "这部小说已经发布过。更新章节请使用“更新小说章节”。";
+    return;
+  }
   const created = await store.publishNovelFromGeneration({
     project_id: activeProject.value.project.id,
     project_chapter_id: selectedProjectChapter.value.id,
     generation_id: selectedDraftGeneration.value.id,
-    title: publishForm.title.trim() || activeProject.value.project.title,
+    title: activeProject.value.project.title,
     author_name: publishForm.author_name.trim() || currentUser.value?.username || "匿名",
     summary: publishForm.summary.trim(),
     tagline: publishForm.tagline.trim(),
@@ -907,8 +919,16 @@ async function deleteCurrentNovel() {
 }
 
 async function submitAppendChapter() {
-  if (!currentNovel.value || !activeProject.value?.project || !selectedProjectChapter.value || !selectedDraftGeneration.value) return;
-  await store.appendNovelChapter(currentNovel.value.id, {
+  if (!activeProject.value?.project || !selectedProjectChapter.value || !selectedDraftGeneration.value) return;
+  const targetNovel = activeProjectNovel.value;
+  if (!targetNovel) {
+    authError.value = "这部小说还没有发布。请先发布小说，再更新章节。";
+    return;
+  }
+  if (currentNovel.value?.id !== targetNovel.id) {
+    await store.openNovel(targetNovel.id);
+  }
+  await store.appendNovelChapter(targetNovel.id, {
     project_id: activeProject.value.project.id,
     project_chapter_id: selectedProjectChapter.value.id,
     generation_id: selectedDraftGeneration.value.id,
@@ -1076,52 +1096,17 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
     </div>
 
     <template v-if="currentView === 'auth'">
-      <section class="auth-page">
-        <section class="auth-modal auth-modal--page panel">
-          <div class="panel-heading auth-modal__head">
-            <div>
-              <p class="panel-heading__kicker">{{ authMode === "register" ? "创建账号" : "登录" }}</p>
-              <h2>{{ authMode === "register" ? "创建你的写作空间" : "回到你的项目" }}</h2>
-            </div>
-            <button class="ghost-button ghost-button--small" type="button" @click="closeAuthPanel()">稍后再说</button>
-          </div>
-          <div class="auth-tabs">
-            <button class="auth-tab" :class="{ 'auth-tab--active': authMode === 'register' }" type="button" @click="authMode = 'register'">注册</button>
-            <button class="auth-tab" :class="{ 'auth-tab--active': authMode === 'login' }" type="button" @click="authMode = 'login'">登录</button>
-          </div>
-          <form v-if="authMode === 'register'" class="form-stack" @submit.prevent="submitRegister()">
-            <label class="field"><span>用户名</span><input v-model.trim="registerForm.username" autocomplete="username" /></label>
-            <label class="field">
-              <span>密码</span>
-              <div class="password-field">
-                <input v-model="registerForm.password" :type="showRegisterPassword ? 'text' : 'password'" autocomplete="new-password" />
-                <button class="password-toggle" type="button" @click="showRegisterPassword = !showRegisterPassword">{{ showRegisterPassword ? "隐藏" : "显示" }}</button>
-              </div>
-            </label>
-            <label class="field"><span>确认密码</span><input v-model="registerForm.confirmPassword" :type="showRegisterPassword ? 'text' : 'password'" /></label>
-            <label class="field">
-              <span>验证码</span>
-              <div class="captcha-row">
-                <div class="captcha-box">{{ captcha?.challenge ?? "正在生成..." }}</div>
-                <button class="ghost-button ghost-button--small" type="button" @click="store.refreshCaptcha()">换一个</button>
-              </div>
-              <input v-model.trim="registerForm.captcha_answer" inputmode="numeric" />
-            </label>
-            <button class="primary-button" :disabled="loading">{{ loading ? "正在注册..." : "注册并登录" }}</button>
-          </form>
-          <form v-else class="form-stack" @submit.prevent="submitLogin()">
-            <label class="field"><span>用户名</span><input v-model.trim="loginForm.username" autocomplete="username" /></label>
-            <label class="field">
-              <span>密码</span>
-              <div class="password-field">
-                <input v-model="loginForm.password" :type="showLoginPassword ? 'text' : 'password'" autocomplete="current-password" />
-                <button class="password-toggle" type="button" @click="showLoginPassword = !showLoginPassword">{{ showLoginPassword ? "隐藏" : "显示" }}</button>
-              </div>
-            </label>
-            <button class="primary-button" :disabled="loading">{{ loading ? "正在登录..." : "登录" }}</button>
-          </form>
-        </section>
-      </section>
+      <AuthModal
+        v-model:mode="authMode"
+        :loading="loading"
+        :captcha="captcha"
+        :register-field-errors="authFieldErrors.register"
+        :login-field-errors="authFieldErrors.login"
+        @close="closeAuthPanel()"
+        @refresh-captcha="store.refreshCaptcha()"
+        @register="submitRegister"
+        @login="submitLogin"
+      />
     </template>
 
     <template v-else-if="['novelEditor', 'projectSettings', 'characters', 'workshop', 'generationTrace'].includes(currentView)">
@@ -1240,7 +1225,8 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               :show-publish-panel="showPublishPanel"
               :show-append-panel="showAppendPanel"
               :current-novel="currentNovel"
-              :can-append-to-novel="Boolean(currentNovel && isManagingCurrentNovel)"
+              :has-published-novel="hasPublishedNovelForProject"
+              :published-novel-title="activeProjectNovel?.title"
               @update:chapter-form="Object.assign(projectChapterForm, $event)"
               @update:chapter-edit-form="Object.assign(projectChapterEditForm, $event)"
               @update:generation-form="Object.assign(generationForm, $event)"
@@ -1321,9 +1307,46 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
       </div>
     </template>
 
+    <template v-else-if="currentView === 'reader'">
+      <NovelReaderPanel
+        v-if="currentNovel && selectedChapter"
+        :novel-title="currentNovel.title"
+        :chapter="selectedChapter"
+        :chapters="sortedChapters"
+        :previous-chapter="previousChapter"
+        :next-chapter="nextChapter"
+        :has-navigation="hasChapterNavigation"
+        :chapter-jump-no="chapterJumpNo"
+        :can-edit="isManagingCurrentNovel"
+        @back="goToView('detail')"
+        @edit="openNovelEditor(activeProject?.project.id)"
+        @select-chapter="selectChapterById"
+        @jump="jumpToChapterNo"
+        @update:chapter-jump-no="chapterJumpNo = $event"
+      />
+      <section v-else class="empty-panel">
+        <p class="eyebrow">阅读</p>
+        <h2>没有可阅读的章节</h2>
+        <p>请回到作品详情，选择一本包含章节的小说。</p>
+        <div class="empty-panel__actions">
+          <button class="ghost-button" type="button" @click="goToView('detail')">返回作品</button>
+          <button class="primary-button" type="button" @click="goToView('discover')">去发现</button>
+        </div>
+      </section>
+    </template>
+
     <template v-else>
       <div class="workspace-shell">
-        <aside class="sidebar panel panel--paper">
+        <button
+          class="mobile-sidebar-toggle ghost-button ghost-button--small"
+          type="button"
+          :aria-expanded="mobileSidebarOpen ? 'true' : 'false'"
+          aria-controls="primary-sidebar"
+          @click="toggleMobileSidebar()"
+        >
+          {{ mobileSidebarOpen ? "收起菜单" : "打开菜单" }}
+        </button>
+        <aside id="primary-sidebar" class="sidebar panel panel--paper" :class="{ 'sidebar--mobile-open': mobileSidebarOpen }">
           <div class="brand brand--sidebar">
             <p class="eyebrow">晨流写作台</p>
             <h1>Chen Flow</h1>
@@ -1470,6 +1493,15 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
                 <p class="novel-card__text">{{ novel.latest_excerpt }}</p>
               </article>
             </div>
+            <section v-else class="empty-panel">
+              <p class="eyebrow">书架</p>
+              <h2>{{ novelSearch.trim() ? "没有找到匹配的作品" : "这里还没有作品" }}</h2>
+              <p>{{ novelSearch.trim() ? "换个关键词试试，或者清空搜索后再看全部内容。" : "先去发现页读一读，把喜欢的作品加到这里。" }}</p>
+              <div class="empty-panel__actions">
+                <button v-if="novelSearch.trim()" class="ghost-button" type="button" @click="novelSearch = ''">清空搜索</button>
+                <button class="primary-button" type="button" @click="goToView('discover')">去发现作品</button>
+              </div>
+            </section>
           </template>
 
           <template v-else-if="currentView === 'discover'">
@@ -1477,7 +1509,7 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               <div><p class="panel-heading__kicker">发现</p><h2>发现别人的小说</h2></div>
               <label class="field search-field"><span>搜索</span><input v-model="novelSearch" type="search" placeholder="标题、作者、简介或正文片段" /></label>
             </section>
-            <section class="novel-grid novel-grid--store" :class="{ 'novel-grid--list': novelLayout === 'list' }">
+            <section v-if="searchedNovels.length" class="novel-grid novel-grid--store" :class="{ 'novel-grid--list': novelLayout === 'list' }">
               <article v-for="novel in searchedNovels" :key="novel.id" class="novel-card novel-card--clickable" @click="openNovelDetail(novel.id, 'discover')">
                 <p class="novel-card__genre">{{ novel.genre }}</p>
                 <h3>{{ novel.title }}</h3>
@@ -1490,6 +1522,14 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
                   <button class="novel-card__toggle novel-card__toggle--star" :class="{ 'novel-card__toggle--active': novel.is_favorited }" type="button" @click.stop="toggleSaveNovel(novel.id)">★ {{ novel.favorites_count }}</button>
                 </div>
               </article>
+            </section>
+            <section v-else class="empty-panel">
+              <p class="eyebrow">发现</p>
+              <h2>没有找到匹配的作品</h2>
+              <p>当前关键词没有命中标题、作者、简介或正文片段。可以换个词，或者先回到全部作品。</p>
+              <div class="empty-panel__actions">
+                <button class="ghost-button" type="button" @click="novelSearch = ''">查看全部作品</button>
+              </div>
             </section>
           </template>
 

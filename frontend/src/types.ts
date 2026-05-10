@@ -1,3 +1,20 @@
+export type ViewKey =
+  | "home"
+  | "discover"
+  | "favorites"
+  | "studio"
+  | "trash"
+  | "projectCreate"
+  | "projectSettings"
+  | "characters"
+  | "workshop"
+  | "generationTrace"
+  | "novelEditor"
+  | "reader"
+  | "detail"
+  | "profile"
+  | "auth";
+
 export interface BootstrapResponse {
   service_name: string;
   graph_engine: string;

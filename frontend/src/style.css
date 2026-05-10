@@ -653,6 +653,12 @@ button {
   color: color-mix(in oklab, var(--ink-soft) 86%, white);
 }
 
+.field-error {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: color-mix(in oklab, var(--danger) 76%, var(--ink));
+}
+
 .choice-chips {
   display: flex;
   flex-wrap: wrap;
