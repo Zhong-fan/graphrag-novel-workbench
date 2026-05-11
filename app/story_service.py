@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from textwrap import dedent
 from typing import Any, Callable
 
 from .config import Settings
@@ -38,6 +39,7 @@ class StoryGenerationService:
         *,
         project_title: str,
         genre: str,
+        reference_work: str,
         premise: str,
         world_brief: str,
         writing_rules: str,
@@ -53,16 +55,19 @@ class StoryGenerationService:
         memory_lines = "\n".join(
             f"- {item['title']}：{item['content']}" for item in memories[:10]
         ) or "- 暂无额外长期设定。"
+        reference_guidance = self._reference_guidance(reference_work)
 
         system_prompt = story_generation_system_prompt(style_instructions(style_profile), writing_rules)
         prompt = story_generation_user_prompt(
             project_title=project_title,
             genre=genre,
+            reference_work=reference_work,
             premise=premise,
             world_brief=world_brief,
             user_prompt=user_prompt,
             response_type=response_type,
             memory_lines=memory_lines,
+            reference_guidance=reference_guidance,
             scene_card=scene_card,
         )
 
@@ -147,6 +152,8 @@ class StoryGenerationService:
             user_prompt=user_prompt,
             response_type=response_type,
             memory_lines=memory_lines,
+            reference_work=reference_work,
+            reference_guidance=reference_guidance,
             scene_card=scene_card,
             title=title,
             summary=summary,
@@ -234,6 +241,8 @@ class StoryGenerationService:
         user_prompt: str,
         response_type: str,
         memory_lines: str,
+        reference_work: str,
+        reference_guidance: str,
         scene_card: str,
         title: str,
         summary: str,
@@ -253,6 +262,9 @@ class StoryGenerationService:
 章节前提：
 {premise}
 
+参考作品：
+{reference_work or "无"}
+
 世界设定：
 {world_brief or "暂无额外世界设定。"}
 
@@ -264,6 +276,9 @@ class StoryGenerationService:
 
 长期设定与资料：
 {memory_lines}
+
+参考作品可迁移特征：
+{reference_guidance or "无"}
 
 写作上下文卡：
 {scene_card}
@@ -335,6 +350,29 @@ class StoryGenerationService:
                 details={"covered": covered, "reason": reason},
             )
         return next_title, next_summary, next_content
+
+    def _reference_guidance(self, reference_work: str) -> str:
+        if not reference_work.strip():
+            return ""
+        system_prompt = dedent(
+            """
+            你是小说参考作品分析助手。
+            请把用户给出的参考作品，转换为原创写作时可以借鉴的指导语。
+            输出要求：
+            - 只输出纯文本
+            - 4 到 7 行
+            - 每行以 `- ` 开头
+            - 包含气质、节奏、世界构成、情绪推进和边界提醒
+            - 明确不要直接复刻原作角色、剧情和专有名词
+            """
+        ).strip()
+        user_prompt = f"参考作品：{reference_work}\n请提炼原创写作可迁移指导语。"
+        response = self.llm.generate(
+            model=self.settings.utility_model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        return response.text.strip()
 
     def _model_event_callback(
         self,

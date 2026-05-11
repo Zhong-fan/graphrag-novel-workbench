@@ -60,17 +60,20 @@ def story_generation_user_prompt(
     *,
     project_title: str,
     genre: str,
+    reference_work: str,
     premise: str,
     world_brief: str,
     user_prompt: str,
     response_type: str,
     memory_lines: str,
+    reference_guidance: str,
     scene_card: str,
 ) -> str:
     return dedent(
         f"""
         项目：{project_title}
         类型：{genre}
+        参考作品：{reference_work or "无"}
 
         本章章节卡前提：
         {premise}
@@ -86,6 +89,9 @@ def story_generation_user_prompt(
 
         长期设定与资料：
         {memory_lines}
+
+        参考作品可迁移特征：
+        {reference_guidance or "无"}
 
         写作上下文卡：
         {scene_card}
@@ -104,6 +110,7 @@ def story_generation_user_prompt(
         - 场景内的天气、空间、物件和身体动作要参与叙事，不要只是装饰。
         - 如果本章有强情绪，不要直接喊出情绪标签，先写行为和反应。
         - 摘要写剧情事实，不要写营销文案。
+        - 如果提供了参考作品，只借鉴其气质、节奏、结构和可迁移设定，不要直接照搬角色、剧情节点、专有名词或原句。
 
         输出格式必须是严格 JSON：
         {{

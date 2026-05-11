@@ -49,6 +49,14 @@ export interface Project {
   id: number;
   title: string;
   genre: string;
+  reference_work: string;
+  reference_work_creator: string;
+  reference_work_medium: string;
+  reference_work_synopsis: string;
+  reference_work_style_traits: string[];
+  reference_work_world_traits: string[];
+  reference_work_narrative_constraints: string[];
+  reference_work_confidence_note: string;
   world_brief: string;
   writing_rules: string;
   style_profile: string;
@@ -62,9 +70,50 @@ export interface Project {
 export interface ProjectPayload {
   title: string;
   genre: string;
+  reference_work: string;
+  reference_work_creator: string;
+  reference_work_medium: string;
+  reference_work_synopsis: string;
+  reference_work_style_traits: string[];
+  reference_work_world_traits: string[];
+  reference_work_narrative_constraints: string[];
+  reference_work_confidence_note: string;
   world_brief: string;
   writing_rules: string;
   style_profile: string;
+}
+
+export interface ProjectCreateDraft extends ProjectPayload {
+  reference_work_confirmed: boolean;
+}
+
+export interface ProjectSuggestionRequest {
+  kind: "world_brief" | "writing_rules";
+  title: string;
+  genre: string;
+  reference_work: string;
+  seed_text: string;
+}
+
+export interface ProjectSuggestionResponse {
+  kind: "world_brief" | "writing_rules";
+  suggestions: string[];
+}
+
+export interface ReferenceWorkResolveRequest {
+  query: string;
+  genre: string;
+}
+
+export interface ReferenceWorkResolved {
+  canonical_title: string;
+  creator: string;
+  medium: string;
+  synopsis: string;
+  style_traits: string[];
+  world_traits: string[];
+  narrative_constraints: string[];
+  confidence_note: string;
 }
 
 export interface ProjectChapter {

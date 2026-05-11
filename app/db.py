@@ -9,6 +9,7 @@ from .config import load_settings
 
 SCHEMA_MIGRATIONS_TABLE = "schema_migrations"
 WORKSPACE_SCHEMA_MIGRATION = "20260507_0001_workspace_schema"
+NOVEL_PROJECT_TITLE_MIGRATION = "20260510_0002_novel_project_titles"
 
 
 settings = load_settings()
@@ -47,6 +48,12 @@ def _migrate_schema() -> None:
             WORKSPACE_SCHEMA_MIGRATION,
             "Workspace folders, project chapters, published novel links, and soft-delete fields",
             _migrate_workspace_schema,
+        )
+        _run_schema_migration(
+            connection,
+            NOVEL_PROJECT_TITLE_MIGRATION,
+            "Use project titles as published novel titles",
+            _migrate_novel_project_titles,
         )
 
 
@@ -117,6 +124,30 @@ def _migrate_workspace_schema(connection) -> None:
     if "style_profile" not in project_columns:
         connection.execute(text("ALTER TABLE projects ADD COLUMN style_profile VARCHAR(40) NULL"))
         connection.execute(text("UPDATE projects SET style_profile = 'light_novel' WHERE style_profile IS NULL OR style_profile = ''"))
+    if "reference_work" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work VARCHAR(255) NULL"))
+        connection.execute(text("UPDATE projects SET reference_work = '' WHERE reference_work IS NULL"))
+    if "reference_work_creator" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_creator VARCHAR(255) NULL"))
+        connection.execute(text("UPDATE projects SET reference_work_creator = '' WHERE reference_work_creator IS NULL"))
+    if "reference_work_medium" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_medium VARCHAR(120) NULL"))
+        connection.execute(text("UPDATE projects SET reference_work_medium = '' WHERE reference_work_medium IS NULL"))
+    if "reference_work_synopsis" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_synopsis TEXT NULL"))
+        connection.execute(text("UPDATE projects SET reference_work_synopsis = '' WHERE reference_work_synopsis IS NULL"))
+    if "reference_work_style_traits_json" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_style_traits_json TEXT NULL"))
+        connection.execute(text("UPDATE projects SET reference_work_style_traits_json = '[]' WHERE reference_work_style_traits_json IS NULL"))
+    if "reference_work_world_traits_json" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_world_traits_json TEXT NULL"))
+        connection.execute(text("UPDATE projects SET reference_work_world_traits_json = '[]' WHERE reference_work_world_traits_json IS NULL"))
+    if "reference_work_narrative_constraints_json" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_narrative_constraints_json TEXT NULL"))
+        connection.execute(text("UPDATE projects SET reference_work_narrative_constraints_json = '[]' WHERE reference_work_narrative_constraints_json IS NULL"))
+    if "reference_work_confidence_note" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_confidence_note TEXT NULL"))
+        connection.execute(text("UPDATE projects SET reference_work_confidence_note = '' WHERE reference_work_confidence_note IS NULL"))
     if "folder_id" not in project_columns:
         connection.execute(text("ALTER TABLE projects ADD COLUMN folder_id INTEGER NULL"))
     if "deleted_at" not in project_columns:
@@ -222,6 +253,27 @@ def _migrate_workspace_schema(connection) -> None:
             table_columns = _column_names(table_name)
             if "deleted_at" not in table_columns:
                 connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN deleted_at DATETIME NULL"))
+
+
+def _migrate_novel_project_titles(connection) -> None:
+    if not {"novels", "projects", "novel_chapters"}.issubset(_table_names()):
+        return
+    novel_columns = _column_names("novels")
+    if "project_id" not in novel_columns:
+        return
+    connection.execute(
+        text(
+            """
+            UPDATE novels n
+            JOIN projects p ON p.id = n.project_id
+            JOIN novel_chapters c ON c.novel_id = n.id AND c.chapter_no = 1
+            SET n.title = p.title
+            WHERE n.project_id IS NOT NULL
+              AND n.title = c.title
+              AND p.title <> ''
+            """
+        )
+    )
 
 
 def db_session() -> Session:

@@ -7,6 +7,7 @@ import ProfileSettingsPanel from "./components/workspace/ProfileSettingsPanel.vu
 import NovelDetailPanel from "./components/workspace/NovelDetailPanel.vue";
 import NovelEditorPanel from "./components/workspace/NovelEditorPanel.vue";
 import GenerationTracePanel from "./components/workspace/GenerationTracePanel.vue";
+import ProjectCreateWizard from "./components/workspace/ProjectCreateWizard.vue";
 import ProjectWorkshopPanel from "./components/workspace/ProjectWorkshopPanel.vue";
 import ProjectSettingsPanel from "./components/workspace/ProjectSettingsPanel.vue";
 import NovelReaderPanel from "./components/workspace/NovelReaderPanel.vue";
@@ -14,7 +15,7 @@ import StudioWorkspacePanel from "./components/workspace/StudioWorkspacePanel.vu
 import WorkspaceSidebar from "./components/workspace/WorkspaceSidebar.vue";
 import { useAuthFlow } from "./composables/useAuthFlow";
 import { useWorkbenchStore } from "./stores/workbench";
-import type { CharacterCard, NovelCard, ProjectChapter, ProjectPayload, TrashItem, ViewKey } from "./types";
+import type { CharacterCard, NovelCard, ProjectChapter, ProjectCreateDraft, ProjectPayload, ReferenceWorkResolved, TrashItem, ViewKey } from "./types";
 
 const store = useWorkbenchStore();
 const {
@@ -96,44 +97,73 @@ const styleProfileOptions = [
     value: "light_novel",
     label: "轻小说",
     description: "轻快、易读、偏人物互动，适合大多数网文和连载开局。",
+    bullets: ["优先人物互动", "句子更轻", "每段都要推进场景或关系"],
   },
   {
     value: "lyrical_restrained",
     label: "抒情克制",
     description: "更细腻，允许少量意象和情绪潜流，但不走厚重散文。",
+    bullets: ["允许细腻情绪", "意象少而准", "不能只有气氛没有动作"],
   },
   {
     value: "dialogue_driven",
     label: "对白驱动",
     description: "靠人物说话和来回拉扯推进，节奏更明快。",
+    bullets: ["优先对话推进", "减少解释型旁白", "每段带来关系或信息变化"],
   },
   {
     value: "cinematic_tense",
     label: "影视化紧张",
     description: "画面感强，段落更短，适合悬疑、冲突和追逐场景。",
+    bullets: ["写清动作顺序", "空间位置明确", "保持压力和推进"],
   },
   {
     value: "warm_healing",
     label: "温柔治愈",
     description: "语气柔和，生活感更强，适合日常、陪伴和情感修复。",
+    bullets: ["强化日常细节", "语言柔和自然", "优先可信的陪伴感"],
   },
   {
     value: "epic_serious",
     label: "厚重史诗",
     description: "叙述更稳、更庄重，适合奇幻、历史和大设定冲突。",
+    bullets: ["先交代局势和代价", "庄重但不堆辞藻", "服务更大的冲突与秩序"],
   },
 ];
 
 const emptyProject = (): ProjectPayload => ({
   title: "",
   genre: "现代都市",
+  reference_work: "",
+  reference_work_creator: "",
+  reference_work_medium: "",
+  reference_work_synopsis: "",
+  reference_work_style_traits: [],
+  reference_work_world_traits: [],
+  reference_work_narrative_constraints: [],
+  reference_work_confidence_note: "",
   world_brief: "",
   writing_rules: "",
   style_profile: "lyrical_restrained",
 });
 
-const projectForm = reactive<ProjectPayload>(emptyProject());
+const emptyProjectDraft = (): ProjectCreateDraft => ({
+  ...emptyProject(),
+  reference_work_confirmed: false,
+});
+
+const projectForm = reactive<ProjectCreateDraft>(emptyProjectDraft());
 const projectSettingsForm = reactive<ProjectPayload>(emptyProject());
+const projectCreateStep = ref<1 | 2 | 3>(1);
+const customGenreDraft = ref("");
+const customSettingsGenreDraft = ref("");
+const referenceWorkInput = ref("");
+const referenceWorkResolved = ref<ReferenceWorkResolved | null>(null);
+const assistantLoadingKind = ref<"world_brief" | "writing_rules" | "reference_work" | null>(null);
+const assistantSeedWorld = ref("");
+const assistantSeedWriting = ref("");
+const worldSuggestions = ref<string[]>([]);
+const writingSuggestions = ref<string[]>([]);
 const projectChapterForm = reactive({ title: "", premise: "", chapter_no: 1 });
 const projectChapterEditForm = reactive({ title: "", premise: "", chapter_no: 1 });
 
@@ -527,17 +557,157 @@ function syncProjectSettingsForm() {
   if (!project) return;
   projectSettingsForm.title = project.title;
   projectSettingsForm.genre = project.genre;
+  projectSettingsForm.reference_work = project.reference_work;
+  projectSettingsForm.reference_work_creator = project.reference_work_creator;
+  projectSettingsForm.reference_work_medium = project.reference_work_medium;
+  projectSettingsForm.reference_work_synopsis = project.reference_work_synopsis;
+  projectSettingsForm.reference_work_style_traits = [...project.reference_work_style_traits];
+  projectSettingsForm.reference_work_world_traits = [...project.reference_work_world_traits];
+  projectSettingsForm.reference_work_narrative_constraints = [...project.reference_work_narrative_constraints];
+  projectSettingsForm.reference_work_confidence_note = project.reference_work_confidence_note;
   projectSettingsForm.world_brief = project.world_brief;
   projectSettingsForm.writing_rules = project.writing_rules;
   projectSettingsForm.style_profile = project.style_profile;
+  customSettingsGenreDraft.value = genreOptions.includes(project.genre) ? "" : project.genre;
 }
 
 function applyGenre(target: ProjectPayload, value: string) {
   target.genre = value;
 }
 
-function styleProfileLabel(value: string) {
-  return styleProfileOptions.find((item) => item.value === value)?.label ?? "轻小说";
+function toggleCreateFolder() {
+  showCreateFolder.value = !showCreateFolder.value;
+  if (showCreateFolder.value) {
+    folderForm.name = "";
+    authError.value = "";
+    store.clearFeedback();
+  }
+}
+
+function closeCreateFolder() {
+  showCreateFolder.value = false;
+  folderForm.name = "";
+}
+
+function applyCustomGenre(target: ProjectPayload, draft: string) {
+  const value = draft.trim();
+  if (!value) {
+    authError.value = "请输入自定义题材名称。";
+    return;
+  }
+  target.genre = value;
+}
+
+function appendOrReplaceField(target: ProjectPayload, key: "world_brief" | "writing_rules", text: string, mode: "replace" | "append") {
+  if (mode === "replace") {
+    target[key] = text;
+    return;
+  }
+  const current = target[key].trim();
+  target[key] = current ? `${current}\n\n${text}` : text;
+}
+
+async function generateProjectSuggestion(kind: "world_brief" | "writing_rules", target: ProjectPayload) {
+  const seedText = (kind === "world_brief" ? assistantSeedWorld.value : assistantSeedWriting.value).trim();
+  if (seedText.length < 4) {
+    authError.value = "至少先写 4 个字，再让 AI 扩写。";
+    return;
+  }
+  assistantLoadingKind.value = kind;
+  authError.value = "";
+  store.clearFeedback();
+  const result = await store.suggestProjectBriefing({
+    kind,
+    title: target.title.trim(),
+    genre: target.genre.trim(),
+    reference_work: target.reference_work.trim(),
+    seed_text: seedText,
+  });
+  assistantLoadingKind.value = null;
+  if (!result) return;
+  if (kind === "world_brief") {
+    worldSuggestions.value = result.suggestions;
+    return;
+  }
+  writingSuggestions.value = result.suggestions;
+}
+
+function resetProjectAssistantState() {
+  projectCreateStep.value = 1;
+  customGenreDraft.value = "";
+  referenceWorkInput.value = "";
+  referenceWorkResolved.value = null;
+  projectForm.reference_work_confirmed = false;
+  assistantSeedWorld.value = "";
+  assistantSeedWriting.value = "";
+  worldSuggestions.value = [];
+  writingSuggestions.value = [];
+}
+
+async function resolveReferenceWork() {
+  const query = referenceWorkInput.value.trim();
+  if (!query) {
+    authError.value = "请先输入参考作品。";
+    return;
+  }
+  assistantLoadingKind.value = "reference_work";
+  authError.value = "";
+  store.clearFeedback();
+  const result = await store.resolveReferenceWork({ query, genre: projectForm.genre.trim() });
+  assistantLoadingKind.value = null;
+  if (!result) return;
+  referenceWorkResolved.value = result;
+  projectForm.reference_work = result.canonical_title;
+  projectForm.reference_work_creator = result.creator;
+  projectForm.reference_work_medium = result.medium;
+  projectForm.reference_work_synopsis = result.synopsis;
+  projectForm.reference_work_style_traits = [...result.style_traits];
+  projectForm.reference_work_world_traits = [...result.world_traits];
+  projectForm.reference_work_narrative_constraints = [...result.narrative_constraints];
+  projectForm.reference_work_confidence_note = result.confidence_note;
+  projectForm.reference_work_confirmed = false;
+}
+
+async function reResolveProjectSettingsReferenceWork() {
+  const query = projectSettingsForm.reference_work.trim();
+  if (!query) {
+    authError.value = "请先填写参考作品。";
+    return;
+  }
+  assistantLoadingKind.value = "reference_work";
+  authError.value = "";
+  store.clearFeedback();
+  const result = await store.resolveReferenceWork({ query, genre: projectSettingsForm.genre.trim() });
+  assistantLoadingKind.value = null;
+  if (!result) return;
+  projectSettingsForm.reference_work = result.canonical_title;
+  projectSettingsForm.reference_work_creator = result.creator;
+  projectSettingsForm.reference_work_medium = result.medium;
+  projectSettingsForm.reference_work_synopsis = result.synopsis;
+  projectSettingsForm.reference_work_style_traits = [...result.style_traits];
+  projectSettingsForm.reference_work_world_traits = [...result.world_traits];
+  projectSettingsForm.reference_work_narrative_constraints = [...result.narrative_constraints];
+  projectSettingsForm.reference_work_confidence_note = result.confidence_note;
+}
+
+function confirmReferenceWork() {
+  if (!referenceWorkResolved.value) return;
+  projectForm.reference_work = referenceWorkResolved.value.canonical_title;
+  referenceWorkInput.value = referenceWorkResolved.value.canonical_title;
+  projectForm.reference_work_confirmed = true;
+}
+
+function clearReferenceWorkResolution() {
+  referenceWorkResolved.value = null;
+  projectForm.reference_work = "";
+  projectForm.reference_work_creator = "";
+  projectForm.reference_work_medium = "";
+  projectForm.reference_work_synopsis = "";
+  projectForm.reference_work_style_traits = [];
+  projectForm.reference_work_world_traits = [];
+  projectForm.reference_work_narrative_constraints = [];
+  projectForm.reference_work_confidence_note = "";
+  projectForm.reference_work_confirmed = false;
 }
 
 function syncNovelManageForm() {
@@ -720,6 +890,7 @@ async function submitCreateFolder() {
     authError.value = "请输入文件夹名称。";
     return;
   }
+  authError.value = "";
   const created = await store.createFolder(name);
   if (created) {
     folderForm.name = "";
@@ -767,9 +938,24 @@ async function toggleSaveNovel(novelId: number) {
 }
 
 async function submitCreateProject() {
-  await store.createProject(projectForm);
+  await store.createProject({
+    title: projectForm.title,
+    genre: projectForm.genre,
+    reference_work: projectForm.reference_work_confirmed ? projectForm.reference_work : "",
+    reference_work_creator: projectForm.reference_work_confirmed ? projectForm.reference_work_creator : "",
+    reference_work_medium: projectForm.reference_work_confirmed ? projectForm.reference_work_medium : "",
+    reference_work_synopsis: projectForm.reference_work_confirmed ? projectForm.reference_work_synopsis : "",
+    reference_work_style_traits: projectForm.reference_work_confirmed ? [...projectForm.reference_work_style_traits] : [],
+    reference_work_world_traits: projectForm.reference_work_confirmed ? [...projectForm.reference_work_world_traits] : [],
+    reference_work_narrative_constraints: projectForm.reference_work_confirmed ? [...projectForm.reference_work_narrative_constraints] : [],
+    reference_work_confidence_note: projectForm.reference_work_confirmed ? projectForm.reference_work_confidence_note : "",
+    world_brief: projectForm.world_brief,
+    writing_rules: projectForm.writing_rules,
+    style_profile: projectForm.style_profile,
+  });
   if (!error.value && activeProject.value?.project) {
-    Object.assign(projectForm, emptyProject());
+    Object.assign(projectForm, emptyProjectDraft());
+    resetProjectAssistantState();
     syncProjectSettingsForm();
     currentView.value = "characters";
   }
@@ -1144,17 +1330,38 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               :genre-options="genreOptions"
               :style-profile-options="styleProfileOptions"
               :graph-review="activeProject?.graphrag_review"
+              :custom-genre-draft="customSettingsGenreDraft"
+              :assistant-loading-kind="assistantLoadingKind === 'reference_work' ? null : assistantLoadingKind"
+              :assistant-seed-world="assistantSeedWorld"
+              :assistant-seed-writing="assistantSeedWriting"
+              :world-suggestions="worldSuggestions"
+              :writing-suggestions="writingSuggestions"
               @select-project="selectSettingsProject"
               @open-characters="openCharacters()"
               @prepare-graphrag="store.prepareGraphReview()"
               @save-graphrag-file="store.updateGraphReviewFile($event.filename, $event.content)"
               @start-index="store.indexProject()"
               @submit="submitUpdateProject()"
+              @re-resolve-reference-work="reResolveProjectSettingsReferenceWork()"
               @update:title="projectSettingsForm.title = $event"
               @update:genre="projectSettingsForm.genre = $event"
+              @update:reference-work="projectSettingsForm.reference_work = $event"
+              @update:reference-work-creator="projectSettingsForm.reference_work_creator = $event"
+              @update:reference-work-medium="projectSettingsForm.reference_work_medium = $event"
+              @update:reference-work-synopsis="projectSettingsForm.reference_work_synopsis = $event"
+              @update:reference-work-style-traits="projectSettingsForm.reference_work_style_traits = $event"
+              @update:reference-work-world-traits="projectSettingsForm.reference_work_world_traits = $event"
+              @update:reference-work-narrative-constraints="projectSettingsForm.reference_work_narrative_constraints = $event"
+              @update:reference-work-confidence-note="projectSettingsForm.reference_work_confidence_note = $event"
               @update:world-brief="projectSettingsForm.world_brief = $event"
               @update:writing-rules="projectSettingsForm.writing_rules = $event"
               @update:style-profile="projectSettingsForm.style_profile = $event"
+              @update:custom-genre-draft="customSettingsGenreDraft = $event"
+              @apply-custom-genre="applyCustomGenre(projectSettingsForm, customSettingsGenreDraft)"
+              @update:assistant-seed-world="assistantSeedWorld = $event"
+              @update:assistant-seed-writing="assistantSeedWriting = $event"
+              @generate-suggestion="generateProjectSuggestion($event, projectSettingsForm)"
+              @use-suggestion="appendOrReplaceField(projectSettingsForm, $event.kind, $event.text, $event.mode)"
             />
           </template>
 
@@ -1462,7 +1669,7 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               @update:workspace-search="workspaceSearch = $event"
               @select-folder="selectWorkspaceFolder"
               @open-project-create="openProjectCreate()"
-              @toggle-create-folder="showCreateFolder = !showCreateFolder"
+              @toggle-create-folder="toggleCreateFolder()"
               @open-project="openContinueWriting"
               @move-project-folder="assignProjectFolder"
               @delete-project="deleteProjectToTrash"
@@ -1470,7 +1677,7 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               @next-page="nextWorkspacePage()"
               @update:folder-name="folderForm.name = $event"
               @submit-create-folder="submitCreateFolder()"
-              @cancel-create-folder="showCreateFolder = false"
+              @cancel-create-folder="closeCreateFolder()"
             />
           </template>
 
@@ -1584,74 +1791,39 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
                     <p class="panel-heading__desc">项目层只放长期有效的信息：题材、世界设定、写作偏好和文风。具体剧情前提留到章节里写。</p>
                   </div>
                 </div>
-                <form class="form-stack" @submit.prevent="submitCreateProject()">
-                  <label class="field">
-                    <span>小说标题</span>
-                    <input v-model="projectForm.title" maxlength="255" placeholder="例如：在晚一点下雨的城市" />
-                    <small class="field-hint">建议 6 到 20 字。工作标题也可以，后面还能改。</small>
-                  </label>
-                  <label class="field">
-                    <span>题材类型</span>
-                    <select v-model="projectForm.genre">
-                      <option v-for="option in genreOptions" :key="option" :value="option">{{ option }}</option>
-                    </select>
-                    <small class="field-hint">这里只选一个最接近的大类就行，比如“都市悬疑”或“轻科幻”。别的元素后面写进世界观或章节前提。</small>
-                    <div class="choice-chips">
-                      <button
-                        v-for="option in genreOptions"
-                        :key="`create-genre-${option}`"
-                        class="choice-chip"
-                        :class="{ 'choice-chip--active': projectForm.genre === option }"
-                        type="button"
-                        @click="applyGenre(projectForm, option)"
-                      >
-                        {{ option }}
-                      </button>
-                    </div>
-                    <input v-model="projectForm.genre" maxlength="100" placeholder="也可以自定义，例如：沿海城市成长 / 校园悬疑 / 通勤科幻日常" />
-                  </label>
-                  <label class="field">
-                    <span>世界观</span>
-                    <textarea
-                      v-model="projectForm.world_brief"
-                      rows="5"
-                      maxlength="4000"
-                      placeholder="例如：故事发生在一座被旧电车、海雾和潮汐包围的沿海城市。这里的人习惯按照天气预报和末班车时刻安排生活，城市表面平静，很多关系却会在季节更替里悄悄松动。"
-                    />
-                    <small class="field-hint">写“规则”和“差异”最有用：时代背景、能力体系、势力结构、资源稀缺、公开禁忌。纯风景描写帮助不大。</small>
-                  </label>
-                  <label class="field">
-                    <span>写作偏好</span>
-                    <textarea
-                      v-model="projectForm.writing_rules"
-                      rows="4"
-                      maxlength="2000"
-                      placeholder="例如：第三人称近距离；语气清澈克制；多写天气、光线、空间和动作；情绪通过停顿与细节显现；避免悬浮告白、过度煽情和密集玩梗。"
-                    />
-                    <small class="field-hint">这里适合写人称、节奏、篇幅、禁写项、关系推进方式。不要重复世界观，也不用把剧情梗概再写一遍。</small>
-                  </label>
-                  <label class="field">
-                    <span>文风预设</span>
-                    <select v-model="projectForm.style_profile">
-                      <option v-for="option in styleProfileOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-                    </select>
-                    <small class="field-hint">推荐先从一个稳定预设开始。当前选择：{{ styleProfileLabel(projectForm.style_profile) }}。</small>
-                    <div class="choice-cards">
-                      <button
-                        v-for="option in styleProfileOptions"
-                        :key="`create-style-${option.value}`"
-                        class="choice-card"
-                        :class="{ 'choice-card--active': projectForm.style_profile === option.value }"
-                        type="button"
-                        @click="projectForm.style_profile = option.value"
-                      >
-                        <strong>{{ option.label }}</strong>
-                        <span>{{ option.description }}</span>
-                      </button>
-                    </div>
-                  </label>
-                  <button class="primary-button" :disabled="loading">创建项目</button>
-                </form>
+                <ProjectCreateWizard
+                  :loading="loading"
+                  :step="projectCreateStep"
+                  :form="projectForm"
+                  :genre-options="genreOptions"
+                  :style-profile-options="styleProfileOptions"
+                  :custom-genre-draft="customGenreDraft"
+                  :reference-work-input="referenceWorkInput"
+                  :reference-work-resolved="referenceWorkResolved"
+                  :reference-work-confirmed="projectForm.reference_work_confirmed"
+                  :assistant-loading-kind="assistantLoadingKind"
+                  :assistant-seed-world="assistantSeedWorld"
+                  :assistant-seed-writing="assistantSeedWriting"
+                  :world-suggestions="worldSuggestions"
+                  :writing-suggestions="writingSuggestions"
+                  @update:step="projectCreateStep = $event"
+                  @submit="submitCreateProject()"
+                  @update:title="projectForm.title = $event"
+                  @update:genre="projectForm.genre = $event"
+                  @update:custom-genre-draft="customGenreDraft = $event"
+                  @apply-custom-genre="applyCustomGenre(projectForm, customGenreDraft)"
+                  @update:reference-work-input="referenceWorkInput = $event"
+                  @resolve-reference-work="resolveReferenceWork()"
+                  @confirm-reference-work="confirmReferenceWork()"
+                  @clear-reference-work="clearReferenceWorkResolution()"
+                  @update:world-brief="projectForm.world_brief = $event"
+                  @update:writing-rules="projectForm.writing_rules = $event"
+                  @update:style-profile="projectForm.style_profile = $event"
+                  @update:assistant-seed-world="assistantSeedWorld = $event"
+                  @update:assistant-seed-writing="assistantSeedWriting = $event"
+                  @generate-suggestion="generateProjectSuggestion($event, projectForm)"
+                  @use-suggestion="appendOrReplaceField(projectForm, $event.kind, $event.text, $event.mode)"
+                />
               </section>
             </main>
           </template>

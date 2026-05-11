@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import json
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
@@ -56,6 +56,14 @@ class Project(Base, TimestampMixin):
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     genre: Mapped[str] = mapped_column(String(100), nullable=False)
+    reference_work: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    reference_work_creator: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    reference_work_medium: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    reference_work_synopsis: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    reference_work_style_traits_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    reference_work_world_traits_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    reference_work_narrative_constraints_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    reference_work_confidence_note: Mapped[str] = mapped_column(Text, default="", nullable=False)
     premise: Mapped[str] = mapped_column(Text, default="", nullable=False)
     world_brief: Mapped[str] = mapped_column(Text, default="", nullable=False)
     writing_rules: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -110,6 +118,44 @@ class Project(Base, TimestampMixin):
         back_populates="project",
         cascade="all, delete-orphan",
     )
+
+    @property
+    def reference_work_style_traits(self) -> list[str]:
+        return _json_text_list(self.reference_work_style_traits_json)
+
+    @reference_work_style_traits.setter
+    def reference_work_style_traits(self, value: list[str]) -> None:
+        self.reference_work_style_traits_json = json.dumps(_normalize_text_list(value), ensure_ascii=False)
+
+    @property
+    def reference_work_world_traits(self) -> list[str]:
+        return _json_text_list(self.reference_work_world_traits_json)
+
+    @reference_work_world_traits.setter
+    def reference_work_world_traits(self, value: list[str]) -> None:
+        self.reference_work_world_traits_json = json.dumps(_normalize_text_list(value), ensure_ascii=False)
+
+    @property
+    def reference_work_narrative_constraints(self) -> list[str]:
+        return _json_text_list(self.reference_work_narrative_constraints_json)
+
+    @reference_work_narrative_constraints.setter
+    def reference_work_narrative_constraints(self, value: list[str]) -> None:
+        self.reference_work_narrative_constraints_json = json.dumps(_normalize_text_list(value), ensure_ascii=False)
+
+
+def _json_text_list(value: str) -> list[str]:
+    try:
+        payload = json.loads(value or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [str(item).strip() for item in payload if str(item).strip()]
+
+
+def _normalize_text_list(value: list[str]) -> list[str]:
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 class ProjectFolder(Base, TimestampMixin):

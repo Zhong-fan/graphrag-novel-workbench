@@ -37,17 +37,22 @@ from .contracts import (
     ProjectChapterCreateRequest,
     ProjectChapterOut,
     ProjectChapterUpdateRequest,
+    ProjectBriefingSuggestionRequest,
+    ProjectBriefingSuggestionResponse,
     ProjectCreateRequest,
     ProjectDetailResponse,
     ProjectFolderCreateRequest,
     ProjectFolderOut,
     ProjectOut,
     ProjectUpdateRequest,
+    ReferenceWorkResolveRequest,
+    ReferenceWorkResolvedOut,
     RestoreTrashItemRequest,
     SourceCreateRequest,
     SourceOut,
 )
 from .db import get_db
+from .config import load_settings
 from .models import (
     CharacterCard,
     CharacterStateUpdate,
@@ -63,6 +68,18 @@ from .models import (
     User,
     WorldPerceptionUpdate,
 )
+from .project_briefing_service import ProjectBriefingService
+
+
+def _apply_reference_work_payload(project: Project, payload: ProjectCreateRequest | ProjectUpdateRequest) -> None:
+    project.reference_work = payload.reference_work.strip()
+    project.reference_work_creator = payload.reference_work_creator.strip()
+    project.reference_work_medium = payload.reference_work_medium.strip()
+    project.reference_work_synopsis = payload.reference_work_synopsis.strip()
+    project.reference_work_style_traits = payload.reference_work_style_traits
+    project.reference_work_world_traits = payload.reference_work_world_traits
+    project.reference_work_narrative_constraints = payload.reference_work_narrative_constraints
+    project.reference_work_confidence_note = payload.reference_work_confidence_note.strip()
 
 
 def register_project_routes(router: APIRouter) -> None:
@@ -129,6 +146,34 @@ def register_project_routes(router: APIRouter) -> None:
         db.refresh(folder)
         return _folder_out(folder)
 
+    @router.post("/api/projects/briefing-suggestions", response_model=ProjectBriefingSuggestionResponse)
+    def suggest_project_briefing(
+        payload: ProjectBriefingSuggestionRequest,
+        current_user: User = Depends(get_current_user),
+    ) -> ProjectBriefingSuggestionResponse:
+        _ = current_user
+        settings = load_settings()
+        service = ProjectBriefingService(settings=settings)
+        suggestions = service.suggest(
+            kind=payload.kind,
+            title=payload.title,
+            genre=payload.genre,
+            reference_work=payload.reference_work,
+            seed_text=payload.seed_text,
+        )
+        return ProjectBriefingSuggestionResponse(kind=payload.kind, suggestions=suggestions)
+
+    @router.post("/api/projects/reference-work/resolve", response_model=ReferenceWorkResolvedOut)
+    def resolve_reference_work(
+        payload: ReferenceWorkResolveRequest,
+        current_user: User = Depends(get_current_user),
+    ) -> ReferenceWorkResolvedOut:
+        _ = current_user
+        settings = load_settings()
+        service = ProjectBriefingService(settings=settings)
+        result = service.resolve_reference_work(query=payload.query, genre=payload.genre)
+        return ReferenceWorkResolvedOut(**result)
+
     @router.post("/api/projects", response_model=ProjectOut)
     def create_project(
         payload: ProjectCreateRequest,
@@ -145,6 +190,7 @@ def register_project_routes(router: APIRouter) -> None:
             writing_rules=payload.writing_rules,
             style_profile=payload.style_profile,
         )
+        _apply_reference_work_payload(project, payload)
         db.add(project)
         db.commit()
         db.refresh(project)
@@ -181,6 +227,7 @@ def register_project_routes(router: APIRouter) -> None:
         project = _project_or_404(db, current_user.id, project_id)
         project.title = payload.title.strip()
         project.genre = payload.genre.strip()
+        _apply_reference_work_payload(project, payload)
         project.world_brief = payload.world_brief.strip()
         project.writing_rules = payload.writing_rules.strip()
         project.style_profile = payload.style_profile

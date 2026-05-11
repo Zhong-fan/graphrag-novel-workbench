@@ -16,6 +16,8 @@ import type {
   PublishNovelPayload,
   Project,
   ProjectPayload,
+  ReferenceWorkResolved,
+  ProjectSuggestionResponse,
   ProjectDetailResponse,
   RestoreTrashPayload,
   TrashItem,
@@ -418,6 +420,48 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       await selectProject(projectId, { showLoading: false, silent: true });
     } catch (err) {
       error.value = err instanceof Error ? err.message : "保存项目设定失败。";
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function suggestProjectBriefing(payload: {
+    kind: "world_brief" | "writing_rules";
+    title: string;
+    genre: string;
+    reference_work: string;
+    seed_text: string;
+  }): Promise<ProjectSuggestionResponse | null> {
+    if (!token.value) {
+      error.value = "请先登录。";
+      return null;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      return await api.suggestProjectBriefing(token.value, payload);
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "生成设定参考失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function resolveReferenceWork(payload: { query: string; genre: string }): Promise<ReferenceWorkResolved | null> {
+    if (!token.value) {
+      error.value = "请先登录。";
+      return null;
+    }
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      return await api.resolveReferenceWork(token.value, payload);
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "识别参考作品失败。";
+      return null;
     } finally {
       loading.value = false;
     }
@@ -1039,6 +1083,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     restoreTrashItem,
     trashDirtyEvolution,
     updateProject,
+    resolveReferenceWork,
+    suggestProjectBriefing,
     createProjectChapter,
     updateProjectChapter,
     clearFeedback,

@@ -21,6 +21,10 @@ import type {
   ProjectChapterPayload,
   ProjectDetailResponse,
   ProjectPayload,
+  ReferenceWorkResolveRequest,
+  ReferenceWorkResolved,
+  ProjectSuggestionRequest,
+  ProjectSuggestionResponse,
   SourceItem,
   User,
   UserProfile,
@@ -151,6 +155,18 @@ export const api = {
     request<ProjectFolder>("/api/me/folders", { method: "POST", token, body: JSON.stringify(payload) }),
   createProject: (token: string, payload: ProjectPayload) =>
     request<Project>("/api/projects", { method: "POST", token, body: JSON.stringify(payload) }),
+  resolveReferenceWork: (token: string, payload: ReferenceWorkResolveRequest) =>
+    request<ReferenceWorkResolved>("/api/projects/reference-work/resolve", {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  suggestProjectBriefing: (token: string, payload: ProjectSuggestionRequest) =>
+    request<ProjectSuggestionResponse>("/api/projects/briefing-suggestions", {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
   updateProject: (token: string, projectId: number, payload: ProjectPayload) =>
     request<Project>(`/api/projects/${projectId}`, { method: "PUT", token, body: JSON.stringify(payload) }),
   moveProjectToFolder: (token: string, projectId: number, payload: MoveProjectFolderPayload) =>

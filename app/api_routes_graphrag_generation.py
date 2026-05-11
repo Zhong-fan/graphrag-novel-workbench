@@ -229,6 +229,7 @@ def register_graphrag_generation_routes(
             title, summary, content = writer.generate(
                 project_title=project.title,
                 genre=project.genre,
+                reference_work=project.reference_work,
                 premise=project_chapter.premise,
                 world_brief=project.world_brief,
                 writing_rules=project.writing_rules,

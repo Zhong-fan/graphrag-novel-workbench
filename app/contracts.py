@@ -52,6 +52,14 @@ class CaptchaChallenge(BaseModel):
 class ProjectCreateRequest(BaseModel):
     title: str = Field(..., min_length=2, max_length=255)
     genre: str = Field(..., min_length=2, max_length=100)
+    reference_work: str = Field(default="", max_length=255)
+    reference_work_creator: str = Field(default="", max_length=255)
+    reference_work_medium: str = Field(default="", max_length=120)
+    reference_work_synopsis: str = Field(default="", max_length=4000)
+    reference_work_style_traits: list[str] = []
+    reference_work_world_traits: list[str] = []
+    reference_work_narrative_constraints: list[str] = []
+    reference_work_confidence_note: str = Field(default="", max_length=1000)
     world_brief: str = Field(default="", max_length=4000)
     writing_rules: str = Field(default="", max_length=2000)
     style_profile: str = Field(
@@ -68,6 +76,14 @@ class ProjectOut(BaseModel):
     id: int
     title: str
     genre: str
+    reference_work: str
+    reference_work_creator: str
+    reference_work_medium: str
+    reference_work_synopsis: str
+    reference_work_style_traits: list[str] = []
+    reference_work_world_traits: list[str] = []
+    reference_work_narrative_constraints: list[str] = []
+    reference_work_confidence_note: str
     world_brief: str
     writing_rules: str
     style_profile: str
@@ -272,6 +288,35 @@ class ProjectDetailResponse(BaseModel):
 
 class ProjectFolderCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
+
+
+class ProjectBriefingSuggestionRequest(BaseModel):
+    kind: str = Field(..., pattern="^(world_brief|writing_rules)$")
+    title: str = Field(default="", max_length=255)
+    genre: str = Field(default="", max_length=100)
+    reference_work: str = Field(default="", max_length=255)
+    seed_text: str = Field(..., min_length=4, max_length=600)
+
+
+class ProjectBriefingSuggestionResponse(BaseModel):
+    kind: str
+    suggestions: list[str]
+
+
+class ReferenceWorkResolveRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=255)
+    genre: str = Field(default="", max_length=100)
+
+
+class ReferenceWorkResolvedOut(BaseModel):
+    canonical_title: str
+    creator: str
+    medium: str
+    synopsis: str
+    style_traits: list[str]
+    world_traits: list[str]
+    narrative_constraints: list[str]
+    confidence_note: str
 
 
 class ProjectFolderOut(BaseModel):
