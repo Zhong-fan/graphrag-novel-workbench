@@ -38,7 +38,8 @@ def diagnose_graphrag_error(message: str, settings: Settings | None = None) -> s
     provider_hint = ""
     if settings is not None:
         provider_hint = (
-            f"当前配置：chat={settings.openai_base_url} / {settings.utility_model}；"
+            f"当前配置：graphrag_chat={settings.graphrag_chat_base_url} / {settings.graphrag_chat_model}"
+            f" ({settings.graphrag_chat_provider_label})；"
             f"embedding={settings.embedding_base_url} / {settings.embedding_model} "
             f"({settings.embedding_provider_label})。"
         )
@@ -458,6 +459,8 @@ class GraphRAGService:
         default_chat = models.setdefault("default_chat_model", {})
         default_chat["model"] = "${GRAPHRAG_CHAT_MODEL}"
         default_chat["api_key"] = "${GRAPHRAG_CHAT_API_KEY}"
+        default_chat["max_retries"] = self.settings.graphrag_chat_max_retries
+        default_chat["request_timeout"] = self.settings.graphrag_chat_request_timeout_seconds
         if "api_base" in default_chat or "type" in default_chat:
             default_chat["api_base"] = "${GRAPHRAG_CHAT_API_BASE}"
 
@@ -466,6 +469,15 @@ class GraphRAGService:
         default_embedding["api_key"] = "${GRAPHRAG_EMBEDDING_API_KEY}"
         if "api_base" in default_embedding or "type" in default_embedding:
             default_embedding["api_base"] = "${GRAPHRAG_EMBEDDING_API_BASE}"
+
+        extract_graph = payload.setdefault("extract_graph", {})
+        extract_graph["concurrent_requests"] = self.settings.graphrag_concurrent_requests
+
+        summarize_descriptions = payload.setdefault("summarize_descriptions", {})
+        summarize_descriptions["concurrent_requests"] = self.settings.graphrag_concurrent_requests
+
+        claim_extraction = payload.setdefault("claim_extraction", {})
+        claim_extraction["concurrent_requests"] = self.settings.graphrag_concurrent_requests
 
         settings_path.write_text(
             yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
@@ -476,9 +488,11 @@ class GraphRAGService:
         env = os.environ.copy()
         env["OPENAI_API_KEY"] = self.settings.openai_api_key or ""
         env["OPENAI_BASE_URL"] = self.settings.openai_base_url
-        env["GRAPHRAG_CHAT_API_KEY"] = self.settings.openai_api_key or ""
-        env["GRAPHRAG_CHAT_API_BASE"] = self.settings.openai_base_url
-        env["GRAPHRAG_CHAT_MODEL"] = self.settings.utility_model
+        env["GRAPHRAG_CHAT_API_KEY"] = self.settings.graphrag_chat_api_key or ""
+        env["GRAPHRAG_CHAT_API_BASE"] = self.settings.graphrag_chat_base_url
+        env["GRAPHRAG_CHAT_MODEL"] = self.settings.graphrag_chat_model
+        env["GRAPHRAG_CHAT_REQUEST_TIMEOUT_SECONDS"] = str(self.settings.graphrag_chat_request_timeout_seconds)
+        env["GRAPHRAG_CHAT_MAX_RETRIES"] = str(self.settings.graphrag_chat_max_retries)
         env["GRAPHRAG_EMBEDDING_API_KEY"] = self.settings.embedding_api_key or ""
         env["GRAPHRAG_EMBEDDING_API_BASE"] = self.settings.embedding_base_url
         env["GRAPHRAG_EMBEDDING_MODEL"] = self.settings.embedding_model

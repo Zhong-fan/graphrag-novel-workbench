@@ -10,6 +10,7 @@ from .config import load_settings
 SCHEMA_MIGRATIONS_TABLE = "schema_migrations"
 WORKSPACE_SCHEMA_MIGRATION = "20260507_0001_workspace_schema"
 NOVEL_PROJECT_TITLE_MIGRATION = "20260510_0002_novel_project_titles"
+PROJECT_REFERENCE_WORK_FIELDS_MIGRATION = "20260511_0003_project_reference_work_fields"
 
 
 settings = load_settings()
@@ -54,6 +55,12 @@ def _migrate_schema() -> None:
             NOVEL_PROJECT_TITLE_MIGRATION,
             "Use project titles as published novel titles",
             _migrate_novel_project_titles,
+        )
+        _run_schema_migration(
+            connection,
+            PROJECT_REFERENCE_WORK_FIELDS_MIGRATION,
+            "Backfill missing project reference-work fields in older workspace schemas",
+            _migrate_project_reference_work_fields,
         )
 
 
@@ -274,6 +281,46 @@ def _migrate_novel_project_titles(connection) -> None:
             """
         )
     )
+
+
+def _migrate_project_reference_work_fields(connection) -> None:
+    if "projects" not in _table_names():
+        return
+
+    project_columns = _column_names("projects")
+    if "reference_work" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work VARCHAR(255) NULL"))
+        connection.execute(text("UPDATE projects SET reference_work = '' WHERE reference_work IS NULL"))
+    if "reference_work_creator" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_creator VARCHAR(255) NULL"))
+        connection.execute(text("UPDATE projects SET reference_work_creator = '' WHERE reference_work_creator IS NULL"))
+    if "reference_work_medium" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_medium VARCHAR(120) NULL"))
+        connection.execute(text("UPDATE projects SET reference_work_medium = '' WHERE reference_work_medium IS NULL"))
+    if "reference_work_synopsis" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_synopsis TEXT NULL"))
+        connection.execute(text("UPDATE projects SET reference_work_synopsis = '' WHERE reference_work_synopsis IS NULL"))
+    if "reference_work_style_traits_json" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_style_traits_json TEXT NULL"))
+        connection.execute(
+            text("UPDATE projects SET reference_work_style_traits_json = '[]' WHERE reference_work_style_traits_json IS NULL")
+        )
+    if "reference_work_world_traits_json" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_world_traits_json TEXT NULL"))
+        connection.execute(
+            text("UPDATE projects SET reference_work_world_traits_json = '[]' WHERE reference_work_world_traits_json IS NULL")
+        )
+    if "reference_work_narrative_constraints_json" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_narrative_constraints_json TEXT NULL"))
+        connection.execute(
+            text(
+                "UPDATE projects SET reference_work_narrative_constraints_json = '[]' "
+                "WHERE reference_work_narrative_constraints_json IS NULL"
+            )
+        )
+    if "reference_work_confidence_note" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_confidence_note TEXT NULL"))
+        connection.execute(text("UPDATE projects SET reference_work_confidence_note = '' WHERE reference_work_confidence_note IS NULL"))
 
 
 def db_session() -> Session:

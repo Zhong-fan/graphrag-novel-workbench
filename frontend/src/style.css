@@ -699,6 +699,12 @@ button {
   gap: 0.8rem;
 }
 
+.genre-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.8rem;
+}
+
 .choice-card {
   display: grid;
   gap: 0.4rem;
@@ -716,6 +722,11 @@ button {
   color: var(--ink-soft);
   font-size: 0.82rem;
   line-height: 1.55;
+}
+
+.genre-card {
+  min-height: 108px;
+  align-content: start;
 }
 
 .field input,

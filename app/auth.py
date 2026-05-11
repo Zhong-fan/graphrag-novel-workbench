@@ -161,8 +161,9 @@ def get_optional_user(
 ) -> User | None:
     if credentials is None:
         return None
-    payload = decode_token(credentials.credentials)
+    try:
+        payload = decode_token(credentials.credentials)
+    except HTTPException:
+        return None
     user = db.get(User, int(payload["sub"]))
-    if user is None:
-        raise HTTPException(status_code=401, detail="用户不存在或已失效。")
     return user

@@ -73,24 +73,32 @@ const restorableViews: ViewKey[] = [
   "profile",
 ];
 
-const genreOptions = [
-  "现代都市轻小说",
-  "校园青春恋爱",
-  "都市情感",
-  "都市异能",
-  "都市悬疑",
-  "轻科幻",
-  "奇幻冒险",
-  "东方玄幻",
-  "西幻史诗",
-  "无限流",
-  "推理悬疑",
-  "惊悚恐怖",
-  "历史架空",
-  "古风言情",
-  "治愈日常",
-  "公路冒险",
+type GenreOptionCard = {
+  value: string;
+  label: string;
+  description: string;
+};
+
+const genreOptionCards: GenreOptionCard[] = [
+  { value: "现代都市轻小说", label: "现代都市轻小说", description: "现代城市日常、轻松叙事、偏角色互动，适合校园后日常和都会成长线。" },
+  { value: "校园青春恋爱", label: "校园青春恋爱", description: "学生视角、关系推进明确、情绪细腻，适合青春群像和恋爱拉扯。" },
+  { value: "都市情感", label: "都市情感", description: "成年角色、关系与选择驱动，重点是情绪张力和现实处境。" },
+  { value: "都市异能", label: "都市异能", description: "现代背景下加入超能力或异常规则，适合爽点和悬念并行。" },
+  { value: "都市悬疑", label: "都市悬疑", description: "现代都市里的谜团、失踪、反转和调查，节奏通常更紧。" },
+  { value: "轻科幻", label: "轻科幻", description: "有未来技术或科幻设定，但阅读门槛不过高，偏故事可读性。" },
+  { value: "奇幻冒险", label: "奇幻冒险", description: "未知世界、旅途、伙伴和成长，适合地图式推进与探索。" },
+  { value: "东方玄幻", label: "东方玄幻", description: "修行体系、宗门势力、神秘传承，适合长线升级与世界层级。" },
+  { value: "西幻史诗", label: "西幻史诗", description: "王国、骑士、战争、神话秩序，整体更厚重、更宏大。" },
+  { value: "无限流", label: "无限流", description: "副本、规则、闯关、生存压力明确，适合强节奏结构。" },
+  { value: "推理悬疑", label: "推理悬疑", description: "以解谜和因果还原为核心，强调线索、逻辑和反转。" },
+  { value: "惊悚恐怖", label: "惊悚恐怖", description: "压迫感、未知感和危险感优先，适合氛围与生存危机。" },
+  { value: "历史架空", label: "历史架空", description: "借用历史气质重构时代，重点在制度、风俗和人物命运。" },
+  { value: "古风言情", label: "古风言情", description: "古代或类古代背景下的情感关系，适合慢热与身份冲突。" },
+  { value: "治愈日常", label: "治愈日常", description: "冲突不必太重，重点是陪伴感、生活感和情绪修复。" },
+  { value: "公路冒险", label: "公路冒险", description: "一路前进一路变化，空间切换频繁，适合角色关系渐进展开。" },
 ];
+
+const genreOptions = genreOptionCards.map((item) => item.value);
 
 const styleProfileOptions = [
   {
@@ -130,6 +138,75 @@ const styleProfileOptions = [
     bullets: ["先交代局势和代价", "庄重但不堆辞藻", "服务更大的冲突与秩序"],
   },
 ];
+
+function inferStyleProfileFromReference(payload: ReferenceWorkResolved): ProjectPayload["style_profile"] {
+  const haystack = [
+    payload.medium,
+    payload.synopsis,
+    payload.confidence_note,
+    ...payload.style_traits,
+    ...payload.world_traits,
+    ...payload.narrative_constraints,
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (/(悬疑|惊悚|追逐|压迫|紧张|thriller|mystery|crime|suspense)/.test(haystack)) return "cinematic_tense";
+  if (/(对话|嘴炮|群像互动|对白|conversation|dialogue)/.test(haystack)) return "dialogue_driven";
+  if (/(治愈|温柔|日常|陪伴|healing|slice of life|comfort)/.test(haystack)) return "warm_healing";
+  if (/(史诗|战争|历史|秩序|文明|王朝|epic|historical)/.test(haystack)) return "epic_serious";
+  if (/(轻小说|校园|青春|恋爱|anime|轻快|少年)/.test(haystack)) return "light_novel";
+  return "lyrical_restrained";
+}
+
+function inferGenreFromReference(payload: ReferenceWorkResolved): string {
+  const haystack = [
+    payload.medium,
+    payload.synopsis,
+    payload.confidence_note,
+    ...payload.style_traits,
+    ...payload.world_traits,
+    ...payload.narrative_constraints,
+  ].join(" ");
+
+  const mappings: Array<{ pattern: RegExp; genre: string }> = [
+    { pattern: /(校园|青春|学生|社团|学园)/, genre: "校园青春恋爱" },
+    { pattern: /(都市|现代|职场|都会)/, genre: "现代都市轻小说" },
+    { pattern: /(异能|超能力|能力者)/, genre: "都市异能" },
+    { pattern: /(悬疑|推理|案件|侦探|谜团)/, genre: "推理悬疑" },
+    { pattern: /(惊悚|恐怖|怪谈|诡异)/, genre: "惊悚恐怖" },
+    { pattern: /(科幻|未来|太空|机甲|赛博)/, genre: "轻科幻" },
+    { pattern: /(奇幻|冒险|魔法|旅途)/, genre: "奇幻冒险" },
+    { pattern: /(东方玄幻|修仙|宗门|灵气|仙侠)/, genre: "东方玄幻" },
+    { pattern: /(西幻|王国|骑士|史诗|龙)/, genre: "西幻史诗" },
+    { pattern: /(治愈|日常|陪伴|生活流)/, genre: "治愈日常" },
+    { pattern: /(公路|旅行|旅程)/, genre: "公路冒险" },
+  ];
+
+  return mappings.find((item) => item.pattern.test(haystack))?.genre ?? "现代都市轻小说";
+}
+
+function buildReferenceWorldBrief(payload: ReferenceWorkResolved): string {
+  const worldTraits = payload.world_traits.slice(0, 4);
+  const constraints = payload.narrative_constraints.slice(0, 2);
+  const parts = [
+    payload.synopsis ? `整体项目世界气质参考《${payload.canonical_title}》：${payload.synopsis}` : "",
+    worldTraits.length ? `优先保留这些可迁移的世界特征：${worldTraits.join("；")}。` : "",
+    constraints.length ? `创作时只借鉴方法，不直接照搬原作设定：${constraints.join("；")}。` : "",
+  ].filter(Boolean);
+  return parts.join("\n\n");
+}
+
+function buildReferenceWritingRules(payload: ReferenceWorkResolved): string {
+  const styleTraits = payload.style_traits.slice(0, 4);
+  const constraints = payload.narrative_constraints.slice(0, 3);
+  const parts = [
+    styleTraits.length ? `文风默认参考这些方向：${styleTraits.join("；")}。` : "",
+    "保留参考作品的节奏、情绪组织和人物互动方法，但不要直接复用角色名、剧情节点或专有设定名词。",
+    constraints.length ? `写作边界：${constraints.join("；")}。` : "",
+  ].filter(Boolean);
+  return parts.join("\n\n");
+}
 
 const emptyProject = (): ProjectPayload => ({
   title: "",
@@ -644,6 +721,19 @@ function resetProjectAssistantState() {
   writingSuggestions.value = [];
 }
 
+function applyResolvedReferenceDefaults(payload: ReferenceWorkResolved) {
+  if (!projectForm.genre.trim() || genreOptions.includes(projectForm.genre)) {
+    projectForm.genre = inferGenreFromReference(payload);
+  }
+  if (!projectForm.world_brief.trim()) {
+    projectForm.world_brief = buildReferenceWorldBrief(payload);
+  }
+  if (!projectForm.writing_rules.trim()) {
+    projectForm.writing_rules = buildReferenceWritingRules(payload);
+  }
+  projectForm.style_profile = inferStyleProfileFromReference(payload);
+}
+
 async function resolveReferenceWork() {
   const query = referenceWorkInput.value.trim();
   if (!query) {
@@ -695,6 +785,7 @@ function confirmReferenceWork() {
   projectForm.reference_work = referenceWorkResolved.value.canonical_title;
   referenceWorkInput.value = referenceWorkResolved.value.canonical_title;
   projectForm.reference_work_confirmed = true;
+  applyResolvedReferenceDefaults(referenceWorkResolved.value);
 }
 
 function clearReferenceWorkResolution() {
@@ -1796,6 +1887,7 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
                   :step="projectCreateStep"
                   :form="projectForm"
                   :genre-options="genreOptions"
+                  :genre-option-cards="genreOptionCards"
                   :style-profile-options="styleProfileOptions"
                   :custom-genre-draft="customGenreDraft"
                   :reference-work-input="referenceWorkInput"
@@ -1808,6 +1900,7 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
                   :writing-suggestions="writingSuggestions"
                   @update:step="projectCreateStep = $event"
                   @submit="submitCreateProject()"
+                  @submit-quick="submitCreateProject()"
                   @update:title="projectForm.title = $event"
                   @update:genre="projectForm.genre = $event"
                   @update:custom-genre-draft="customGenreDraft = $event"

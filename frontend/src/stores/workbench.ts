@@ -37,7 +37,7 @@ type SelectProjectOptions = {
 
 const tokenKey = "graph_mvp_token";
 const graphPrepareMessage = "GraphRAG 输入已准备好，请先检查整理结果，再决定是否开始索引。";
-const indexPendingMessage = "索引任务已提交，正在等待项目进入可写作状态。";
+const indexPendingMessage = "GraphRAG 索引任务已提交，正在后台执行；只有项目状态变为“可创作草稿”才算真正成功。";
 const indexReadyMessage = "GraphRAG 索引已完成，现在可以开始生成内容。";
 const pollDelayMs = 3000;
 
@@ -371,6 +371,10 @@ export const useWorkbenchStore = defineStore("workbench", () => {
         if (detail.project.indexing_status === "ready" && success.value === indexPendingMessage) {
           success.value = indexReadyMessage;
         }
+        if (detail.project.indexing_status === "failed") {
+          error.value = detail.graphrag_review?.last_error || "GraphRAG 索引失败。";
+          success.value = "";
+        }
       }
     } catch (err) {
       stopProjectPolling();
@@ -594,7 +598,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     try {
       const response = await api.indexProject(token.value, activeProject.value.project.id, { force_rebuild: false });
       success.value = response.status === "ready" ? indexReadyMessage : indexPendingMessage;
-      await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
+      await selectProject(activeProject.value.project.id, { showLoading: false, silent: false });
     } catch (err) {
       error.value = err instanceof Error ? err.message : "启动索引失败。";
     } finally {

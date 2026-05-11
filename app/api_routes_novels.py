@@ -33,7 +33,21 @@ from .contracts import (
     UpdateNovelRequest,
 )
 from .db import get_db
-from .models import Novel, NovelChapter, NovelComment, NovelFavorite, NovelLike, User
+from .models import Novel, NovelChapter, NovelComment, NovelFavorite, NovelLike, Project, User
+
+
+def _load_novel_for_response(db: Session, novel_id: int) -> Novel | None:
+    return db.scalar(
+        select(Novel)
+        .options(
+            selectinload(Novel.owner),
+            selectinload(Novel.chapters),
+            selectinload(Novel.likes),
+            selectinload(Novel.favorites),
+            selectinload(Novel.comments),
+        )
+        .where(Novel.id == novel_id)
+    )
 
 
 def register_novel_routes(router: APIRouter, *, settings: Settings) -> None:
@@ -232,13 +246,22 @@ def register_novel_routes(router: APIRouter, *, settings: Settings) -> None:
         generation = _generation_or_404(db, project.id, payload.generation_id)
         if generation.project_chapter_id != project_chapter.id:
             raise HTTPException(status_code=409, detail="Generation does not belong to the selected project chapter.")
+        existing = db.scalar(
+            select(Novel).where(
+                Novel.owner_id == current_user.id,
+                Novel.project_id == project.id,
+                Novel.deleted_at.is_(None),
+            )
+        )
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="这部小说已经发布过。请把草稿追加为该小说的新章节。")
 
         novel = Novel(
             owner=current_user,
             project=project,
             source_generation=generation,
             author_name=payload.author_name.strip(),
-            title=payload.title.strip(),
+            title=project.title.strip(),
             summary=payload.summary.strip() or generation.summary,
             genre=project.genre,
             tagline=payload.tagline.strip(),
@@ -272,17 +295,7 @@ def register_novel_routes(router: APIRouter, *, settings: Settings) -> None:
         )
         db.commit()
 
-        created = db.scalar(
-            select(Novel)
-            .options(
-                selectinload(Novel.owner),
-                selectinload(Novel.chapters),
-                selectinload(Novel.likes),
-                selectinload(Novel.favorites),
-                selectinload(Novel.comments),
-            )
-            .where(Novel.id == novel.id)
-        )
+        created = _load_novel_for_response(db, novel.id)
         if created is None:
             raise HTTPException(status_code=500, detail="作品发布失败。")
         return _novel_detail_out(created, current_user_id=current_user.id)
@@ -295,7 +308,8 @@ def register_novel_routes(router: APIRouter, *, settings: Settings) -> None:
         current_user: User = Depends(get_current_user),
     ) -> NovelDetailOut:
         novel = _novel_owned_or_404(db, current_user.id, novel_id)
-        novel.title = payload.title.strip()
+        project = db.get(Project, novel.project_id) if novel.project_id is not None else None
+        novel.title = project.title.strip() if project is not None else payload.title.strip()
         novel.author_name = payload.author_name.strip()
         novel.summary = payload.summary.strip()
         novel.tagline = payload.tagline.strip()
@@ -345,6 +359,9 @@ def register_novel_routes(router: APIRouter, *, settings: Settings) -> None:
         project = _project_or_404(db, current_user.id, payload.project_id)
         if novel.project_id is not None and novel.project_id != project.id:
             raise HTTPException(status_code=409, detail="Novel does not belong to the selected project.")
+        if novel.project_id is None:
+            novel.project = project
+        novel.title = project.title.strip()
         project_chapter = _project_chapter_or_404(db, project.id, payload.project_chapter_id)
         generation = _generation_or_404(db, project.id, payload.generation_id)
         if generation.project_chapter_id != project_chapter.id:

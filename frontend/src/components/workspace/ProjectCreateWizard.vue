@@ -2,6 +2,7 @@
 import type { ProjectPayload, ReferenceWorkResolved } from "../../types";
 
 type StyleProfileOption = { value: string; label: string; description: string; bullets?: string[] };
+type GenreOptionCard = { value: string; label: string; description: string };
 type SuggestionKind = "world_brief" | "writing_rules";
 type WizardStep = 1 | 2 | 3;
 
@@ -10,6 +11,7 @@ const props = defineProps<{
   step: WizardStep;
   form: ProjectPayload;
   genreOptions: string[];
+  genreOptionCards: GenreOptionCard[];
   styleProfileOptions: StyleProfileOption[];
   customGenreDraft: string;
   referenceWorkInput: string;
@@ -25,6 +27,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "update:step", value: WizardStep): void;
   (e: "submit"): void;
+  (e: "submitQuick"): void;
   (e: "update:title", value: string): void;
   (e: "update:genre", value: string): void;
   (e: "update:customGenreDraft", value: string): void;
@@ -77,16 +80,18 @@ function previousStep() {
 
         <label class="field">
           <span>题材类型</span>
-          <div class="choice-chips">
+          <small class="field-hint">先按“故事主要发生在哪里、冲突靠什么推进”来选，不用追求绝对准确。拿不准时，优先选最接近的那一类，后面还能改。</small>
+          <div class="genre-card-grid">
             <button
-              v-for="option in genreOptions"
-              :key="`wizard-genre-${option}`"
-              class="choice-chip"
-              :class="{ 'choice-chip--active': form.genre === option }"
+              v-for="option in genreOptionCards"
+              :key="`wizard-genre-${option.value}`"
+              class="choice-card genre-card"
+              :class="{ 'choice-card--active': form.genre === option.value }"
               type="button"
-              @click="emit('update:genre', option)"
+              @click="emit('update:genre', option.value)"
             >
-              {{ option }}
+              <strong>{{ option.label }}</strong>
+              <span>{{ option.description }}</span>
             </button>
           </div>
           <div class="inline-row inline-row--tight">
@@ -146,6 +151,23 @@ function previousStep() {
           <div class="hero__actions">
             <button class="ghost-button ghost-button--small" type="button" @click="emit('confirmReferenceWork')">就是这部</button>
             <button class="ghost-button ghost-button--small" type="button" @click="emit('clearReferenceWork')">识别错了</button>
+          </div>
+        </article>
+
+        <article v-if="referenceWorkConfirmed" class="assistant-suggestion assistant-suggestion--reference">
+          <div class="assistant-panel__header">
+            <div>
+              <strong>已根据参考作品自动补全基础设定</strong>
+              <p>当前会默认继承这部作品的题材倾向、文风、世界特征和写作偏好。可以直接创建，或继续高级编辑。</p>
+            </div>
+          </div>
+          <div class="project-meta">
+            <div><span>题材</span><strong>{{ form.genre || "未填写" }}</strong></div>
+            <div><span>文风</span><strong>{{ styleProfileOptions.find((item) => item.value === form.style_profile)?.label || form.style_profile }}</strong></div>
+          </div>
+          <div class="hero__actions">
+            <button class="primary-button" type="button" :disabled="loading || !form.title.trim()" @click="emit('submitQuick')">直接创建项目</button>
+            <button class="ghost-button" type="button" @click="nextStep()">高级编辑</button>
           </div>
         </article>
 
