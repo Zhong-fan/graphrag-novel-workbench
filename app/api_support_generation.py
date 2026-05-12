@@ -18,7 +18,6 @@ from .models import (
     StoryEvent,
     WorldPerceptionUpdate,
 )
-from .api_support_project import _mark_project_stale
 
 
 def _snapshot_with_process(evolution_payload, process: dict) -> str:
@@ -179,7 +178,6 @@ def _canonicalize_generation(
 
     _replace_canonical_evolution(db, project, generation, evolution_payload)
     generation.canonicalized_at = datetime.utcnow()
-    _mark_project_stale(project)
 
 
 def _build_generation_trace(

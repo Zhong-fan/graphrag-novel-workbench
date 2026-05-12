@@ -73,7 +73,6 @@ class Project(Base, TimestampMixin):
         default="对话使用「」，嵌套引号使用『』。",
         nullable=False,
     )
-    indexing_status: Mapped[str] = mapped_column(String(40), default="idle", nullable=False)
     folder_id: Mapped[int | None] = mapped_column(ForeignKey("project_folders.id"), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

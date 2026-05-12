@@ -54,10 +54,6 @@ def _project_chapter_or_404(db: Session, project_id: int, chapter_id: int) -> Pr
     return chapter
 
 
-def _mark_project_stale(project: Project) -> None:
-    _ = project
-
-
 def _character_card_or_404(db: Session, project_id: int, card_id: int) -> CharacterCard:
     card = db.scalar(
         select(CharacterCard).where(

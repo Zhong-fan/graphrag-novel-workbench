@@ -12,7 +12,6 @@ from .api_support import (
     _character_state_out,
     _ensure_default_folder,
     _folder_out,
-    _mark_project_stale,
     _project_chapter_or_404,
     _project_or_404,
     _relationship_state_out,
@@ -230,7 +229,6 @@ def register_project_routes(router: APIRouter) -> None:
         project.world_brief = payload.world_brief.strip()
         project.writing_rules = payload.writing_rules.strip()
         project.style_profile = payload.style_profile
-        _mark_project_stale(project)
         db.commit()
         db.refresh(project)
         return ProjectOut.model_validate(project)
@@ -253,7 +251,6 @@ def register_project_routes(router: APIRouter) -> None:
             chapter_no=chapter_no,
         )
         db.add(chapter)
-        _mark_project_stale(project)
         db.commit()
         db.refresh(chapter)
         return ProjectChapterOut.model_validate(chapter)
@@ -273,7 +270,6 @@ def register_project_routes(router: APIRouter) -> None:
         chapter.title = payload.title.strip()
         chapter.premise = payload.premise.strip()
         chapter.chapter_no = payload.chapter_no
-        _mark_project_stale(project)
         db.commit()
         db.refresh(chapter)
         return ProjectChapterOut.model_validate(chapter)
@@ -393,7 +389,6 @@ def register_project_routes(router: APIRouter) -> None:
     ) -> dict[str, object]:
         project = _project_or_404(db, current_user.id, project_id)
         stats = _soft_delete_dirty_evolution_for_project(db, project)
-        _mark_project_stale(project)
         db.commit()
         return {"status": "trashed", "stats": stats}
 
@@ -413,7 +408,6 @@ def register_project_routes(router: APIRouter) -> None:
             importance=payload.importance,
         )
         db.add(memory)
-        _mark_project_stale(project)
         db.commit()
         db.refresh(memory)
         return MemoryOut.model_validate(memory)
@@ -436,7 +430,6 @@ def register_project_routes(router: APIRouter) -> None:
             background=payload.background.strip(),
         )
         db.add(card)
-        _mark_project_stale(project)
         db.commit()
         db.refresh(card)
         return CharacterCardOut.model_validate(card)
@@ -457,7 +450,6 @@ def register_project_routes(router: APIRouter) -> None:
         card.personality = payload.personality.strip()
         card.story_role = payload.story_role.strip()
         card.background = payload.background.strip()
-        _mark_project_stale(project)
         db.commit()
         db.refresh(card)
         return CharacterCardOut.model_validate(card)
@@ -477,11 +469,9 @@ def register_project_routes(router: APIRouter) -> None:
         if payload.hard_delete:
             result = CharacterCardOut.model_validate(card)
             db.delete(card)
-            _mark_project_stale(project)
             db.commit()
             return result
         card.deleted_at = datetime.utcnow()
-        _mark_project_stale(project)
         db.commit()
         db.refresh(card)
         return CharacterCardOut.model_validate(card)
@@ -501,7 +491,6 @@ def register_project_routes(router: APIRouter) -> None:
             source_kind=payload.source_kind,
         )
         db.add(source)
-        _mark_project_stale(project)
         db.commit()
         db.refresh(source)
         return SourceOut.model_validate(source)

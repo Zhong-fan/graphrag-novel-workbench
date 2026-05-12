@@ -94,15 +94,24 @@ def _load_dotenv(path: Path) -> dict[str, str]:
     return values
 
 
-def _resolve(name: str, dotenv_values: dict[str, str], default: str | None = None) -> str | None:
-    return dotenv_values.get(name, default)
+def _resolve_first(
+    names: tuple[str, ...],
+    dotenv_values: dict[str, str],
+    default: str | None = None,
+) -> str | None:
+    for name in names:
+        value = dotenv_values.get(name)
+        if value is not None:
+            return value
+    return default
 
 
-def _require(name: str, dotenv_values: dict[str, str]) -> str:
-    value = dotenv_values.get(name)
-    if value is None or not value.strip():
-        raise RuntimeError(f"MVP/.env 缺少必填配置: {name}")
-    return value.strip()
+def _require_first(names: tuple[str, ...], dotenv_values: dict[str, str]) -> str:
+    for name in names:
+        value = dotenv_values.get(name)
+        if value is not None and value.strip():
+            return value.strip()
+    raise RuntimeError(f"Missing required config in MVP/.env: {', '.join(names)}")
 
 
 def _resolve_embedding_settings(
@@ -110,7 +119,9 @@ def _resolve_embedding_settings(
     openai_api_key: str | None,
     openai_base_url: str,
 ) -> tuple[str, str | None, str]:
-    embedding_base_url = _normalize_base_url(_require("GRAPH_MVP_EMBEDDING_BASE_URL", dotenv_values))
+    embedding_base_url = _normalize_base_url(
+        _require_first(("CHENFLOW_EMBEDDING_BASE_URL", "GRAPH_MVP_EMBEDDING_BASE_URL"), dotenv_values)
+    )
 
     if _is_ollama_base_url(embedding_base_url):
         default_api_key = "ollama"
@@ -121,8 +132,12 @@ def _resolve_embedding_settings(
     else:
         default_api_key = openai_api_key
 
-    embedding_model = _require("GRAPH_MVP_EMBEDDING_MODEL", dotenv_values)
-    embedding_api_key = _resolve("GRAPH_MVP_EMBEDDING_API_KEY", dotenv_values, default_api_key)
+    embedding_model = _require_first(("CHENFLOW_EMBEDDING_MODEL", "GRAPH_MVP_EMBEDDING_MODEL"), dotenv_values)
+    embedding_api_key = _resolve_first(
+        ("CHENFLOW_EMBEDDING_API_KEY", "GRAPH_MVP_EMBEDDING_API_KEY"),
+        dotenv_values,
+        default_api_key,
+    )
     return embedding_model, embedding_api_key, embedding_base_url
 
 
@@ -131,8 +146,8 @@ def load_settings() -> Settings:
     env_path = root_dir / ".env"
     dotenv_values = _load_dotenv(env_path)
 
-    openai_api_key = _require("OPENAI_API_KEY", dotenv_values)
-    openai_base_url = _normalize_base_url(_require("OPENAI_BASE_URL", dotenv_values))
+    openai_api_key = _require_first(("OPENAI_API_KEY",), dotenv_values)
+    openai_base_url = _normalize_base_url(_require_first(("OPENAI_BASE_URL",), dotenv_values))
     embedding_model, embedding_api_key, embedding_base_url = _resolve_embedding_settings(
         dotenv_values,
         openai_api_key,
@@ -143,31 +158,46 @@ def load_settings() -> Settings:
         root_dir=root_dir,
         env_path=env_path,
         output_dir=root_dir / "output",
-        llm_mode=_require("GRAPH_MVP_LLM_MODE", dotenv_values).strip().lower(),
-        writer_model=_require("GRAPH_MVP_WRITER_MODEL", dotenv_values),
-        utility_model=_require("GRAPH_MVP_UTILITY_MODEL", dotenv_values),
+        llm_mode=_require_first(("CHENFLOW_LLM_MODE", "GRAPH_MVP_LLM_MODE"), dotenv_values).strip().lower(),
+        writer_model=_require_first(("CHENFLOW_WRITER_MODEL", "GRAPH_MVP_WRITER_MODEL"), dotenv_values),
+        utility_model=_require_first(("CHENFLOW_UTILITY_MODEL", "GRAPH_MVP_UTILITY_MODEL"), dotenv_values),
         embedding_model=embedding_model,
         openai_api_key=openai_api_key,
         openai_base_url=openai_base_url,
-        openai_use_system_proxy=_parse_bool(_resolve("GRAPH_MVP_OPENAI_USE_SYSTEM_PROXY", dotenv_values), default=False),
-        llm_use_responses=_parse_bool(_resolve("GRAPH_MVP_LLM_USE_RESPONSES", dotenv_values), default=True),
-        llm_stream_responses=_parse_bool(_resolve("GRAPH_MVP_LLM_STREAM_RESPONSES", dotenv_values), default=True),
+        openai_use_system_proxy=_parse_bool(
+            _resolve_first(("CHENFLOW_OPENAI_USE_SYSTEM_PROXY", "GRAPH_MVP_OPENAI_USE_SYSTEM_PROXY"), dotenv_values),
+            default=False,
+        ),
+        llm_use_responses=_parse_bool(
+            _resolve_first(("CHENFLOW_LLM_USE_RESPONSES", "GRAPH_MVP_LLM_USE_RESPONSES"), dotenv_values),
+            default=True,
+        ),
+        llm_stream_responses=_parse_bool(
+            _resolve_first(("CHENFLOW_LLM_STREAM_RESPONSES", "GRAPH_MVP_LLM_STREAM_RESPONSES"), dotenv_values),
+            default=True,
+        ),
         llm_request_timeout_seconds=_parse_positive_int(
-            _resolve("GRAPH_MVP_LLM_REQUEST_TIMEOUT_SECONDS", dotenv_values),
+            _resolve_first(("CHENFLOW_LLM_REQUEST_TIMEOUT_SECONDS", "GRAPH_MVP_LLM_REQUEST_TIMEOUT_SECONDS"), dotenv_values),
             120,
         ),
-        llm_max_attempts=_parse_positive_int(_resolve("GRAPH_MVP_LLM_MAX_ATTEMPTS", dotenv_values), 3),
+        llm_max_attempts=_parse_positive_int(
+            _resolve_first(("CHENFLOW_LLM_MAX_ATTEMPTS", "GRAPH_MVP_LLM_MAX_ATTEMPTS"), dotenv_values),
+            3,
+        ),
         llm_retry_max_sleep_seconds=_parse_positive_int(
-            _resolve("GRAPH_MVP_LLM_RETRY_MAX_SLEEP_SECONDS", dotenv_values),
+            _resolve_first(
+                ("CHENFLOW_LLM_RETRY_MAX_SLEEP_SECONDS", "GRAPH_MVP_LLM_RETRY_MAX_SLEEP_SECONDS"),
+                dotenv_values,
+            ),
             120,
         ),
         embedding_api_key=embedding_api_key,
         embedding_base_url=embedding_base_url,
-        mysql_host=_require("MYSQL_HOST", dotenv_values),
-        mysql_port=int(_require("MYSQL_PORT", dotenv_values)),
-        mysql_user=_require("MYSQL_USER", dotenv_values),
-        mysql_password=_require("MYSQL_PASSWORD", dotenv_values),
-        mysql_database=_require("MYSQL_DATABASE", dotenv_values),
-        auth_secret=_require("AUTH_SECRET", dotenv_values),
-        auth_exp_hours=int(_require("AUTH_EXP_HOURS", dotenv_values)),
+        mysql_host=_require_first(("MYSQL_HOST",), dotenv_values),
+        mysql_port=int(_require_first(("MYSQL_PORT",), dotenv_values)),
+        mysql_user=_require_first(("MYSQL_USER",), dotenv_values),
+        mysql_password=_require_first(("MYSQL_PASSWORD",), dotenv_values),
+        mysql_database=_require_first(("MYSQL_DATABASE",), dotenv_values),
+        auth_secret=_require_first(("AUTH_SECRET",), dotenv_values),
+        auth_exp_hours=int(_require_first(("AUTH_EXP_HOURS",), dotenv_values)),
     )

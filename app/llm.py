@@ -567,8 +567,8 @@ class OpenAIResponsesLLM:
         if "upstream authentication failed" in lowered:
             return (
                 "Model gateway upstream authentication failed. "
-                "Check the upstream API key, model permission, or switch GRAPH_MVP_WRITER_MODEL "
-                "to a model that this gateway actually exposes."
+                "Check the upstream API key, model permission, or switch CHENFLOW_WRITER_MODEL "
+                "(legacy alias: GRAPH_MVP_WRITER_MODEL) to a model that this gateway actually exposes."
             )
         if status_code in {502, 503, 504}:
             return f"Model gateway is temporarily unavailable or upstream timed out: {message}"

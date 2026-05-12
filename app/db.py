@@ -11,6 +11,7 @@ SCHEMA_MIGRATIONS_TABLE = "schema_migrations"
 WORKSPACE_SCHEMA_MIGRATION = "20260507_0001_workspace_schema"
 NOVEL_PROJECT_TITLE_MIGRATION = "20260510_0002_novel_project_titles"
 PROJECT_REFERENCE_WORK_FIELDS_MIGRATION = "20260511_0003_project_reference_work_fields"
+GENERATION_RUN_MEDIUMTEXT_MIGRATION = "20260512_0004_generation_run_mediumtext"
 
 
 settings = load_settings()
@@ -62,6 +63,12 @@ def _migrate_schema() -> None:
             "Backfill missing project reference-work fields in older workspace schemas",
             _migrate_project_reference_work_fields,
         )
+        _run_schema_migration(
+            connection,
+            GENERATION_RUN_MEDIUMTEXT_MIGRATION,
+            "Upgrade generation_runs large text columns to MEDIUMTEXT for workbench draft persistence",
+            _migrate_generation_run_mediumtext,
+        )
 
 
 def _ensure_schema_migrations_table(connection) -> None:
@@ -102,6 +109,13 @@ def _column_names(table_name: str) -> set[str]:
     if table_name not in inspector.get_table_names():
         return set()
     return {column["name"] for column in inspector.get_columns(table_name)}
+
+
+def _column_specs(table_name: str) -> dict[str, dict]:
+    inspector = inspect(engine)
+    if table_name not in inspector.get_table_names():
+        return {}
+    return {column["name"]: column for column in inspector.get_columns(table_name)}
 
 
 def _migrate_workspace_schema(connection) -> None:
@@ -315,6 +329,31 @@ def _migrate_project_reference_work_fields(connection) -> None:
     if "reference_work_confidence_note" not in project_columns:
         connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_confidence_note TEXT NULL"))
         connection.execute(text("UPDATE projects SET reference_work_confidence_note = '' WHERE reference_work_confidence_note IS NULL"))
+
+
+def _migrate_generation_run_mediumtext(connection) -> None:
+    column_specs = _column_specs("generation_runs")
+    if not column_specs:
+        return
+
+    def upgrade(column_name: str, *, nullable: bool) -> None:
+        column = column_specs.get(column_name)
+        if column is None:
+            return
+        column_type = str(column["type"]).upper()
+        if "MEDIUMTEXT" in column_type:
+            return
+        if nullable:
+            connection.execute(text(f"ALTER TABLE generation_runs MODIFY COLUMN {column_name} MEDIUMTEXT NULL"))
+            return
+        connection.execute(text(f"UPDATE generation_runs SET {column_name} = '' WHERE {column_name} IS NULL"))
+        connection.execute(text(f"ALTER TABLE generation_runs MODIFY COLUMN {column_name} MEDIUMTEXT NOT NULL"))
+
+    upgrade("content", nullable=False)
+    upgrade("retrieval_context", nullable=False)
+    upgrade("scene_card", nullable=False)
+    upgrade("generation_trace", nullable=False)
+    upgrade("evolution_snapshot", nullable=False)
 
 
 def db_session() -> Session:

@@ -1,40 +1,24 @@
 services:
   mysql:
     image: mysql:8.4
-    container_name: graph-mvp-mysql
+    container_name: chenflow-mysql
     restart: unless-stopped
     ports:
       - "3307:3306"
     environment:
       MYSQL_ROOT_PASSWORD: root-password
-      MYSQL_DATABASE: graphrag_novel
-      MYSQL_USER: graph_user
-      MYSQL_PASSWORD: graph_password
+      MYSQL_DATABASE: chenflow_workbench
+      MYSQL_USER: chenflow_user
+      MYSQL_PASSWORD: chenflow_password
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
     volumes:
       - mysql_data:/var/lib/mysql
 
-  neo4j:
-    image: neo4j:5.26
-    container_name: graph-mvp-neo4j
-    restart: unless-stopped
-    ports:
-      - "7474:7474"
-      - "7687:7687"
-    environment:
-      NEO4J_AUTH: neo4j/graphrag-password
-      NEO4J_server_memory_heap_initial__size: 512m
-      NEO4J_server_memory_heap_max__size: 512m
-      NEO4J_server_memory_pagecache_size: 512m
-    volumes:
-      - neo4j_data:/data
-      - neo4j_logs:/logs
-
   bge-m3:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
-    container_name: graph-mvp-bge-m3
+    container_name: chenflow-bge-m3
     restart: unless-stopped
     ports:
       - "8090:80"
@@ -47,6 +31,4 @@ services:
 
 volumes:
   mysql_data:
-  neo4j_data:
-  neo4j_logs:
   tei_data:
