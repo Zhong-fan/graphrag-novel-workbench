@@ -3,34 +3,23 @@ import { reactive, ref, type Ref } from "vue";
 import type { CaptchaChallenge, ViewKey } from "../types";
 
 type AuthModeKey = "register" | "login";
-type PendingAuthAction =
-  | { type: "like"; novelId: number; returnView: ViewKey }
-  | { type: "favorite"; novelId: number; returnView: ViewKey }
-  | { type: "comment"; novelId: number; content: string; returnView: ViewKey };
-
 type RegisterFieldKey = "username" | "password" | "confirmPassword" | "captcha_answer";
 type LoginFieldKey = "username" | "password";
 
 export function useAuthFlow(options: {
   currentView: Ref<ViewKey>;
   authError: Ref<string>;
-  loading: Ref<boolean>;
   error: Ref<string>;
-  success: Ref<string>;
   isAuthenticated: Ref<boolean>;
   captcha: Ref<CaptchaChallenge | null>;
   refreshCaptcha: () => Promise<void>;
   login: (payload: { username: string; password: string }) => Promise<void>;
   register: (payload: { username: string; password: string; captcha_answer: string; captcha_token: string }) => Promise<void>;
   clearFeedback: () => void;
-  afterLike: (novelId: number) => Promise<void>;
-  afterFavorite: (novelId: number) => Promise<void>;
-  afterComment: (novelId: number, content: string) => Promise<boolean>;
 }) {
   const authMode = ref<AuthModeKey>("register");
-  const authReturnView = ref<ViewKey>("home");
+  const authReturnView = ref<ViewKey>("studio");
   const authRequestedView = ref<ViewKey | null>(null);
-  const pendingAuthAction = ref<PendingAuthAction | null>(null);
   const authFieldErrors = reactive({
     login: {
       username: "",
@@ -112,43 +101,6 @@ export function useAuthFlow(options: {
     options.clearFeedback();
   }
 
-  async function runPendingAuthAction() {
-    if (!pendingAuthAction.value) return;
-    const action = pendingAuthAction.value;
-    pendingAuthAction.value = null;
-    options.currentView.value = action.returnView;
-    if (action.type === "like") {
-      await options.afterLike(action.novelId);
-      return;
-    }
-    if (action.type === "favorite") {
-      await options.afterFavorite(action.novelId);
-      return;
-    }
-    const ok = await options.afterComment(action.novelId, action.content);
-    if (ok) options.currentView.value = "detail";
-  }
-
-  function requestLikeLogin(novelId: number) {
-    options.authError.value = "请先登录后再点赞。";
-    pendingAuthAction.value = { type: "like", novelId, returnView: options.currentView.value };
-    openAuthPanel("login", options.currentView.value);
-  }
-
-  function requestFavoriteLogin(novelId: number) {
-    options.authError.value = "请先登录后再收藏作品。";
-    pendingAuthAction.value = { type: "favorite", novelId, returnView: options.currentView.value };
-    openAuthPanel("login", options.currentView.value);
-  }
-
-  function requestCommentLogin(novelId: number | null, content: string) {
-    options.authError.value = "请先登录后再发表评论。";
-    if (novelId) {
-      pendingAuthAction.value = { type: "comment", novelId, content, returnView: "detail" };
-    }
-    openAuthPanel("login", "detail");
-  }
-
   async function submitRegister(payload: { username: string; password: string; confirmPassword: string; captcha_answer: string }) {
     options.authError.value = "";
     clearAuthFieldErrors("register");
@@ -186,8 +138,7 @@ export function useAuthFlow(options: {
     });
 
     if (options.isAuthenticated.value) {
-      await runPendingAuthAction();
-      options.currentView.value = options.currentView.value === "auth" ? (authRequestedView.value ?? "studio") : options.currentView.value;
+      options.currentView.value = authRequestedView.value ?? "studio";
       authRequestedView.value = null;
       return true;
     }
@@ -212,8 +163,7 @@ export function useAuthFlow(options: {
 
     await options.login({ username, password });
     if (options.isAuthenticated.value) {
-      await runPendingAuthAction();
-      options.currentView.value = options.currentView.value === "auth" ? (authRequestedView.value ?? "studio") : options.currentView.value;
+      options.currentView.value = authRequestedView.value ?? "studio";
       authRequestedView.value = null;
       return true;
     }
@@ -229,9 +179,6 @@ export function useAuthFlow(options: {
     openAuthPanel,
     closeAuthPanel,
     clearAuthFeedback,
-    requestLikeLogin,
-    requestFavoriteLogin,
-    requestCommentLogin,
     submitRegister,
     submitLogin,
   };

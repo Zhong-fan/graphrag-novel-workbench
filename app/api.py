@@ -4,17 +4,17 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api_routes import register_routes
-from .api_support import _ensure_seed_novels, create_run_index_job, mount_spa
+from .api_support import mount_spa
 from .config import load_settings
-from .db import db_session, init_db
+from .db import init_db
 
 
 def create_app() -> FastAPI:
     settings = load_settings()
     app = FastAPI(
-        title="鏅ㄦ祦鍐欎綔鍙?",
+        title="ChenFlow Workbench",
         version="1.0.0",
-        description="ChenFlow Workbench锛氬熀浜?GraphRAG + MySQL + Neo4j + Vue 鐨勪腑鏂囧皬璇村垱浣滃伐浣滃彴銆?",
+        description="面向创作者的中文小说生成与整理工作台。",
     )
     app.add_middleware(
         CORSMiddleware,
@@ -27,12 +27,9 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def startup() -> None:
         init_db()
-        with db_session() as db:
-            _ensure_seed_novels(db)
 
     router = APIRouter()
-    run_index_job = create_run_index_job(settings)
-    register_routes(router, settings=settings, run_index_job=run_index_job)
+    register_routes(router, settings=settings)
     app.include_router(router)
     mount_spa(app, settings)
     return app

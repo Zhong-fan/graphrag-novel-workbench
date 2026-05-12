@@ -6,7 +6,6 @@ import "./style.css";
 import "./styles/cards-forms.css";
 import "./styles/ui-shared.css";
 import "./styles/workspace.css";
-import "./styles/reader-editor.css";
 
 const app = createApp(App);
 

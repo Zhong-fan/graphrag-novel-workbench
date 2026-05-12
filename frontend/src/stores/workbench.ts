@@ -8,10 +8,9 @@ import type {
   CharacterCard,
   GenerationItem,
   GenerationProgress,
+  NovelCard,
   ProjectChapterPayload,
   ProjectFolder,
-  NovelCard,
-  NovelComment,
   NovelDetail,
   PublishNovelPayload,
   Project,
@@ -36,10 +35,6 @@ type SelectProjectOptions = {
 };
 
 const tokenKey = "graph_mvp_token";
-const graphPrepareMessage = "GraphRAG 输入已准备好，请先检查整理结果，再决定是否开始索引。";
-const indexPendingMessage = "GraphRAG 索引任务已提交，正在后台执行；只有项目状态变为“可创作草稿”才算真正成功。";
-const indexReadyMessage = "GraphRAG 索引已完成，现在可以开始生成内容。";
-const pollDelayMs = 3000;
 
 export const useWorkbenchStore = defineStore("workbench", () => {
   const bootstrap = ref<BootstrapResponse | null>(null);
@@ -49,12 +44,9 @@ export const useWorkbenchStore = defineStore("workbench", () => {
   const projects = ref<Project[]>([]);
   const projectFolders = ref<ProjectFolder[]>([]);
   const trashItems = ref<TrashItem[]>([]);
-  const novels = ref<NovelCard[]>([]);
-  const favoriteNovels = ref<NovelCard[]>([]);
   const myNovels = ref<NovelCard[]>([]);
   const profile = ref<UserProfile | null>(null);
   const currentNovel = ref<NovelDetail | null>(null);
-  const novelComments = ref<NovelComment[]>([]);
   const activeProject = ref<ProjectDetailResponse | null>(null);
   const currentGeneration = ref<GenerationItem | null>(null);
   const generationProgress = ref<GenerationProgress>({
@@ -67,17 +59,9 @@ export const useWorkbenchStore = defineStore("workbench", () => {
   const error = ref("");
   const success = ref("");
 
-  let projectPollTimer: number | null = null;
   let generationProgressTimer: number | null = null;
 
   const isAuthenticated = computed(() => Boolean(token.value && currentUser.value));
-
-  function stopProjectPolling() {
-    if (projectPollTimer !== null) {
-      window.clearTimeout(projectPollTimer);
-      projectPollTimer = null;
-    }
-  }
 
   function stopGenerationProgressPolling() {
     if (generationProgressTimer !== null) {
@@ -101,17 +85,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }, 1500);
   }
 
-  function scheduleProjectPolling(projectId: number) {
-    stopProjectPolling();
-    projectPollTimer = window.setTimeout(async () => {
-      projectPollTimer = null;
-      if (activeProject.value?.project.id !== projectId) {
-        return;
-      }
-      await selectProject(projectId, { showLoading: false, silent: true });
-    }, pollDelayMs);
-  }
-
   function syncProjectSummary(project: Project) {
     const index = projects.value.findIndex((item) => item.id === project.id);
     if (index >= 0) {
@@ -130,31 +103,18 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
-  function syncNovelInCollections(novelId: number, updater: (novel: NovelCard) => NovelCard) {
-    novels.value = novels.value.map((item) => (item.id === novelId ? updater(item) : item));
-    favoriteNovels.value = favoriteNovels.value.map((item) => (item.id === novelId ? updater(item) : item));
-    myNovels.value = myNovels.value.map((item) => (item.id === novelId ? updater(item) : item));
-    if (currentNovel.value?.id === novelId) {
-      currentNovel.value = updater(currentNovel.value) as NovelDetail;
-    }
-  }
-
   async function initialize() {
     error.value = "";
     bootstrap.value = await api.bootstrap();
-    await loadNovels();
     if (token.value) {
       try {
         currentUser.value = await api.me(token.value);
         profile.value = await api.myProfile(token.value);
         await loadProjects();
-        await loadFavorites();
         await loadMyNovels();
       } catch {
-        stopProjectPolling();
         setToken(null);
         currentUser.value = null;
-        favoriteNovels.value = [];
       }
     } else {
       captcha.value = await api.captcha();
@@ -169,15 +129,12 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     loading.value = true;
     error.value = "";
     success.value = "";
-    generationProgress.value = { stage: "start", message: "开始生成", trace: {}, logs: [] };
     try {
       const response = await api.register(payload);
       setToken(response.token);
       currentUser.value = response.user;
       profile.value = await api.myProfile(response.token);
       await refreshWorkspace();
-      await loadNovels();
-      await loadFavorites();
       await loadMyNovels();
       success.value = "账号已创建并自动登录。";
     } catch (err) {
@@ -199,8 +156,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       currentUser.value = response.user;
       profile.value = await api.myProfile(response.token);
       await loadProjects();
-      await loadNovels();
-      await loadFavorites();
       await loadMyNovels();
       success.value = "登录成功。";
     } catch (err) {
@@ -211,33 +166,17 @@ export const useWorkbenchStore = defineStore("workbench", () => {
   }
 
   function logout() {
-    stopProjectPolling();
     setToken(null);
     currentUser.value = null;
     projects.value = [];
-    favoriteNovels.value = [];
     myNovels.value = [];
     profile.value = null;
     currentNovel.value = null;
-    novelComments.value = [];
     activeProject.value = null;
     currentGeneration.value = null;
     void refreshCaptcha();
-    void loadNovels();
     success.value = "已退出登录。";
     error.value = "";
-  }
-
-  async function loadNovels() {
-    novels.value = await api.listNovels(token.value);
-  }
-
-  async function loadFavorites() {
-    if (!token.value) {
-      favoriteNovels.value = [];
-      return;
-    }
-    favoriteNovels.value = await api.listFavorites(token.value);
   }
 
   async function loadMyNovels() {
@@ -273,42 +212,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     success.value = "";
     try {
       currentNovel.value = await api.novelDetail(novelId, token.value);
-      novelComments.value = await api.listNovelComments(novelId);
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "加载小说详情失败。";
-    } finally {
-      loading.value = false;
-    }
-  }
-
-  async function submitNovelComment(content: string) {
-    if (!token.value) {
-      error.value = "请先登录。";
-      return;
-    }
-    if (!currentNovel.value) {
-      return;
-    }
-
-    const normalized = content.trim();
-    if (!normalized) {
-      error.value = "评论不能为空。";
-      return;
-    }
-
-    loading.value = true;
-    error.value = "";
-    success.value = "";
-    try {
-      const comment = await api.createNovelComment(token.value, currentNovel.value.id, { content: normalized });
-      novelComments.value = [comment, ...novelComments.value];
-      syncNovelInCollections(currentNovel.value.id, (item) => ({
-        ...item,
-        comments_count: item.comments_count + 1,
-      }));
-      success.value = "评论已发布。";
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : "评论发布失败。";
+      error.value = err instanceof Error ? err.message : "加载作品详情失败。";
     } finally {
       loading.value = false;
     }
@@ -363,21 +268,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       } else {
         currentGeneration.value = detail.generations[0] ?? null;
       }
-
-      if (detail.project.indexing_status === "indexing") {
-        scheduleProjectPolling(projectId);
-      } else {
-        stopProjectPolling();
-        if (detail.project.indexing_status === "ready" && success.value === indexPendingMessage) {
-          success.value = indexReadyMessage;
-        }
-        if (detail.project.indexing_status === "failed") {
-          error.value = detail.graphrag_review?.last_error || "GraphRAG 索引失败。";
-          success.value = "";
-        }
-      }
     } catch (err) {
-      stopProjectPolling();
       if (!silent) {
         error.value = err instanceof Error ? err.message : "加载项目失败。";
       }
@@ -588,62 +479,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
-  async function indexProject() {
-    if (!token.value || !activeProject.value) {
-      return;
-    }
-    loading.value = true;
-    error.value = "";
-    success.value = "";
-    try {
-      const response = await api.indexProject(token.value, activeProject.value.project.id, { force_rebuild: false });
-      success.value = response.status === "ready" ? indexReadyMessage : indexPendingMessage;
-      await selectProject(activeProject.value.project.id, { showLoading: false, silent: false });
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : "启动索引失败。";
-    } finally {
-      loading.value = false;
-    }
-  }
-
-  async function prepareGraphReview() {
-    if (!token.value || !activeProject.value) {
-      return;
-    }
-    loading.value = true;
-    error.value = "";
-    success.value = "";
-    try {
-      const review = await api.prepareGraphReview(token.value, activeProject.value.project.id);
-      activeProject.value.graphrag_review = review;
-      await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
-      success.value = graphPrepareMessage;
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : "准备 GraphRAG 预览失败。";
-    } finally {
-      loading.value = false;
-    }
-  }
-
-  async function updateGraphReviewFile(filename: string, content: string) {
-    if (!token.value || !activeProject.value) {
-      return;
-    }
-    loading.value = true;
-    error.value = "";
-    success.value = "";
-    try {
-      const review = await api.updateGraphReviewFile(token.value, activeProject.value.project.id, filename, { content });
-      activeProject.value.graphrag_review = review;
-      await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
-      success.value = "GraphRAG 输入文件已保存，可以继续检查后再启动索引。";
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : "保存 GraphRAG 输入文件失败。";
-    } finally {
-      loading.value = false;
-    }
-  }
-
   async function generate(payload: {
     chapter_id: number;
     prompt: string;
@@ -700,86 +535,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
-  async function toggleFavoriteNovel(novelId: number) {
-    if (!token.value) {
-      error.value = "请先登录。";
-      return;
-    }
-
-    const target = novels.value.find((item) => item.id === novelId) ?? favoriteNovels.value.find((item) => item.id === novelId);
-    if (!target) {
-      return;
-    }
-
-    loading.value = true;
-    error.value = "";
-    success.value = "";
-    try {
-      if (target.is_favorited) {
-        await api.unfavoriteNovel(token.value, novelId);
-        syncNovelInCollections(novelId, (item) => ({
-          ...item,
-          is_favorited: false,
-          favorites_count: Math.max(0, item.favorites_count - 1),
-        }));
-        favoriteNovels.value = favoriteNovels.value.filter((item) => item.id !== novelId);
-        success.value = "已移出书架。";
-      } else {
-        await api.favoriteNovel(token.value, novelId);
-        syncNovelInCollections(novelId, (item) => ({
-          ...item,
-          is_favorited: true,
-          favorites_count: item.favorites_count + 1,
-        }));
-        await loadFavorites();
-        success.value = "已加入书架。";
-      }
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : "收藏状态更新失败。";
-    } finally {
-      loading.value = false;
-    }
-  }
-
-  async function toggleLikeNovel(novelId: number) {
-    if (!token.value) {
-      error.value = "请先登录。";
-      return;
-    }
-
-    const target = novels.value.find((item) => item.id === novelId) ?? favoriteNovels.value.find((item) => item.id === novelId);
-    if (!target) {
-      return;
-    }
-
-    loading.value = true;
-    error.value = "";
-    success.value = "";
-    try {
-      if (target.is_liked) {
-        await api.unlikeNovel(token.value, novelId);
-        syncNovelInCollections(novelId, (item) => ({
-          ...item,
-          is_liked: false,
-          likes_count: Math.max(0, item.likes_count - 1),
-        }));
-        success.value = "已取消点赞。";
-      } else {
-        await api.likeNovel(token.value, novelId);
-        syncNovelInCollections(novelId, (item) => ({
-          ...item,
-          is_liked: true,
-          likes_count: item.likes_count + 1,
-        }));
-        success.value = "已点赞。";
-      }
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : "点赞状态更新失败。";
-    } finally {
-      loading.value = false;
-    }
-  }
-
   async function publishNovelFromGeneration(payload: PublishNovelPayload) {
     if (!token.value) {
       error.value = "请先登录。";
@@ -792,12 +547,9 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     try {
       const created = await api.publishNovelFromGeneration(token.value, payload);
       currentNovel.value = created;
-      await loadNovels();
-      await loadFavorites();
       await loadMyNovels();
       await refreshWorkspace();
-      novelComments.value = [];
-      success.value = "作品已发布到书城。";
+      success.value = "作品已发布。";
       return created;
     } catch (err) {
       error.value = err instanceof Error ? err.message : "发布作品失败。";
@@ -819,8 +571,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     try {
       const updated = await api.updateNovel(token.value, novelId, payload);
       currentNovel.value = updated;
-      await loadNovels();
-      await loadFavorites();
       await loadMyNovels();
       await refreshWorkspace();
       success.value = "作品信息已更新。";
@@ -845,8 +595,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     try {
       const updated = await api.appendNovelChapterFromGeneration(token.value, novelId, payload);
       currentNovel.value = updated;
-      await loadNovels();
-      await loadFavorites();
       await loadMyNovels();
       await refreshWorkspace();
       success.value = "新章节已追加。";
@@ -871,8 +619,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     try {
       const updated = await api.updateNovelChapter(token.value, novelId, chapterId, payload);
       currentNovel.value = updated;
-      await loadNovels();
-      await loadFavorites();
       await loadMyNovels();
       await refreshWorkspace();
       success.value = "章节已保存。";
@@ -960,10 +706,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       const novel = await api.deleteNovel(token.value, novelId, {});
       if (currentNovel.value?.id === novelId) {
         currentNovel.value = null;
-        novelComments.value = [];
       }
-      await loadNovels();
-      await loadFavorites();
       await loadMyNovels();
       await refreshWorkspace();
       success.value = "作品已移入回收站。";
@@ -1052,12 +795,9 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     projects,
     projectFolders,
     trashItems,
-    novels,
-    favoriteNovels,
     myNovels,
     profile,
     currentNovel,
-    novelComments,
     activeProject,
     currentGeneration,
     generationProgress,
@@ -1070,12 +810,9 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     register,
     login,
     logout,
-    loadNovels,
-    loadFavorites,
     loadMyNovels,
     saveProfile,
     openNovel,
-    submitNovelComment,
     selectProject,
     refreshWorkspace,
     createProject,
@@ -1096,13 +833,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     addCharacterCard,
     updateCharacterCard,
     addSource,
-    prepareGraphReview,
-    updateGraphReviewFile,
-    indexProject,
     generate,
     refreshGenerationEvolution,
-    toggleFavoriteNovel,
-    toggleLikeNovel,
     publishNovelFromGeneration,
     updatePublishedNovel,
     appendNovelChapter,

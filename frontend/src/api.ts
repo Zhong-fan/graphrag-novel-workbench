@@ -4,15 +4,10 @@ import type {
   CaptchaChallenge,
   CharacterCard,
   CharacterCardPayload,
-  FavoriteToggleResponse,
-  GraphReviewPayload,
   GenerationItem,
   GenerationProgress,
-  IndexResponse,
-  LikeToggleResponse,
   MemoryItem,
   NovelCard,
-  NovelComment,
   NovelDetail,
   UpdateNovelPayload,
   PublishNovelPayload,
@@ -193,16 +188,6 @@ export const api = {
     projectId: number,
     payload: { title: string; content: string; source_kind: string },
   ) => request<SourceItem>(`/api/projects/${projectId}/sources`, { method: "POST", token, body: JSON.stringify(payload) }),
-  prepareGraphReview: (token: string, projectId: number) =>
-    request<GraphReviewPayload>(`/api/projects/${projectId}/graphrag/prepare-review`, { method: "POST", token }),
-  updateGraphReviewFile: (token: string, projectId: number, filename: string, payload: { content: string }) =>
-    request<GraphReviewPayload>(`/api/projects/${projectId}/graphrag/files/${encodeURIComponent(filename)}`, {
-      method: "PUT",
-      token,
-      body: JSON.stringify(payload),
-    }),
-  indexProject: (token: string, projectId: number, payload: { force_rebuild: boolean }) =>
-    request<IndexResponse>(`/api/projects/${projectId}/index`, { method: "POST", token, body: JSON.stringify(payload) }),
   generate: (
     token: string,
     projectId: number,
@@ -218,27 +203,11 @@ export const api = {
     },
   ) => request<GenerationItem>(`/api/projects/${projectId}/generate`, { method: "POST", token, body: JSON.stringify(payload) }),
   generationProgress: (token: string, projectId: number) =>
-    request<GenerationProgress>(
-      `/api/projects/${projectId}/generate/progress`,
-      { token },
-    ),
+    request<GenerationProgress>(`/api/projects/${projectId}/generate/progress`, { token }),
   refreshGenerationEvolution: (token: string, projectId: number, generationId: number) =>
     request<GenerationItem>(`/api/projects/${projectId}/generations/${generationId}/refresh-evolution`, { method: "POST", token }),
-  listNovels: (token?: string | null) => request<NovelCard[]>("/api/novels", { token }),
-  novelDetail: (novelId: number, token?: string | null) => request<NovelDetail>(`/api/novels/${novelId}`, { token }),
-  listFavorites: (token: string) => request<NovelCard[]>("/api/me/favorites", { token }),
   listMyNovels: (token: string) => request<NovelCard[]>("/api/me/novels", { token }),
-  favoriteNovel: (token: string, novelId: number) =>
-    request<FavoriteToggleResponse>(`/api/novels/${novelId}/favorite`, { method: "POST", token }),
-  unfavoriteNovel: (token: string, novelId: number) =>
-    request<FavoriteToggleResponse>(`/api/novels/${novelId}/favorite`, { method: "DELETE", token }),
-  likeNovel: (token: string, novelId: number) =>
-    request<LikeToggleResponse>(`/api/novels/${novelId}/like`, { method: "POST", token }),
-  unlikeNovel: (token: string, novelId: number) =>
-    request<LikeToggleResponse>(`/api/novels/${novelId}/like`, { method: "DELETE", token }),
-  listNovelComments: (novelId: number) => request<NovelComment[]>(`/api/novels/${novelId}/comments`),
-  createNovelComment: (token: string, novelId: number, payload: { content: string }) =>
-    request<NovelComment>(`/api/novels/${novelId}/comments`, { method: "POST", token, body: JSON.stringify(payload) }),
+  novelDetail: (novelId: number, token?: string | null) => request<NovelDetail>(`/api/novels/${novelId}`, { token }),
   publishNovelFromGeneration: (token: string, payload: PublishNovelPayload) =>
     request<NovelDetail>("/api/novels/from-generation", { method: "POST", token, body: JSON.stringify(payload) }),
   updateNovel: (token: string, novelId: number, payload: UpdateNovelPayload) =>

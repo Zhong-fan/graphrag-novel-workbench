@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from datetime import datetime
 from typing import Any
 
@@ -88,7 +86,6 @@ class ProjectOut(BaseModel):
     writing_rules: str
     style_profile: str
     punctuation_rule: str
-    indexing_status: str
     folder_id: int | None = None
     created_at: datetime
     updated_at: datetime
@@ -163,44 +160,12 @@ class SourceOut(BaseModel):
         from_attributes = True
 
 
-class IndexRequest(BaseModel):
-    force_rebuild: bool = True
-
-
-class IndexResponse(BaseModel):
-    status: str
-    workspace_path: str
-    neo4j_sync_status: str
-    last_error: str = ""
-
-
-class GraphReviewOut(BaseModel):
-    workspace_path: str
-    input_files: list[str]
-    files: list["GraphReviewFileOut"] = []
-    preview_text: str
-    neo4j_sync_status: str
-    last_error: str = ""
-    last_indexed_at: datetime | None = None
-
-
-class GraphReviewFileOut(BaseModel):
-    filename: str
-    title: str
-    category: str
-    content: str
-
-
-class GraphReviewFileUpdateRequest(BaseModel):
-    content: str = Field(..., min_length=1, max_length=200000)
-
-
 class GenerateRequest(BaseModel):
     chapter_id: int
     prompt: str = Field(..., min_length=12)
-    search_method: str = Field(default="local")
+    search_method: str = Field(default="direct")
     response_type: str = Field(default="Multiple Paragraphs")
-    use_global_search: bool = True
+    use_global_search: bool = False
     use_scene_card: bool = True
     use_refiner: bool = True
     write_evolution: bool = True
@@ -279,7 +244,6 @@ class ProjectDetailResponse(BaseModel):
     character_cards: list[CharacterCardOut] = []
     sources: list[SourceOut]
     generations: list[GenerationOut]
-    graphrag_review: GraphReviewOut | None = None
     character_state_updates: list[CharacterStateUpdateOut] = []
     relationship_state_updates: list[RelationshipStateUpdateOut] = []
     story_events: list[StoryEventOut] = []
@@ -420,18 +384,6 @@ class NovelDetailOut(NovelCardOut):
     chapters: list[NovelChapterOut]
 
 
-class FavoriteToggleResponse(BaseModel):
-    favorited: bool
-    novel_id: int
-    favorites_count: int
-
-
-class LikeToggleResponse(BaseModel):
-    liked: bool
-    novel_id: int
-    likes_count: int
-
-
 class NovelCommentCreateRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=2000)
 
@@ -442,6 +394,18 @@ class NovelCommentOut(BaseModel):
     username: str
     content: str
     created_at: datetime
+
+
+class FavoriteToggleResponse(BaseModel):
+    favorited: bool
+    novel_id: int
+    favorites_count: int
+
+
+class LikeToggleResponse(BaseModel):
+    liked: bool
+    novel_id: int
+    likes_count: int
 
 
 class PublishNovelRequest(BaseModel):
@@ -498,7 +462,6 @@ class DeleteCharacterCardRequest(BaseModel):
 
 class BootstrapResponse(BaseModel):
     service_name: str
-    graph_engine: str
     auth_enabled: bool
     writer_model: str
     utility_model: str
@@ -506,7 +469,6 @@ class BootstrapResponse(BaseModel):
     embedding_provider: str
     embedding_base_url: str
     punctuation_rule: str
-    query_methods: list[str]
 
 
 AuthResponse.model_rebuild()

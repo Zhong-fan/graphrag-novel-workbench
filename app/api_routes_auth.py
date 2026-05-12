@@ -37,7 +37,6 @@ def register_auth_routes(router: APIRouter, *, settings: Settings) -> None:
     def bootstrap() -> BootstrapResponse:
         return BootstrapResponse(
             service_name="ChenFlow Workbench",
-            graph_engine="GraphRAG + Neo4j",
             auth_enabled=True,
             writer_model=settings.writer_model,
             utility_model=settings.utility_model,
@@ -45,7 +44,6 @@ def register_auth_routes(router: APIRouter, *, settings: Settings) -> None:
             embedding_provider=settings.embedding_provider_label,
             embedding_base_url=settings.embedding_base_url,
             punctuation_rule="普通对话使用「」，嵌套引号使用『』。",
-            query_methods=["local", "global", "drift", "basic"],
         )
 
     @router.get("/api/auth/captcha", response_model=CaptchaChallenge)

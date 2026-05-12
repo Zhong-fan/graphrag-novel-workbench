@@ -3,11 +3,11 @@ setlocal EnableExtensions
 chcp 65001 >nul
 
 cd /d "%~dp0"
-title GraphRAG Novel Workbench
+title ChenFlow Workbench
 
 echo.
 echo ==========================================
-echo   GraphRAG Novel Workbench Launcher
+echo   ChenFlow Workbench Launcher
 echo ==========================================
 echo.
 
@@ -36,28 +36,14 @@ if errorlevel 1 (
   goto :fail
 )
 
-where ollama >nul 2>nul
+echo [1/4] Starting MySQL...
+docker compose up -d mysql
 if errorlevel 1 (
-  echo [Error] Ollama is not installed or not in PATH.
+  echo [Error] Failed to start MySQL.
   goto :fail
 )
 
-echo [1/5] Checking local Ollama model...
-ollama list | findstr /i /c:"bge-m3" >nul
-if errorlevel 1 (
-  echo [Error] Model "bge-m3" was not found in Ollama.
-  echo         Run: ollama pull bge-m3
-  goto :fail
-)
-
-echo [2/5] Starting MySQL and Neo4j...
-docker compose up -d mysql neo4j
-if errorlevel 1 (
-  echo [Error] Failed to start docker services.
-  goto :fail
-)
-
-echo [3/5] Installing frontend dependencies if needed...
+echo [2/4] Installing frontend dependencies if needed...
 if not exist "frontend\node_modules" (
   pushd frontend
   call npm install
@@ -69,7 +55,7 @@ if not exist "frontend\node_modules" (
   popd
 )
 
-echo [4/5] Building frontend...
+echo [3/4] Building frontend...
 pushd frontend
 call npm run build
 if errorlevel 1 (
@@ -79,7 +65,7 @@ if errorlevel 1 (
 )
 popd
 
-echo [5/5] Starting backend server...
+echo [4/4] Starting backend server...
 echo.
 echo Open in browser: http://127.0.0.1:8000
 echo Stop the server with Ctrl+C in this window.

@@ -1,7 +1,4 @@
 export type ViewKey =
-  | "home"
-  | "discover"
-  | "favorites"
   | "studio"
   | "trash"
   | "projectCreate"
@@ -10,14 +7,11 @@ export type ViewKey =
   | "workshop"
   | "generationTrace"
   | "novelEditor"
-  | "reader"
-  | "detail"
   | "profile"
   | "auth";
 
 export interface BootstrapResponse {
   service_name: string;
-  graph_engine: string;
   auth_enabled: boolean;
   writer_model: string;
   utility_model: string;
@@ -25,7 +19,6 @@ export interface BootstrapResponse {
   embedding_provider: string;
   embedding_base_url: string;
   punctuation_rule: string;
-  query_methods: string[];
 }
 
 export interface CaptchaChallenge {
@@ -61,7 +54,6 @@ export interface Project {
   writing_rules: string;
   style_profile: string;
   punctuation_rule: string;
-  indexing_status: string;
   folder_id?: number | null;
   created_at: string;
   updated_at: string;
@@ -208,6 +200,47 @@ export interface GenerationProgress {
   logs?: GenerationProgressLog[];
 }
 
+export interface CharacterStateUpdate {
+  id: number;
+  character_name: string;
+  emotion_state: string;
+  current_goal: string;
+  self_view_shift: string;
+  public_perception: string;
+  summary: string;
+  created_at: string;
+}
+
+export interface RelationshipStateUpdate {
+  id: number;
+  source_character: string;
+  target_character: string;
+  change_type: string;
+  direction: string;
+  intensity: number;
+  summary: string;
+  created_at: string;
+}
+
+export interface StoryEventItem {
+  id: number;
+  title: string;
+  summary: string;
+  impact_summary: string;
+  participants: string[];
+  location_hint: string;
+  created_at: string;
+}
+
+export interface WorldPerceptionUpdate {
+  id: number;
+  subject_name: string;
+  observer_group: string;
+  direction: string;
+  change_summary: string;
+  created_at: string;
+}
+
 export interface ProjectDetailResponse {
   project: Project;
   project_chapters: ProjectChapter[];
@@ -215,7 +248,6 @@ export interface ProjectDetailResponse {
   character_cards: CharacterCard[];
   sources: SourceItem[];
   generations: GenerationItem[];
-  graphrag_review?: GraphReviewPayload | null;
   character_state_updates: CharacterStateUpdate[];
   relationship_state_updates: RelationshipStateUpdate[];
   story_events: StoryEventItem[];
@@ -245,30 +277,6 @@ export interface MyWorkspaceResponse {
   folders: ProjectFolder[];
   projects: Project[];
   trash: TrashItem[];
-}
-
-export interface IndexResponse {
-  status: string;
-  workspace_path: string;
-  neo4j_sync_status: string;
-  last_error: string;
-}
-
-export interface GraphReviewPayload {
-  workspace_path: string;
-  input_files: string[];
-  files: GraphReviewFile[];
-  preview_text: string;
-  neo4j_sync_status: string;
-  last_error: string;
-  last_indexed_at?: string | null;
-}
-
-export interface GraphReviewFile {
-  filename: string;
-  title: string;
-  category: string;
-  content: string;
 }
 
 export interface NovelChapter {
@@ -314,18 +322,6 @@ export interface NovelComment {
   username: string;
   content: string;
   created_at: string;
-}
-
-export interface FavoriteToggleResponse {
-  favorited: boolean;
-  novel_id: number;
-  favorites_count: number;
-}
-
-export interface LikeToggleResponse {
-  liked: boolean;
-  novel_id: number;
-  likes_count: number;
 }
 
 export interface PublishNovelPayload {
@@ -388,45 +384,4 @@ export interface UserProfile {
   bio: string;
   email?: string | null;
   phone?: string | null;
-}
-
-export interface CharacterStateUpdate {
-  id: number;
-  character_name: string;
-  emotion_state: string;
-  current_goal: string;
-  self_view_shift: string;
-  public_perception: string;
-  summary: string;
-  created_at: string;
-}
-
-export interface RelationshipStateUpdate {
-  id: number;
-  source_character: string;
-  target_character: string;
-  change_type: string;
-  direction: string;
-  intensity: number;
-  summary: string;
-  created_at: string;
-}
-
-export interface StoryEventItem {
-  id: number;
-  title: string;
-  summary: string;
-  impact_summary: string;
-  participants: string[];
-  location_hint: string;
-  created_at: string;
-}
-
-export interface WorldPerceptionUpdate {
-  id: number;
-  subject_name: string;
-  observer_group: string;
-  direction: string;
-  change_summary: string;
-  created_at: string;
 }

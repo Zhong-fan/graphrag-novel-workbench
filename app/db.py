@@ -239,12 +239,6 @@ def _migrate_workspace_schema(connection) -> None:
         if "canonicalized_at" not in generation_columns:
             connection.execute(text("ALTER TABLE generation_runs ADD COLUMN canonicalized_at DATETIME NULL"))
 
-    if "graph_workspaces" in _table_names():
-        graph_columns = _column_names("graph_workspaces")
-        if "last_error" not in graph_columns:
-            connection.execute(text("ALTER TABLE graph_workspaces ADD COLUMN last_error TEXT NULL"))
-            connection.execute(text("UPDATE graph_workspaces SET last_error = '' WHERE last_error IS NULL"))
-
     if "character_cards" in _table_names():
         character_columns = _column_names("character_cards")
         if "deleted_at" not in character_columns:

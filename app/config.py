@@ -3,24 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+
 @dataclass(frozen=True)
 class Settings:
     root_dir: Path
     env_path: Path
     output_dir: Path
-    graphrag_root: Path
     llm_mode: str
     writer_model: str
     utility_model: str
     embedding_model: str
     openai_api_key: str | None
     openai_base_url: str
-    graphrag_chat_api_key: str | None
-    graphrag_chat_base_url: str
-    graphrag_chat_model: str
-    graphrag_chat_request_timeout_seconds: int
-    graphrag_chat_max_retries: int
-    graphrag_concurrent_requests: int
     openai_use_system_proxy: bool
     llm_use_responses: bool
     llm_stream_responses: bool
@@ -34,15 +28,8 @@ class Settings:
     mysql_user: str
     mysql_password: str
     mysql_database: str
-    neo4j_uri: str
-    neo4j_user: str
-    neo4j_password: str
-    neo4j_database: str
     auth_secret: str
     auth_exp_hours: int
-    graphrag_response_type: str
-    graphrag_index_method: str
-    graphrag_local_embeddings: bool
 
     @property
     def sqlalchemy_database_url(self) -> str:
@@ -53,22 +40,10 @@ class Settings:
 
     @property
     def embedding_provider_label(self) -> str:
-        if self.graphrag_local_embeddings:
-            return "local-fallback"
         if "127.0.0.1:11434" in self.embedding_base_url or "localhost:11434" in self.embedding_base_url:
             return "ollama"
         if "127.0.0.1:8090" in self.embedding_base_url or "localhost:8090" in self.embedding_base_url:
             return "tei-bge-m3"
-        return "remote-compatible-api"
-
-    @property
-    def graphrag_chat_provider_label(self) -> str:
-        if "127.0.0.1:11434" in self.graphrag_chat_base_url or "localhost:11434" in self.graphrag_chat_base_url:
-            return "ollama"
-        if "api.openai.com" in self.graphrag_chat_base_url:
-            return "openai"
-        if "api.deepseek.com" in self.graphrag_chat_base_url:
-            return "deepseek"
         return "remote-compatible-api"
 
 
@@ -77,14 +52,6 @@ def _normalize_base_url(url: str) -> str:
     if stripped.endswith("/v1"):
         return stripped
     return f"{stripped}/v1"
-
-
-def _normalize_index_method(method: str) -> str:
-    allowed = {"standard", "fast", "standard-update", "fast-update"}
-    normalized = method.strip().lower()
-    if normalized in allowed:
-        return normalized
-    raise RuntimeError(f"MVP/.env 中 GRAPH_MVP_GRAPHRAG_INDEX_METHOD 非法: {method}")
 
 
 def _is_ollama_base_url(url: str) -> bool:
@@ -166,15 +133,6 @@ def load_settings() -> Settings:
 
     openai_api_key = _require("OPENAI_API_KEY", dotenv_values)
     openai_base_url = _normalize_base_url(_require("OPENAI_BASE_URL", dotenv_values))
-    graphrag_chat_base_url = _normalize_base_url(
-        _resolve("GRAPHRAG_CHAT_BASE_URL", dotenv_values, openai_base_url) or openai_base_url
-    )
-    graphrag_chat_api_key = _resolve("GRAPHRAG_CHAT_API_KEY", dotenv_values, openai_api_key)
-    if _is_ollama_base_url(graphrag_chat_base_url):
-        graphrag_chat_api_key = graphrag_chat_api_key or "ollama"
-    graphrag_chat_model = _resolve("GRAPHRAG_CHAT_MODEL", dotenv_values, _require("GRAPH_MVP_UTILITY_MODEL", dotenv_values))
-    if graphrag_chat_model is None or not graphrag_chat_model.strip():
-        raise RuntimeError("MVP/.env 缺少必填配置: GRAPHRAG_CHAT_MODEL")
     embedding_model, embedding_api_key, embedding_base_url = _resolve_embedding_settings(
         dotenv_values,
         openai_api_key,
@@ -185,28 +143,12 @@ def load_settings() -> Settings:
         root_dir=root_dir,
         env_path=env_path,
         output_dir=root_dir / "output",
-        graphrag_root=root_dir / "workspace" / "graphrag_projects",
         llm_mode=_require("GRAPH_MVP_LLM_MODE", dotenv_values).strip().lower(),
         writer_model=_require("GRAPH_MVP_WRITER_MODEL", dotenv_values),
         utility_model=_require("GRAPH_MVP_UTILITY_MODEL", dotenv_values),
         embedding_model=embedding_model,
         openai_api_key=openai_api_key,
         openai_base_url=openai_base_url,
-        graphrag_chat_api_key=graphrag_chat_api_key,
-        graphrag_chat_base_url=graphrag_chat_base_url,
-        graphrag_chat_model=graphrag_chat_model.strip(),
-        graphrag_chat_request_timeout_seconds=_parse_positive_int(
-            _resolve("GRAPHRAG_CHAT_REQUEST_TIMEOUT_SECONDS", dotenv_values),
-            600,
-        ),
-        graphrag_chat_max_retries=_parse_positive_int(
-            _resolve("GRAPHRAG_CHAT_MAX_RETRIES", dotenv_values),
-            2,
-        ),
-        graphrag_concurrent_requests=_parse_positive_int(
-            _resolve("GRAPHRAG_CONCURRENT_REQUESTS", dotenv_values),
-            2,
-        ),
         openai_use_system_proxy=_parse_bool(_resolve("GRAPH_MVP_OPENAI_USE_SYSTEM_PROXY", dotenv_values), default=False),
         llm_use_responses=_parse_bool(_resolve("GRAPH_MVP_LLM_USE_RESPONSES", dotenv_values), default=True),
         llm_stream_responses=_parse_bool(_resolve("GRAPH_MVP_LLM_STREAM_RESPONSES", dotenv_values), default=True),
@@ -226,13 +168,6 @@ def load_settings() -> Settings:
         mysql_user=_require("MYSQL_USER", dotenv_values),
         mysql_password=_require("MYSQL_PASSWORD", dotenv_values),
         mysql_database=_require("MYSQL_DATABASE", dotenv_values),
-        neo4j_uri=_require("NEO4J_URI", dotenv_values),
-        neo4j_user=_require("NEO4J_USER", dotenv_values),
-        neo4j_password=_require("NEO4J_PASSWORD", dotenv_values),
-        neo4j_database=_require("NEO4J_DATABASE", dotenv_values),
         auth_secret=_require("AUTH_SECRET", dotenv_values),
         auth_exp_hours=int(_require("AUTH_EXP_HOURS", dotenv_values)),
-        graphrag_response_type=_require("GRAPH_MVP_GRAPHRAG_RESPONSE_TYPE", dotenv_values),
-        graphrag_index_method=_normalize_index_method(_require("GRAPH_MVP_GRAPHRAG_INDEX_METHOD", dotenv_values)),
-        graphrag_local_embeddings=_parse_bool(_require("GRAPH_MVP_LOCAL_EMBEDDINGS", dotenv_values), default=False),
     )

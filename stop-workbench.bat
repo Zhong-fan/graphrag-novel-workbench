@@ -3,11 +3,11 @@ setlocal EnableExtensions
 chcp 65001 >nul
 
 cd /d "%~dp0"
-title GraphRAG Novel Workbench Stopper
+title ChenFlow Workbench Stopper
 
 echo.
 echo ==========================================
-echo   GraphRAG Novel Workbench Stopper
+echo   ChenFlow Workbench Stopper
 echo ==========================================
 echo.
 
@@ -30,12 +30,12 @@ if not defined BACKEND_FOUND (
   echo [1/2] No running backend process was found.
 )
 
-echo [2/2] Stopping MySQL and Neo4j containers...
-docker compose stop mysql neo4j >nul 2>nul
+echo [2/2] Stopping MySQL container...
+docker compose stop mysql >nul 2>nul
 if errorlevel 1 (
-  echo       Docker services were not running or could not be stopped.
+  echo       MySQL was not running or could not be stopped.
 ) else (
-  echo       Docker services stopped.
+  echo       MySQL stopped.
 )
 
 echo.

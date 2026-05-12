@@ -198,10 +198,9 @@ def _build_generation_trace(
             "id": project_chapter.id,
             "chapter_no": project_chapter.chapter_no,
             "title": project_chapter.title,
-            "premise": project_chapter.premise,
         },
         "request": {
-            "prompt": payload.prompt,
+            "prompt_length": len(payload.prompt.strip()),
             "search_method": payload.search_method,
             "response_type": payload.response_type,
             "use_global_search": payload.use_global_search,
@@ -209,6 +208,10 @@ def _build_generation_trace(
             "use_refiner": payload.use_refiner,
             "write_evolution": payload.write_evolution,
         },
-        "context": {},
+        "context": {
+            "premise_length": len(project_chapter.premise.strip()),
+            "world_brief_length": len(project.world_brief.strip()),
+            "writing_rules_length": len(project.writing_rules.strip()),
+        },
         "steps": {},
     }

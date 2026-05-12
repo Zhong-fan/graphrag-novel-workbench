@@ -92,11 +92,6 @@ class Project(Base, TimestampMixin):
         back_populates="project",
         cascade="all, delete-orphan",
     )
-    graph_workspace: Mapped["GraphWorkspace"] = relationship(
-        back_populates="project",
-        cascade="all, delete-orphan",
-        uselist=False,
-    )
     generations: Mapped[list["GenerationRun"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
@@ -211,20 +206,6 @@ class SourceDocument(Base, TimestampMixin):
     source_kind: Mapped[str] = mapped_column(String(60), default="reference", nullable=False)
 
     project: Mapped["Project"] = relationship(back_populates="source_documents")
-
-
-class GraphWorkspace(Base, TimestampMixin):
-    __tablename__ = "graph_workspaces"
-    __table_args__ = (UniqueConstraint("project_id", name="uq_graph_workspaces_project"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
-    workspace_path: Mapped[str] = mapped_column(String(500), nullable=False)
-    neo4j_sync_status: Mapped[str] = mapped_column(String(40), default="idle", nullable=False)
-    last_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    last_indexed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-    project: Mapped["Project"] = relationship(back_populates="graph_workspace")
 
 
 class ProjectChapter(Base, TimestampMixin):
