@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 
 Push-Location (Split-Path -Parent $PSScriptRoot)
 try {
-    docker compose up -d mysql neo4j
+    docker compose up -d mysql
 
     Push-Location frontend
     try {

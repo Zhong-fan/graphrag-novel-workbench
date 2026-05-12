@@ -1,5 +1,10 @@
 # GraphRAG Refactor Plan
 
+> Historical note
+>
+> This document records an earlier refactor direction for a GraphRAG-first architecture.
+> The current workbench backend has since moved to a direct creator-workbench flow, so this file should be read as historical design context rather than the active implementation plan.
+
 ## Background
 
 Current GraphRAG behavior has three core problems:

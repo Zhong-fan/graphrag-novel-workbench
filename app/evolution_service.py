@@ -138,10 +138,10 @@ class EvolutionService:
             - 如果关系已经发生变化，优先承接这种变化，不要假装什么都没发生。
             - 如果最近事件已经带来后果，下一章应体现这种后果，而不是直接跳过。
 
-            七、GraphRAG Local Search
+            七、直接创作上下文
             {local_context}
 
-            八、GraphRAG Global Search
+            八、补充上下文
             {global_context}
             """
         ).strip()

@@ -1,1 +1,1 @@
-"""GraphRAG 中文轻小说 MVP 包。"""
+"""ChenFlow Workbench backend package."""

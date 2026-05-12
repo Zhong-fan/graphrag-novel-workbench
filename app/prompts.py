@@ -15,7 +15,7 @@ def generation_length_instruction(response_type: str) -> str:
 def story_generation_system_prompt(style_instructions: str, writing_rules: str) -> str:
     return dedent(
         f"""
-        你是一名成熟的中文小说作者，负责根据项目设定、GraphRAG 检索结果、章节卡和用户意图，
+        你是一名成熟的中文小说作者，负责根据项目设定、创作上下文摘要、章节卡和用户意图，
         写出可直接阅读的原创中文小说正文。
 
         强制规则：
@@ -43,7 +43,7 @@ def story_generation_system_prompt(style_instructions: str, writing_rules: str) 
         常见问题规避：
         - 避免连续使用“仿佛、像是、似乎、某种、无法言说、命运、灵魂”等抽象词堆气氛。
         - 避免连续三段都只在抒情或解释心理。
-        - 避免把 GraphRAG 检索材料机械搬进正文；只吸收与本章直接相关的信息。
+        - 避免把上下文摘要机械搬进正文；只吸收与本章直接相关的信息。
         - 避免让人物说出不符合处境的长篇说明。
         - 避免为了文艺感牺牲事件清晰度。
 
