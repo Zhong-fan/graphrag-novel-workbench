@@ -13,7 +13,6 @@ const props = defineProps<{
   form: ProjectPayload;
   genreOptions: string[];
   styleProfileOptions: Array<{ value: string; label: string; description: string; bullets?: string[] }>;
-  customGenreDraft: string;
   assistantLoadingKind?: "world_brief" | "writing_rules" | null;
   assistantSeedWorld: string;
   assistantSeedWriting: string;
@@ -38,8 +37,6 @@ const emit = defineEmits<{
   (e: "update:worldBrief", value: string): void;
   (e: "update:writingRules", value: string): void;
   (e: "update:styleProfile", value: string): void;
-  (e: "update:customGenreDraft", value: string): void;
-  (e: "applyCustomGenre"): void;
   (e: "update:assistantSeedWorld", value: string): void;
   (e: "update:assistantSeedWriting", value: string): void;
   (e: "reResolveReferenceWork"): void;
@@ -107,7 +104,6 @@ function formatDateTime(value: string | null | undefined) {
         :form="form"
         :genre-options="genreOptions"
         :style-profile-options="styleProfileOptions"
-        :custom-genre-draft="customGenreDraft"
         :assistant-loading-kind="assistantLoadingKind"
         :assistant-seed-world="assistantSeedWorld"
         :assistant-seed-writing="assistantSeedWriting"
@@ -117,8 +113,6 @@ function formatDateTime(value: string | null | undefined) {
         @update:title="emit('update:title', $event)"
         @update:genre="emit('update:genre', $event)"
         @update:reference-work="emit('update:referenceWork', $event)"
-        @update:custom-genre-draft="emit('update:customGenreDraft', $event)"
-        @apply-custom-genre="emit('applyCustomGenre')"
         @update:world-brief="emit('update:worldBrief', $event)"
         @update:writing-rules="emit('update:writingRules', $event)"
         @update:style-profile="emit('update:styleProfile', $event)"

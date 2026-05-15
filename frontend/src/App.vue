@@ -3,7 +3,6 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 
 import AuthModal from "./components/auth/AuthModal.vue";
-import ProfileSettingsPanel from "./components/workspace/ProfileSettingsPanel.vue";
 import NovelEditorPanel from "./components/workspace/NovelEditorPanel.vue";
 import GenerationTracePanel from "./components/workspace/GenerationTracePanel.vue";
 import ProjectCreateWizard from "./components/workspace/ProjectCreateWizard.vue";
@@ -19,7 +18,6 @@ const {
   captcha,
   currentUser,
   projects,
-  projectFolders,
   trashItems,
   myNovels,
   currentNovel,
@@ -35,12 +33,8 @@ const {
 const currentView = ref<ViewKey>("studio");
 const authError = ref("");
 const workspaceSearch = ref("");
-const showCreateFolder = ref(false);
 const showPublishPanel = ref(false);
 const showAppendPanel = ref(false);
-const folderForm = reactive({ name: "" });
-const movingProjectId = ref<number | null>(null);
-const selectedWorkspaceFolderId = ref<number | null>(null);
 const workspacePage = ref(1);
 const workspacePageSize = ref(6);
 const hasRestoredViewState = ref(false);
@@ -58,7 +52,6 @@ const restorableViews: ViewKey[] = [
   "projectSettings",
   "characters",
   "workshop",
-  "profile",
 ];
 
 type GenreOptionCard = {
@@ -207,8 +200,6 @@ const emptyProjectDraft = (): ProjectCreateDraft => ({
 const projectForm = reactive<ProjectCreateDraft>(emptyProjectDraft());
 const projectSettingsForm = reactive<ProjectPayload>(emptyProject());
 const projectCreateStep = ref<1 | 2 | 3>(1);
-const customGenreDraft = ref("");
-const customSettingsGenreDraft = ref("");
 const referenceWorkInput = ref("");
 const referenceWorkResolved = ref<ReferenceWorkResolved | null>(null);
 const assistantLoadingKind = ref<"world_brief" | "writing_rules" | "reference_work" | null>(null);
@@ -239,11 +230,6 @@ const generationForm = reactive({
   use_refiner: true,
   write_evolution: true,
 });
-const profileForm = reactive({
-  bio: "",
-  email: "",
-  phone: "",
-});
 
 const publishForm = reactive({
   title: "",
@@ -270,19 +256,10 @@ const selectedProjectChapterId = ref<number | null>(null);
 const workshopMode = ref<"chapters" | "drafts">("chapters");
 
 const hasProject = computed(() => Boolean(activeProject.value));
-const sortedFolders = computed(() =>
-  [...projectFolders.value].sort((a, b) => a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at)),
-);
-const selectedWorkspaceFolder = computed(() => {
-  if (!sortedFolders.value.length) return null;
-  return sortedFolders.value.find((item) => item.id === selectedWorkspaceFolderId.value) ?? sortedFolders.value[0] ?? null;
-});
 const filteredWorkspaceProjects = computed(() => {
-  const folderId = selectedWorkspaceFolder.value?.id ?? null;
   const keyword = workspaceSearch.value.trim().toLowerCase();
-  const source = projects.value.filter((project) => (folderId ? project.folder_id === folderId : true));
-  if (!keyword) return source;
-  return source.filter((project) =>
+  if (!keyword) return projects.value;
+  return projects.value.filter((project) =>
     [project.title, project.genre, project.world_brief, project.writing_rules].join(" ").toLowerCase().includes(keyword),
   );
 });
@@ -367,7 +344,7 @@ function goToView(view: ViewKey) {
     openAuthPanel("register", view);
     return;
   }
-  if (view !== "auth" && !isAuthenticated.value && ["studio", "trash", "projectSettings", "characters", "workshop", "generationTrace", "novelEditor", "profile"].includes(view)) {
+  if (view !== "auth" && !isAuthenticated.value && ["studio", "trash", "projectSettings", "characters", "workshop", "generationTrace", "novelEditor"].includes(view)) {
     openAuthPanel("login", view);
     return;
   }
@@ -471,16 +448,6 @@ function syncProjectSettingsForm() {
   projectSettingsForm.world_brief = project.world_brief;
   projectSettingsForm.writing_rules = project.writing_rules;
   projectSettingsForm.style_profile = project.style_profile;
-  customSettingsGenreDraft.value = genreOptions.includes(project.genre) ? "" : project.genre;
-}
-
-function applyCustomGenre(target: ProjectPayload, draft: string) {
-  const value = draft.trim();
-  if (!value) {
-    authError.value = "请输入自定义题材名称。";
-    return;
-  }
-  target.genre = value;
 }
 
 function appendOrReplaceField(target: ProjectPayload, key: "world_brief" | "writing_rules", text: string, mode: "replace" | "append") {
@@ -519,7 +486,6 @@ async function generateProjectSuggestion(kind: "world_brief" | "writing_rules", 
 
 function resetProjectAssistantState() {
   projectCreateStep.value = 1;
-  customGenreDraft.value = "";
   referenceWorkInput.value = "";
   referenceWorkResolved.value = null;
   projectForm.reference_work_confirmed = false;
@@ -732,32 +698,6 @@ async function openWorkshopMode(mode: "chapters" | "drafts") {
   currentView.value = "workshop";
 }
 
-function selectWorkspaceFolder(folderId: number | string) {
-  selectedWorkspaceFolderId.value = Number(folderId);
-  workspacePage.value = 1;
-}
-
-async function submitCreateFolder() {
-  const name = folderForm.name.trim();
-  if (!name) {
-    authError.value = "请输入文件夹名称。";
-    return;
-  }
-  authError.value = "";
-  const created = await store.createFolder(name);
-  if (created) {
-    folderForm.name = "";
-    showCreateFolder.value = false;
-    selectedWorkspaceFolderId.value = created.id;
-  }
-}
-
-async function assignProjectFolder(projectId: number, folderId: number | string) {
-  movingProjectId.value = projectId;
-  await store.moveProjectToFolder(projectId, Number(folderId));
-  movingProjectId.value = null;
-}
-
 function previousWorkspacePage() {
   workspacePage.value = Math.max(1, workspacePage.value - 1);
 }
@@ -964,10 +904,6 @@ async function submitUpdateChapter() {
   selectedChapterId.value = chapterId;
 }
 
-async function submitProfile() {
-  await store.saveProfile(profileForm);
-}
-
 onMounted(() => {
   void (async () => {
     await store.initialize();
@@ -1006,16 +942,6 @@ watch(nextNovelChapterNo, (next) => {
 
 watch(currentView, (next) => {
   persistView(next);
-}, { immediate: true });
-
-watch(sortedFolders, (next) => {
-  if (!next.length) {
-    selectedWorkspaceFolderId.value = null;
-    return;
-  }
-  if (!selectedWorkspaceFolderId.value || !next.some((item) => item.id === selectedWorkspaceFolderId.value)) {
-    selectedWorkspaceFolderId.value = next[0].id;
-  }
 }, { immediate: true });
 
 watch(filteredWorkspaceProjects, () => {
@@ -1146,7 +1072,6 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               :form="projectSettingsForm"
               :genre-options="genreOptions"
               :style-profile-options="styleProfileOptions"
-              :custom-genre-draft="customSettingsGenreDraft"
               :assistant-loading-kind="assistantLoadingKind === 'reference_work' ? null : assistantLoadingKind"
               :assistant-seed-world="assistantSeedWorld"
               :assistant-seed-writing="assistantSeedWriting"
@@ -1169,8 +1094,6 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               @update:world-brief="projectSettingsForm.world_brief = $event"
               @update:writing-rules="projectSettingsForm.writing_rules = $event"
               @update:style-profile="projectSettingsForm.style_profile = $event"
-              @update:custom-genre-draft="customSettingsGenreDraft = $event"
-              @apply-custom-genre="applyCustomGenre(projectSettingsForm, customSettingsGenreDraft)"
               @update:assistant-seed-world="assistantSeedWorld = $event"
               @update:assistant-seed-writing="assistantSeedWriting = $event"
               @generate-suggestion="generateProjectSuggestion($event, projectSettingsForm)"
@@ -1346,7 +1269,6 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
             <button class="sidebar-nav__item sidebar-nav__item--main" :class="{ 'sidebar-nav__item--active': currentView === 'studio' }" @click="goToView('studio')">我的项目</button>
             <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'projectCreate' }" @click="openProjectCreate()">新建项目</button>
             <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'trash' }" @click="goToView('trash')">回收站</button>
-            <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'profile' }" @click="goToView('profile')">个人资料</button>
           </nav>
           <div class="sidebar__footer">
             <template v-if="isAuthenticated">
@@ -1368,30 +1290,18 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
         <main class="main-shell">
           <template v-if="currentView === 'studio'">
             <StudioWorkspacePanel
-              :selected-folder-name="selectedWorkspaceFolder?.name ?? '默认文件夹'"
               :workspace-search="workspaceSearch"
-              :folders="sortedFolders"
-              :selected-folder-id="selectedWorkspaceFolder?.id ?? null"
               :projects="pagedWorkspaceProjects"
-              :moving-project-id="movingProjectId"
               :workspace-page="workspacePage"
               :workspace-page-size="workspacePageSize"
               :workspace-total-pages="workspaceTotalPages"
               :loading="loading"
-              :show-create-folder="showCreateFolder"
-              :folder-name="folderForm.name"
               @update:workspace-search="workspaceSearch = $event"
-              @select-folder="selectWorkspaceFolder"
               @open-project-create="openProjectCreate()"
-              @toggle-create-folder="showCreateFolder = !showCreateFolder"
               @open-project="openWorkshop"
-              @move-project-folder="assignProjectFolder"
               @delete-project="deleteProjectToTrash"
               @previous-page="previousWorkspacePage()"
               @next-page="nextWorkspacePage()"
-              @update:folder-name="folderForm.name = $event"
-              @submit-create-folder="submitCreateFolder()"
-              @cancel-create-folder="showCreateFolder = false"
             />
           </template>
 
@@ -1418,18 +1328,6 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
             </section>
           </template>
 
-          <template v-else-if="currentView === 'profile'">
-            <ProfileSettingsPanel
-              v-if="isAuthenticated"
-              v-model:bio="profileForm.bio"
-              v-model:email="profileForm.email"
-              v-model:phone="profileForm.phone"
-              :username="currentUser?.username"
-              :loading="loading"
-              @submit="submitProfile()"
-            />
-          </template>
-
           <template v-else-if="currentView === 'projectCreate'">
             <main v-if="isAuthenticated" class="workspace workspace--single">
               <section class="panel panel--paper">
@@ -1444,10 +1342,8 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
                   :loading="loading"
                   :step="projectCreateStep"
                   :form="projectForm"
-                  :genre-options="genreOptions"
                   :genre-option-cards="genreOptionCards"
                   :style-profile-options="styleProfileOptions"
-                  :custom-genre-draft="customGenreDraft"
                   :reference-work-input="referenceWorkInput"
                   :reference-work-resolved="referenceWorkResolved"
                   :reference-work-confirmed="projectForm.reference_work_confirmed"
@@ -1461,8 +1357,6 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
                   @submit-quick="submitCreateProject()"
                   @update:title="projectForm.title = $event"
                   @update:genre="projectForm.genre = $event"
-                  @update:custom-genre-draft="customGenreDraft = $event"
-                  @apply-custom-genre="applyCustomGenre(projectForm, customGenreDraft)"
                   @update:reference-work-input="referenceWorkInput = $event"
                   @resolve-reference-work="resolveReferenceWork()"
                   @confirm-reference-work="confirmReferenceWork()"

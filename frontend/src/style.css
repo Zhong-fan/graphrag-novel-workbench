@@ -1863,7 +1863,6 @@ button {
 
   .workspace,
   .content-grid,
-  .content-grid--profile,
   .library-grid {
     grid-template-columns: 1fr;
   }

@@ -22,15 +22,11 @@ import type {
   ProjectSuggestionResponse,
   SourceItem,
   User,
-  UserProfile,
   AppendNovelChapterPayload,
-  CreateFolderPayload,
   DeletePayload,
   UpdateNovelChapterPayload,
   UpdateProjectChapterPayload,
-  MoveProjectFolderPayload,
   MyWorkspaceResponse,
-  ProjectFolder,
   RestoreTrashPayload,
 } from "./types";
 
@@ -141,13 +137,7 @@ export const api = {
   login: (payload: { username: string; password: string }) =>
     request<AuthResponse>("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
   me: (token: string) => request<User>("/api/auth/me", { token }),
-  myProfile: (token: string) => request<UserProfile>("/api/me/profile", { token }),
-  updateMyProfile: (token: string, payload: UserProfile) =>
-    request<UserProfile>("/api/me/profile", { method: "PUT", token, body: JSON.stringify(payload) }),
-  listProjects: (token: string) => request<Project[]>("/api/projects", { token }),
   myWorkspace: (token: string) => request<MyWorkspaceResponse>("/api/me/workspace", { token }),
-  createFolder: (token: string, payload: CreateFolderPayload) =>
-    request<ProjectFolder>("/api/me/folders", { method: "POST", token, body: JSON.stringify(payload) }),
   createProject: (token: string, payload: ProjectPayload) =>
     request<Project>("/api/projects", { method: "POST", token, body: JSON.stringify(payload) }),
   resolveReferenceWork: (token: string, payload: ReferenceWorkResolveRequest) =>
@@ -164,8 +154,6 @@ export const api = {
     }),
   updateProject: (token: string, projectId: number, payload: ProjectPayload) =>
     request<Project>(`/api/projects/${projectId}`, { method: "PUT", token, body: JSON.stringify(payload) }),
-  moveProjectToFolder: (token: string, projectId: number, payload: MoveProjectFolderPayload) =>
-    request<Project>(`/api/projects/${projectId}/folder`, { method: "PUT", token, body: JSON.stringify(payload) }),
   deleteProject: (token: string, projectId: number, payload: DeletePayload) =>
     request<Project>(`/api/projects/${projectId}`, { method: "DELETE", token, body: JSON.stringify(payload) }),
   projectDetail: (token: string, projectId: number) =>

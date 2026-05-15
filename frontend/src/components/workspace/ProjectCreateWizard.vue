@@ -10,10 +10,8 @@ const props = defineProps<{
   loading: boolean;
   step: WizardStep;
   form: ProjectPayload;
-  genreOptions: string[];
   genreOptionCards: GenreOptionCard[];
   styleProfileOptions: StyleProfileOption[];
-  customGenreDraft: string;
   referenceWorkInput: string;
   referenceWorkResolved: ReferenceWorkResolved | null;
   referenceWorkConfirmed: boolean;
@@ -30,8 +28,6 @@ const emit = defineEmits<{
   (e: "submitQuick"): void;
   (e: "update:title", value: string): void;
   (e: "update:genre", value: string): void;
-  (e: "update:customGenreDraft", value: string): void;
-  (e: "applyCustomGenre"): void;
   (e: "update:referenceWorkInput", value: string): void;
   (e: "resolveReferenceWork"): void;
   (e: "confirmReferenceWork"): void;
@@ -95,8 +91,12 @@ function previousStep() {
             </button>
           </div>
           <div class="inline-row inline-row--tight">
-            <input :value="customGenreDraft" maxlength="100" placeholder="自定义题材" @input="emit('update:customGenreDraft', ($event.target as HTMLInputElement).value)" />
-            <button class="ghost-button ghost-button--small" type="button" @click="emit('applyCustomGenre')">应用</button>
+            <input
+              :value="genreOptionCards.some((item) => item.value === form.genre) ? '' : form.genre"
+              maxlength="100"
+              placeholder="自定义题材"
+              @input="emit('update:genre', ($event.target as HTMLInputElement).value)"
+            />
           </div>
         </label>
 

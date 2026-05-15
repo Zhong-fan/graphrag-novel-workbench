@@ -7,7 +7,6 @@ export type ViewKey =
   | "workshop"
   | "generationTrace"
   | "novelEditor"
-  | "profile"
   | "auth";
 
 export interface BootstrapResponse {
@@ -347,14 +346,6 @@ export interface UpdateNovelPayload {
   visibility: "public" | "private";
 }
 
-export interface CreateFolderPayload {
-  name: string;
-}
-
-export interface MoveProjectFolderPayload {
-  folder_id?: number | null;
-}
-
 export interface DeletePayload {
   hard_delete?: boolean;
 }
@@ -378,10 +369,4 @@ export interface UpdateNovelChapterPayload {
   summary: string;
   content: string;
   chapter_no: number;
-}
-
-export interface UserProfile {
-  bio: string;
-  email?: string | null;
-  phone?: string | null;
 }

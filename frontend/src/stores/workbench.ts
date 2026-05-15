@@ -1,4 +1,4 @@
-import { computed, ref } from "vue";
+﻿import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 
 import { api } from "../api";
@@ -10,7 +10,6 @@ import type {
   GenerationProgress,
   NovelCard,
   ProjectChapterPayload,
-  ProjectFolder,
   NovelDetail,
   PublishNovelPayload,
   Project,
@@ -26,7 +25,6 @@ import type {
   UpdateProjectChapterPayload,
   UpdateNovelChapterPayload,
   User,
-  UserProfile,
 } from "../types";
 
 type SelectProjectOptions = {
@@ -42,10 +40,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
   const token = ref<string | null>(localStorage.getItem(tokenKey));
   const currentUser = ref<User | null>(null);
   const projects = ref<Project[]>([]);
-  const projectFolders = ref<ProjectFolder[]>([]);
   const trashItems = ref<TrashItem[]>([]);
   const myNovels = ref<NovelCard[]>([]);
-  const profile = ref<UserProfile | null>(null);
   const currentNovel = ref<NovelDetail | null>(null);
   const activeProject = ref<ProjectDetailResponse | null>(null);
   const currentGeneration = ref<GenerationItem | null>(null);
@@ -109,7 +105,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     if (token.value) {
       try {
         currentUser.value = await api.me(token.value);
-        profile.value = await api.myProfile(token.value);
         await loadProjects();
         await loadMyNovels();
       } catch {
@@ -133,7 +128,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       const response = await api.register(payload);
       setToken(response.token);
       currentUser.value = response.user;
-      profile.value = await api.myProfile(response.token);
       await refreshWorkspace();
       await loadMyNovels();
       success.value = "账号已创建并自动登录。";
@@ -154,7 +148,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       const response = await api.login(payload);
       setToken(response.token);
       currentUser.value = response.user;
-      profile.value = await api.myProfile(response.token);
       await loadProjects();
       await loadMyNovels();
       success.value = "登录成功。";
@@ -170,7 +163,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     currentUser.value = null;
     projects.value = [];
     myNovels.value = [];
-    profile.value = null;
     currentNovel.value = null;
     activeProject.value = null;
     currentGeneration.value = null;
@@ -185,25 +177,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       return;
     }
     myNovels.value = await api.listMyNovels(token.value);
-  }
-
-  async function saveProfile(payload: UserProfile) {
-    if (!token.value) {
-      error.value = "请先登录。";
-      return;
-    }
-
-    loading.value = true;
-    error.value = "";
-    success.value = "";
-    try {
-      profile.value = await api.updateMyProfile(token.value, payload);
-      success.value = "个人资料已保存。";
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : "保存个人资料失败。";
-    } finally {
-      loading.value = false;
-    }
   }
 
   async function openNovel(novelId: number) {
@@ -225,7 +198,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
     const workspace = await api.myWorkspace(token.value);
     projects.value = workspace.projects;
-    projectFolders.value = workspace.folders;
     trashItems.value = workspace.trash;
     if (projects.value.length > 0 && !activeProject.value) {
       await selectProject(projects.value[0].id);
@@ -238,7 +210,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
     const workspace = await api.myWorkspace(token.value);
     projects.value = workspace.projects;
-    projectFolders.value = workspace.folders;
     trashItems.value = workspace.trash;
   }
 
@@ -631,46 +602,6 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
-  async function createFolder(name: string) {
-    if (!token.value) {
-      return null;
-    }
-    loading.value = true;
-    error.value = "";
-    success.value = "";
-    try {
-      const folder = await api.createFolder(token.value, { name: name.trim() });
-      await refreshWorkspace();
-      success.value = "文件夹已创建。";
-      return folder;
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : "创建文件夹失败。";
-      return null;
-    } finally {
-      loading.value = false;
-    }
-  }
-
-  async function moveProjectToFolder(projectId: number, folderId?: number | null) {
-    if (!token.value) {
-      return null;
-    }
-    loading.value = true;
-    error.value = "";
-    success.value = "";
-    try {
-      const project = await api.moveProjectToFolder(token.value, projectId, { folder_id: folderId ?? null });
-      await refreshWorkspace();
-      success.value = "项目已移动。";
-      return project;
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : "移动项目失败。";
-      return null;
-    } finally {
-      loading.value = false;
-    }
-  }
-
   async function deleteProject(projectId: number) {
     if (!token.value) {
       return null;
@@ -793,10 +724,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     token,
     currentUser,
     projects,
-    projectFolders,
     trashItems,
     myNovels,
-    profile,
     currentNovel,
     activeProject,
     currentGeneration,
@@ -811,13 +740,10 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     login,
     logout,
     loadMyNovels,
-    saveProfile,
     openNovel,
     selectProject,
     refreshWorkspace,
     createProject,
-    createFolder,
-    moveProjectToFolder,
     deleteProject,
     deleteNovel,
     deleteCharacterCard,
@@ -841,3 +767,4 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     updateNovelChapter,
   };
 });
+

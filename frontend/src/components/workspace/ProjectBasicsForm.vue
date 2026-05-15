@@ -10,7 +10,6 @@ const props = defineProps<{
   form: ProjectPayload;
   genreOptions: string[];
   styleProfileOptions: StyleProfileOption[];
-  customGenreDraft: string;
   assistantLoadingKind?: SuggestionKind | null;
   assistantSeedWorld: string;
   assistantSeedWriting: string;
@@ -23,8 +22,6 @@ const emit = defineEmits<{
   (e: "update:title", value: string): void;
   (e: "update:genre", value: string): void;
   (e: "update:referenceWork", value: string): void;
-  (e: "update:customGenreDraft", value: string): void;
-  (e: "applyCustomGenre"): void;
   (e: "update:worldBrief", value: string): void;
   (e: "update:writingRules", value: string): void;
   (e: "update:styleProfile", value: string): void;
@@ -73,12 +70,11 @@ function isPresetGenre(value: string) {
       <small class="field-hint">默认从常用题材里选一个。只有不合适时再自定义，不再同时摆一个重复下拉框。</small>
       <div class="inline-row inline-row--tight">
         <input
-          :value="customGenreDraft"
+          :value="isPresetGenre(form.genre) ? '' : form.genre"
           maxlength="100"
           placeholder="自定义题材，例如：沿海城市成长 / 校园悬疑 / 通勤科幻日常"
-          @input="emit('update:customGenreDraft', ($event.target as HTMLInputElement).value)"
+          @input="emit('update:genre', ($event.target as HTMLInputElement).value)"
         />
-        <button class="ghost-button ghost-button--small" type="button" @click="emit('applyCustomGenre')">应用</button>
       </div>
       <small class="field-hint">
         当前题材：{{ form.genre }}
