@@ -25,6 +25,19 @@ import type {
   UpdateProjectChapterPayload,
   UpdateNovelChapterPayload,
   User,
+  BatchGenerationPayload,
+  CreateStoryboardPayload,
+  GenerateSeriesPlanPayload,
+  LongformState,
+  SubmitOutlineFeedbackPayload,
+  CanonicalizeDraftPayload,
+  ReviseDraftPayload,
+  UpdateChapterOutlinePayload,
+  UpdateMediaAssetPayload,
+  UpdateStoryboardShotPayload,
+  CreateStoryboardShotPayload,
+  ReorderStoryboardShotsPayload,
+  UpdateVideoTaskPayload,
 } from "../types";
 
 type SelectProjectOptions = {
@@ -45,6 +58,14 @@ export const useWorkbenchStore = defineStore("workbench", () => {
   const currentNovel = ref<NovelDetail | null>(null);
   const activeProject = ref<ProjectDetailResponse | null>(null);
   const currentGeneration = ref<GenerationItem | null>(null);
+  const longformState = ref<LongformState>({
+    series_plans: [],
+    draft_versions: [],
+    batch_jobs: [],
+    storyboards: [],
+    media_assets: [],
+    video_tasks: [],
+  });
   const generationProgress = ref<GenerationProgress>({
     stage: "idle",
     message: "",
@@ -239,6 +260,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       } else {
         currentGeneration.value = detail.generations[0] ?? null;
       }
+      await loadLongformState(projectId, { silent: true });
     } catch (err) {
       if (!silent) {
         error.value = err instanceof Error ? err.message : "加载项目失败。";
@@ -718,6 +740,328 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
+  async function loadLongformState(projectId?: number, options: { silent?: boolean } = {}) {
+    if (!token.value) return;
+    const targetProjectId = projectId ?? activeProject.value?.project.id;
+    if (!targetProjectId) return;
+    try {
+      longformState.value = await api.longformState(token.value, targetProjectId);
+    } catch (err) {
+      if (!options.silent) {
+        error.value = err instanceof Error ? err.message : "加载长篇流水线失败。";
+      }
+    }
+  }
+
+  async function generateSeriesPlan(payload: GenerateSeriesPlanPayload) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const plan = await api.generateSeriesPlan(token.value, activeProject.value.project.id, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "长篇概要已生成。";
+      return plan;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "生成长篇概要失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function submitOutlineFeedback(payload: SubmitOutlineFeedbackPayload) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const result = await api.submitOutlineFeedback(token.value, activeProject.value.project.id, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "概要已按反馈生成新版本。";
+      return result;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "修订概要失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function lockSeriesPlan(seriesPlanId: number) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const plan = await api.lockSeriesPlan(token.value, activeProject.value.project.id, seriesPlanId);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "概要已锁定。";
+      return plan;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "锁定概要失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function restoreSeriesPlanVersion(seriesPlanId: number, versionId: number) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const plan = await api.restoreSeriesPlanVersion(token.value, activeProject.value.project.id, seriesPlanId, versionId);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "概要版本已恢复为新版本。";
+      return plan;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "恢复概要版本失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function runBatchGeneration(payload: BatchGenerationPayload) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const job = await api.runBatchGeneration(token.value, activeProject.value.project.id, payload);
+      await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "批量正文生成完成。";
+      return job;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "批量正文生成失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function retryBatchGeneration(jobId: number) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const job = await api.retryBatchGeneration(token.value, activeProject.value.project.id, jobId);
+      await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "批量任务已重试。";
+      return job;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "重试批量任务失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function createStoryboard(payload: CreateStoryboardPayload) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const storyboard = await api.createStoryboard(token.value, activeProject.value.project.id, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "分镜短片方案已生成。";
+      return storyboard;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "生成分镜失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function reviseDraftVersion(draftVersionId: number, payload: ReviseDraftPayload) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const draft = await api.reviseDraftVersion(token.value, activeProject.value.project.id, draftVersionId, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "章节已生成新版本。";
+      return draft;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "章节重写失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function canonicalizeDraftVersion(draftVersionId: number, payload: CanonicalizeDraftPayload) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const draft = await api.canonicalizeDraftVersion(token.value, activeProject.value.project.id, draftVersionId, payload);
+      await loadLongformState(activeProject.value.project.id);
+      await loadMyNovels();
+      success.value = "章节已定稿。";
+      return draft;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "章节定稿失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function createVideoTask(storyboardId: number) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const task = await api.createVideoTask(token.value, activeProject.value.project.id, storyboardId);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "视频导出任务已创建。";
+      return task;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "创建视频任务失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function updateChapterOutline(outlineId: number, payload: UpdateChapterOutlinePayload) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const outline = await api.updateChapterOutline(token.value, activeProject.value.project.id, outlineId, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "章节概要已保存。";
+      return outline;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "保存章节概要失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function updateStoryboardShot(storyboardId: number, shotId: number, payload: UpdateStoryboardShotPayload) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const storyboard = await api.updateStoryboardShot(token.value, activeProject.value.project.id, storyboardId, shotId, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "镜头已保存。";
+      return storyboard;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "保存镜头失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function createStoryboardShot(storyboardId: number, payload: CreateStoryboardShotPayload) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const storyboard = await api.createStoryboardShot(token.value, activeProject.value.project.id, storyboardId, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "镜头已新增。";
+      return storyboard;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "新增镜头失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function deleteStoryboardShot(storyboardId: number, shotId: number) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const storyboard = await api.deleteStoryboardShot(token.value, activeProject.value.project.id, storyboardId, shotId);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "镜头已删除。";
+      return storyboard;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "删除镜头失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function reorderStoryboardShots(storyboardId: number, payload: ReorderStoryboardShotsPayload) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const storyboard = await api.reorderStoryboardShots(token.value, activeProject.value.project.id, storyboardId, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "镜头顺序已更新。";
+      return storyboard;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "更新镜头顺序失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function updateMediaAsset(assetId: number, payload: UpdateMediaAssetPayload) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const asset = await api.updateMediaAsset(token.value, activeProject.value.project.id, assetId, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "素材状态已保存。";
+      return asset;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "保存素材状态失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function updateVideoTask(taskId: number, payload: UpdateVideoTaskPayload) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const task = await api.updateVideoTask(token.value, activeProject.value.project.id, taskId, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "视频任务已更新。";
+      return task;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "更新视频任务失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
   return {
     bootstrap,
     captcha,
@@ -729,6 +1073,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     currentNovel,
     activeProject,
     currentGeneration,
+    longformState,
     generationProgress,
     loading,
     error,
@@ -749,6 +1094,24 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     deleteCharacterCard,
     restoreTrashItem,
     trashDirtyEvolution,
+    loadLongformState,
+    generateSeriesPlan,
+    submitOutlineFeedback,
+    lockSeriesPlan,
+    restoreSeriesPlanVersion,
+    runBatchGeneration,
+    retryBatchGeneration,
+    createStoryboard,
+    reviseDraftVersion,
+    canonicalizeDraftVersion,
+    createVideoTask,
+    updateChapterOutline,
+    updateStoryboardShot,
+    createStoryboardShot,
+    deleteStoryboardShot,
+    reorderStoryboardShots,
+    updateMediaAsset,
+    updateVideoTask,
     updateProject,
     resolveReferenceWork,
     suggestProjectBriefing,

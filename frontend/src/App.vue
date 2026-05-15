@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 
 import AuthModal from "./components/auth/AuthModal.vue";
+import LongformPipelinePanel from "./components/workspace/LongformPipelinePanel.vue";
 import NovelEditorPanel from "./components/workspace/NovelEditorPanel.vue";
 import GenerationTracePanel from "./components/workspace/GenerationTracePanel.vue";
 import ProjectCreateWizard from "./components/workspace/ProjectCreateWizard.vue";
@@ -23,6 +24,7 @@ const {
   currentNovel,
   activeProject,
   currentGeneration,
+  longformState,
   generationProgress,
   loading,
   error,
@@ -51,6 +53,7 @@ const restorableViews: ViewKey[] = [
   "projectCreate",
   "projectSettings",
   "characters",
+  "longform",
   "workshop",
 ];
 
@@ -344,7 +347,7 @@ function goToView(view: ViewKey) {
     openAuthPanel("register", view);
     return;
   }
-  if (view !== "auth" && !isAuthenticated.value && ["studio", "trash", "projectSettings", "characters", "workshop", "generationTrace", "novelEditor"].includes(view)) {
+  if (view !== "auth" && !isAuthenticated.value && ["studio", "trash", "projectSettings", "characters", "longform", "workshop", "generationTrace", "novelEditor"].includes(view)) {
     openAuthPanel("login", view);
     return;
   }
@@ -663,6 +666,14 @@ function openCharacters() {
   currentView.value = "characters";
 }
 
+async function openLongform() {
+  if (!isAuthenticated.value) return openAuthPanel("login");
+  if (activeProject.value?.project.id) {
+    await store.loadLongformState(activeProject.value.project.id);
+  }
+  currentView.value = "longform";
+}
+
 async function openNovelEditor(projectId?: number) {
   if (!isAuthenticated.value) return openAuthPanel("login");
   const targetProjectId = projectId ?? activeProject.value?.project.id ?? projects.value[0]?.id ?? null;
@@ -823,6 +834,146 @@ async function submitAutoGenerate() {
     write_evolution: generationForm.write_evolution,
   });
   if (!error.value) workshopMode.value = "drafts";
+}
+
+async function submitGenerateSeriesPlan(payload: { target_chapter_count: number; user_brief: string }) {
+  await store.generateSeriesPlan(payload);
+}
+
+async function submitOutlineFeedback(payload: {
+  target_type: "series" | "arc" | "chapter";
+  target_id: number;
+  feedback_text: string;
+  feedback_type: string;
+  priority: number;
+}) {
+  if (!payload.feedback_text.trim()) {
+    authError.value = "请先写下概要修改意见。";
+    return;
+  }
+  await store.submitOutlineFeedback(payload);
+}
+
+async function submitBatchGeneration(payload: { series_plan_id: number; start_chapter_no: number; end_chapter_no: number }) {
+  await store.runBatchGeneration(payload);
+  if (!error.value) workshopMode.value = "drafts";
+}
+
+async function submitRestorePlanVersion(payload: { seriesPlanId: number; versionId: number }) {
+  await store.restoreSeriesPlanVersion(payload.seriesPlanId, payload.versionId);
+}
+
+async function submitRetryBatch(jobId: number) {
+  await store.retryBatchGeneration(jobId);
+  if (!error.value) workshopMode.value = "drafts";
+}
+
+async function submitCreateStoryboard(payload: { novel_chapter_ids: number[]; title: string }) {
+  await store.createStoryboard(payload);
+}
+
+async function openNovelForLongform(novelId: number) {
+  if (!novelId) return;
+  await store.openNovel(novelId);
+}
+
+async function submitReviseDraft(payload: { draftVersionId: number; feedback_text: string }) {
+  await store.reviseDraftVersion(payload.draftVersionId, { feedback_text: payload.feedback_text });
+}
+
+async function submitCanonicalizeDraft(payload: {
+  draftVersionId: number;
+  novel_id?: number | null;
+  author_name: string;
+  visibility: "public" | "private";
+  tagline: string;
+}) {
+  await store.canonicalizeDraftVersion(payload.draftVersionId, {
+    novel_id: payload.novel_id ?? null,
+    author_name: payload.author_name || currentUser.value?.username || "匿名",
+    visibility: payload.visibility,
+    tagline: payload.tagline,
+  });
+}
+
+async function submitUpdateOutline(payload: { outlineId: number; title: string; outline: Record<string, unknown>; status: string }) {
+  await store.updateChapterOutline(payload.outlineId, {
+    title: payload.title,
+    outline: payload.outline,
+    status: payload.status,
+  });
+}
+
+async function submitUpdateShot(payload: {
+  storyboardId: number;
+  shotId: number;
+  narration_text: string;
+  visual_prompt: string;
+  character_refs: unknown[];
+  scene_refs: unknown[];
+  duration_seconds: number;
+  status: string;
+}) {
+  await store.updateStoryboardShot(payload.storyboardId, payload.shotId, {
+    narration_text: payload.narration_text,
+    visual_prompt: payload.visual_prompt,
+    character_refs: payload.character_refs,
+    scene_refs: payload.scene_refs,
+    duration_seconds: payload.duration_seconds,
+    status: payload.status,
+  });
+}
+
+async function submitUpdateAsset(payload: { assetId: number; uri: string; status: string; meta: Record<string, unknown> }) {
+  await store.updateMediaAsset(payload.assetId, {
+    uri: payload.uri,
+    status: payload.status,
+    meta: payload.meta,
+  });
+}
+
+async function submitCreateShot(payload: {
+  storyboardId: number;
+  shot_no?: number | null;
+  narration_text: string;
+  visual_prompt: string;
+  character_refs: unknown[];
+  scene_refs: unknown[];
+  duration_seconds: number;
+  status: string;
+}) {
+  await store.createStoryboardShot(payload.storyboardId, {
+    shot_no: payload.shot_no ?? null,
+    narration_text: payload.narration_text,
+    visual_prompt: payload.visual_prompt,
+    character_refs: payload.character_refs,
+    scene_refs: payload.scene_refs,
+    duration_seconds: payload.duration_seconds,
+    status: payload.status,
+  });
+}
+
+async function submitDeleteShot(payload: { storyboardId: number; shotId: number }) {
+  await store.deleteStoryboardShot(payload.storyboardId, payload.shotId);
+}
+
+async function submitReorderShots(payload: { storyboardId: number; shot_ids: number[] }) {
+  await store.reorderStoryboardShots(payload.storyboardId, { shot_ids: payload.shot_ids });
+}
+
+async function submitUpdateVideoTask(payload: {
+  taskId: number;
+  task_status: string;
+  output_uri: string;
+  progress: Record<string, unknown>;
+  error_message: string;
+}) {
+  await store.updateVideoTask(payload.taskId, {
+    task_status: payload.task_status,
+    output_uri: payload.output_uri,
+    progress: payload.progress,
+    error_message: payload.error_message,
+  });
 }
 
 async function submitPublishNovel() {
@@ -1039,7 +1190,7 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
       />
     </template>
 
-    <template v-else-if="['novelEditor', 'projectSettings', 'characters', 'workshop', 'generationTrace'].includes(currentView)">
+    <template v-else-if="['novelEditor', 'projectSettings', 'characters', 'longform', 'workshop', 'generationTrace'].includes(currentView)">
       <div class="editor-shell">
         <aside class="editor-sidebar panel panel--paper">
           <div class="brand brand--sidebar">
@@ -1052,6 +1203,7 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
           <nav class="sidebar-nav" aria-label="Editor">
             <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'projectSettings' }" @click="openProjectSettings()">项目设定</button>
             <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'characters' }" @click="openCharacters()">人物卡</button>
+            <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'longform' }" @click="openLongform()">长篇流水线</button>
             <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'workshop' && workshopMode === 'chapters' }" @click="openWorkshopMode('chapters')">新增章节</button>
             <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'workshop' && workshopMode === 'drafts' }" @click="openWorkshopMode('drafts')">草稿箱</button>
             <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'generationTrace' }" @click="currentView = 'generationTrace'">生成过程</button>
@@ -1187,6 +1339,35 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               @continue-draft="store.refreshGenerationEvolution($event)"
               @publish-draft="submitPublishNovel()"
               @append-draft="submitAppendChapter()"
+            />
+          </template>
+
+          <template v-else-if="currentView === 'longform'">
+            <LongformPipelinePanel
+              v-if="isAuthenticated && hasProject"
+              :project-title="activeProject?.project.title"
+              :loading="loading"
+              :state="longformState"
+              :managed-novels="managedNovels"
+              :current-novel="currentNovel"
+              @generate-plan="submitGenerateSeriesPlan"
+              @submit-feedback="submitOutlineFeedback"
+              @lock-plan="store.lockSeriesPlan"
+              @restore-plan-version="submitRestorePlanVersion"
+              @batch-generate="submitBatchGeneration"
+              @retry-batch="submitRetryBatch"
+              @open-novel="openNovelForLongform"
+              @create-storyboard="submitCreateStoryboard"
+              @revise-draft="submitReviseDraft"
+              @canonicalize-draft="submitCanonicalizeDraft"
+              @create-video-task="store.createVideoTask"
+              @update-outline="submitUpdateOutline"
+              @update-shot="submitUpdateShot"
+              @update-asset="submitUpdateAsset"
+              @create-shot="submitCreateShot"
+              @delete-shot="submitDeleteShot"
+              @reorder-shots="submitReorderShots"
+              @update-video-task="submitUpdateVideoTask"
             />
           </template>
 

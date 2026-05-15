@@ -145,6 +145,51 @@
   flex-wrap: wrap;
 }
 
+.workspace--longform {
+  display: grid;
+  gap: 22px;
+}
+
+.longform-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.longform-outline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.memory-card--select {
+  cursor: pointer;
+}
+
+.memory-card--button {
+  width: 100%;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.memory-card--select input {
+  width: 18px;
+  height: 18px;
+}
+
+.longform-edit-box {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.42);
+}
+
+.longform-version-list {
+  margin-top: 16px;
+}
+
 @media (max-width: 760px) {
   .shell--workspace {
     width: min(100vw - 16px, 100%);
@@ -192,6 +237,15 @@
   }
 
   .main-shell {
+    gap: 16px;
+  }
+
+  .longform-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .workspace--longform {
     gap: 16px;
   }
 }

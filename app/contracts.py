@@ -452,6 +452,256 @@ class UpdateNovelChapterRequest(BaseModel):
     chapter_no: int = Field(..., ge=1, le=10000)
 
 
+class GenerateSeriesPlanRequest(BaseModel):
+    target_chapter_count: int = Field(default=12, ge=3, le=80)
+    user_brief: str = Field(default="", max_length=4000)
+
+
+class SeriesPlanVersionOut(BaseModel):
+    id: int
+    series_plan_id: int
+    version_no: int
+    summary: dict[str, Any]
+    change_note: str
+    source_feedback_snapshot: str
+    created_by: str
+    created_at: datetime
+
+
+class ArcPlanOut(BaseModel):
+    id: int
+    series_plan_id: int
+    version_id: int
+    arc_no: int
+    start_chapter_no: int
+    end_chapter_no: int
+    title: str
+    goal: str
+    conflict: str
+    turning_points: list[Any]
+    status: str
+
+
+class ChapterOutlineOut(BaseModel):
+    id: int
+    project_id: int
+    series_plan_id: int
+    arc_plan_id: int | None = None
+    chapter_no: int
+    title: str
+    outline: dict[str, Any]
+    status: str
+    locked_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class UpdateChapterOutlineRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    outline: dict[str, Any]
+    status: str = Field(default="outline_draft", max_length=40)
+
+
+class DraftVersionOut(BaseModel):
+    id: int
+    project_id: int
+    chapter_outline_id: int
+    generation_run_id: int | None = None
+    parent_version_id: int | None = None
+    version_no: int
+    title: str
+    summary: str
+    content: str
+    status: str
+    revision_reason: str
+    created_at: datetime
+
+
+class ReviseDraftVersionRequest(BaseModel):
+    feedback_text: str = Field(..., min_length=2, max_length=8000)
+
+
+class CanonicalizeDraftVersionRequest(BaseModel):
+    novel_id: int | None = Field(default=None, ge=1)
+    author_name: str = Field(default="", max_length=100)
+    visibility: str = Field(default="private", pattern="^(public|private)$")
+    tagline: str = Field(default="", max_length=255)
+
+
+class SeriesPlanOut(BaseModel):
+    id: int
+    project_id: int
+    title: str
+    target_chapter_count: int
+    theme: str
+    main_conflict: str
+    ending_direction: str
+    status: str
+    current_version_id: int | None = None
+    created_at: datetime
+    updated_at: datetime
+    current_version: SeriesPlanVersionOut | None = None
+    versions: list[SeriesPlanVersionOut] = []
+    arcs: list[ArcPlanOut] = []
+    chapters: list[ChapterOutlineOut] = []
+
+
+class SeriesPlanningStateOut(BaseModel):
+    series_plans: list[SeriesPlanOut]
+    draft_versions: list[DraftVersionOut] = []
+    batch_jobs: list["BatchGenerationJobOut"] = []
+    storyboards: list["StoryboardOut"] = []
+    media_assets: list["MediaAssetOut"] = []
+    video_tasks: list["VideoTaskOut"] = []
+
+
+class SubmitOutlineFeedbackRequest(BaseModel):
+    target_type: str = Field(..., pattern="^(series|arc|chapter)$")
+    target_id: int = Field(..., ge=1)
+    feedback_text: str = Field(..., min_length=2, max_length=8000)
+    feedback_type: str = Field(default="general", max_length=60)
+    priority: int = Field(default=3, ge=1, le=5)
+
+
+class OutlineFeedbackItemOut(BaseModel):
+    id: int
+    project_id: int
+    target_type: str
+    target_id: int
+    feedback_text: str
+    feedback_type: str
+    priority: int
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class OutlineRevisionPlanOut(BaseModel):
+    id: int
+    feedback_item_id: int
+    target_type: str
+    target_id: int
+    plan: dict[str, Any]
+    applied: bool
+    created_at: datetime
+
+
+class OutlineRevisionResponse(BaseModel):
+    feedback: OutlineFeedbackItemOut
+    revision_plan: OutlineRevisionPlanOut
+    series_plan: SeriesPlanOut
+
+
+class LockChapterOutlinesRequest(BaseModel):
+    chapter_outline_ids: list[int] = Field(default_factory=list)
+
+
+class BatchGenerationRequest(BaseModel):
+    series_plan_id: int = Field(..., ge=1)
+    start_chapter_no: int = Field(..., ge=1, le=10000)
+    end_chapter_no: int = Field(..., ge=1, le=10000)
+
+
+class BatchGenerationJobOut(BaseModel):
+    id: int
+    project_id: int
+    series_plan_id: int
+    start_chapter_no: int
+    end_chapter_no: int
+    job_status: str
+    current_chapter_no: int | None = None
+    result_summary: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
+class CreateStoryboardRequest(BaseModel):
+    novel_chapter_ids: list[int] = Field(..., min_length=1, max_length=12)
+    title: str = Field(default="", max_length=255)
+
+
+class StoryboardShotOut(BaseModel):
+    id: int
+    storyboard_id: int
+    shot_no: int
+    narration_text: str
+    visual_prompt: str
+    character_refs: list[Any]
+    scene_refs: list[Any]
+    duration_seconds: float
+    status: str
+
+
+class StoryboardOut(BaseModel):
+    id: int
+    project_id: int
+    title: str
+    source_chapter_ids: list[Any]
+    status: str
+    summary: str
+    shots: list[StoryboardShotOut] = []
+    created_at: datetime
+    updated_at: datetime
+
+
+class UpdateStoryboardShotRequest(BaseModel):
+    narration_text: str = Field(default="", max_length=8000)
+    visual_prompt: str = Field(default="", max_length=8000)
+    character_refs: list[Any] = []
+    scene_refs: list[Any] = []
+    duration_seconds: float = Field(default=4, ge=0.5, le=60)
+    status: str = Field(default="draft", max_length=40)
+
+
+class CreateStoryboardShotRequest(UpdateStoryboardShotRequest):
+    shot_no: int | None = Field(default=None, ge=1, le=10000)
+
+
+class ReorderStoryboardShotsRequest(BaseModel):
+    shot_ids: list[int] = Field(..., min_length=1)
+
+
+class MediaAssetOut(BaseModel):
+    id: int
+    project_id: int
+    storyboard_id: int | None = None
+    shot_id: int | None = None
+    asset_type: str
+    uri: str
+    prompt: str
+    status: str
+    meta: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
+class UpdateMediaAssetRequest(BaseModel):
+    uri: str = Field(default="", max_length=500)
+    status: str = Field(default="pending", max_length=40)
+    meta: dict[str, Any] = {}
+
+
+class VideoTaskOut(BaseModel):
+    id: int
+    project_id: int
+    storyboard_id: int
+    task_status: str
+    output_uri: str
+    progress: dict[str, Any]
+    error_message: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class UpdateVideoTaskRequest(BaseModel):
+    task_status: str = Field(default="queued", max_length=40)
+    output_uri: str = Field(default="", max_length=500)
+    progress: dict[str, Any] = {}
+    error_message: str = Field(default="", max_length=8000)
+
+
 class DeleteProjectRequest(BaseModel):
     hard_delete: bool = False
 
@@ -472,3 +722,4 @@ class BootstrapResponse(BaseModel):
 
 
 AuthResponse.model_rebuild()
+SeriesPlanningStateOut.model_rebuild()

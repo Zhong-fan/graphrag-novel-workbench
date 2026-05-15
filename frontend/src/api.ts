@@ -28,6 +28,27 @@ import type {
   UpdateProjectChapterPayload,
   MyWorkspaceResponse,
   RestoreTrashPayload,
+  BatchGenerationJob,
+  BatchGenerationPayload,
+  CreateStoryboardPayload,
+  GenerateSeriesPlanPayload,
+  LongformState,
+  OutlineRevisionResponse,
+  SeriesPlan,
+  Storyboard,
+  SubmitOutlineFeedbackPayload,
+  CanonicalizeDraftPayload,
+  DraftVersion,
+  ReviseDraftPayload,
+  VideoTask,
+  ChapterOutline,
+  MediaAsset,
+  UpdateChapterOutlinePayload,
+  UpdateMediaAssetPayload,
+  UpdateStoryboardShotPayload,
+  CreateStoryboardShotPayload,
+  ReorderStoryboardShotsPayload,
+  UpdateVideoTaskPayload,
 } from "./types";
 
 type RequestOptions = RequestInit & {
@@ -230,5 +251,104 @@ export const api = {
     request<{ status: string; stats: Record<string, number> }>(`/api/projects/${projectId}/dirty-evolution/trash`, {
       method: "POST",
       token,
+    }),
+  longformState: (token: string, projectId: number) =>
+    request<LongformState>(`/api/projects/${projectId}/longform`, { token }),
+  generateSeriesPlan: (token: string, projectId: number, payload: GenerateSeriesPlanPayload) =>
+    request<SeriesPlan>(`/api/projects/${projectId}/series-plans/generate`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  submitOutlineFeedback: (token: string, projectId: number, payload: SubmitOutlineFeedbackPayload) =>
+    request<OutlineRevisionResponse>(`/api/projects/${projectId}/outline-feedback`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  lockSeriesPlan: (token: string, projectId: number, seriesPlanId: number) =>
+    request<SeriesPlan>(`/api/projects/${projectId}/series-plans/${seriesPlanId}/lock`, {
+      method: "POST",
+      token,
+    }),
+  restoreSeriesPlanVersion: (token: string, projectId: number, seriesPlanId: number, versionId: number) =>
+    request<SeriesPlan>(`/api/projects/${projectId}/series-plans/${seriesPlanId}/versions/${versionId}/restore`, {
+      method: "POST",
+      token,
+    }),
+  runBatchGeneration: (token: string, projectId: number, payload: BatchGenerationPayload) =>
+    request<BatchGenerationJob>(`/api/projects/${projectId}/batch-generation`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  retryBatchGeneration: (token: string, projectId: number, jobId: number) =>
+    request<BatchGenerationJob>(`/api/projects/${projectId}/batch-generation/${jobId}/retry`, {
+      method: "POST",
+      token,
+    }),
+  createStoryboard: (token: string, projectId: number, payload: CreateStoryboardPayload) =>
+    request<Storyboard>(`/api/projects/${projectId}/storyboards`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  reviseDraftVersion: (token: string, projectId: number, draftVersionId: number, payload: ReviseDraftPayload) =>
+    request<DraftVersion>(`/api/projects/${projectId}/draft-versions/${draftVersionId}/revise`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  canonicalizeDraftVersion: (token: string, projectId: number, draftVersionId: number, payload: CanonicalizeDraftPayload) =>
+    request<DraftVersion>(`/api/projects/${projectId}/draft-versions/${draftVersionId}/canonicalize`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  createVideoTask: (token: string, projectId: number, storyboardId: number) =>
+    request<VideoTask>(`/api/projects/${projectId}/storyboards/${storyboardId}/video-tasks`, {
+      method: "POST",
+      token,
+    }),
+  updateChapterOutline: (token: string, projectId: number, outlineId: number, payload: UpdateChapterOutlinePayload) =>
+    request<ChapterOutline>(`/api/projects/${projectId}/chapter-outlines/${outlineId}`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  updateStoryboardShot: (token: string, projectId: number, storyboardId: number, shotId: number, payload: UpdateStoryboardShotPayload) =>
+    request<Storyboard>(`/api/projects/${projectId}/storyboards/${storyboardId}/shots/${shotId}`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  createStoryboardShot: (token: string, projectId: number, storyboardId: number, payload: CreateStoryboardShotPayload) =>
+    request<Storyboard>(`/api/projects/${projectId}/storyboards/${storyboardId}/shots`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  deleteStoryboardShot: (token: string, projectId: number, storyboardId: number, shotId: number) =>
+    request<Storyboard>(`/api/projects/${projectId}/storyboards/${storyboardId}/shots/${shotId}`, {
+      method: "DELETE",
+      token,
+    }),
+  reorderStoryboardShots: (token: string, projectId: number, storyboardId: number, payload: ReorderStoryboardShotsPayload) =>
+    request<Storyboard>(`/api/projects/${projectId}/storyboards/${storyboardId}/shots/reorder`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  updateMediaAsset: (token: string, projectId: number, assetId: number, payload: UpdateMediaAssetPayload) =>
+    request<MediaAsset>(`/api/projects/${projectId}/media-assets/${assetId}`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  updateVideoTask: (token: string, projectId: number, taskId: number, payload: UpdateVideoTaskPayload) =>
+    request<VideoTask>(`/api/projects/${projectId}/video-tasks/${taskId}`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(payload),
     }),
 };

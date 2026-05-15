@@ -4,6 +4,7 @@ export type ViewKey =
   | "projectCreate"
   | "projectSettings"
   | "characters"
+  | "longform"
   | "workshop"
   | "generationTrace"
   | "novelEditor"
@@ -251,6 +252,227 @@ export interface ProjectDetailResponse {
   relationship_state_updates: RelationshipStateUpdate[];
   story_events: StoryEventItem[];
   world_perception_updates: WorldPerceptionUpdate[];
+}
+
+export interface SeriesPlanVersion {
+  id: number;
+  series_plan_id: number;
+  version_no: number;
+  summary: Record<string, unknown>;
+  change_note: string;
+  source_feedback_snapshot: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface ArcPlan {
+  id: number;
+  series_plan_id: number;
+  version_id: number;
+  arc_no: number;
+  start_chapter_no: number;
+  end_chapter_no: number;
+  title: string;
+  goal: string;
+  conflict: string;
+  turning_points: unknown[];
+  status: string;
+}
+
+export interface ChapterOutline {
+  id: number;
+  project_id: number;
+  series_plan_id: number;
+  arc_plan_id?: number | null;
+  chapter_no: number;
+  title: string;
+  outline: Record<string, unknown>;
+  status: string;
+  locked_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DraftVersion {
+  id: number;
+  project_id: number;
+  chapter_outline_id: number;
+  generation_run_id?: number | null;
+  parent_version_id?: number | null;
+  version_no: number;
+  title: string;
+  summary: string;
+  content: string;
+  status: string;
+  revision_reason: string;
+  created_at: string;
+}
+
+export interface SeriesPlan {
+  id: number;
+  project_id: number;
+  title: string;
+  target_chapter_count: number;
+  theme: string;
+  main_conflict: string;
+  ending_direction: string;
+  status: string;
+  current_version_id?: number | null;
+  created_at: string;
+  updated_at: string;
+  current_version?: SeriesPlanVersion | null;
+  versions: SeriesPlanVersion[];
+  arcs: ArcPlan[];
+  chapters: ChapterOutline[];
+}
+
+export interface BatchGenerationJob {
+  id: number;
+  project_id: number;
+  series_plan_id: number;
+  start_chapter_no: number;
+  end_chapter_no: number;
+  job_status: string;
+  current_chapter_no?: number | null;
+  result_summary: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StoryboardShot {
+  id: number;
+  storyboard_id: number;
+  shot_no: number;
+  narration_text: string;
+  visual_prompt: string;
+  character_refs: unknown[];
+  scene_refs: unknown[];
+  duration_seconds: number;
+  status: string;
+}
+
+export interface Storyboard {
+  id: number;
+  project_id: number;
+  title: string;
+  source_chapter_ids: unknown[];
+  status: string;
+  summary: string;
+  shots: StoryboardShot[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VideoTask {
+  id: number;
+  project_id: number;
+  storyboard_id: number;
+  task_status: string;
+  output_uri: string;
+  progress: Record<string, unknown>;
+  error_message: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MediaAsset {
+  id: number;
+  project_id: number;
+  storyboard_id?: number | null;
+  shot_id?: number | null;
+  asset_type: string;
+  uri: string;
+  prompt: string;
+  status: string;
+  meta: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LongformState {
+  series_plans: SeriesPlan[];
+  draft_versions: DraftVersion[];
+  batch_jobs: BatchGenerationJob[];
+  storyboards: Storyboard[];
+  media_assets: MediaAsset[];
+  video_tasks: VideoTask[];
+}
+
+export interface GenerateSeriesPlanPayload {
+  target_chapter_count: number;
+  user_brief: string;
+}
+
+export interface SubmitOutlineFeedbackPayload {
+  target_type: "series" | "arc" | "chapter";
+  target_id: number;
+  feedback_text: string;
+  feedback_type: string;
+  priority: number;
+}
+
+export interface OutlineRevisionResponse {
+  feedback: Record<string, unknown>;
+  revision_plan: Record<string, unknown>;
+  series_plan: SeriesPlan;
+}
+
+export interface BatchGenerationPayload {
+  series_plan_id: number;
+  start_chapter_no: number;
+  end_chapter_no: number;
+}
+
+export interface CreateStoryboardPayload {
+  novel_chapter_ids: number[];
+  title: string;
+}
+
+export interface ReviseDraftPayload {
+  feedback_text: string;
+}
+
+export interface CanonicalizeDraftPayload {
+  novel_id?: number | null;
+  author_name: string;
+  visibility: "public" | "private";
+  tagline: string;
+}
+
+export interface UpdateChapterOutlinePayload {
+  title: string;
+  outline: Record<string, unknown>;
+  status: string;
+}
+
+export interface UpdateStoryboardShotPayload {
+  narration_text: string;
+  visual_prompt: string;
+  character_refs: unknown[];
+  scene_refs: unknown[];
+  duration_seconds: number;
+  status: string;
+}
+
+export interface CreateStoryboardShotPayload extends UpdateStoryboardShotPayload {
+  shot_no?: number | null;
+}
+
+export interface ReorderStoryboardShotsPayload {
+  shot_ids: number[];
+}
+
+export interface UpdateMediaAssetPayload {
+  uri: string;
+  status: string;
+  meta: Record<string, unknown>;
+}
+
+export interface UpdateVideoTaskPayload {
+  task_status: string;
+  output_uri: string;
+  progress: Record<string, unknown>;
+  error_message: string;
 }
 
 export interface ProjectFolder {

@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -112,6 +112,18 @@ class Project(Base, TimestampMixin):
         back_populates="project",
         cascade="all, delete-orphan",
     )
+    series_plans: Mapped[list["SeriesPlan"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    chapter_outlines: Mapped[list["ChapterOutline"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    outline_feedback_items: Mapped[list["OutlineFeedbackItem"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+    draft_versions: Mapped[list["DraftVersion"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    batch_generation_jobs: Mapped[list["BatchGenerationJob"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+    storyboards: Mapped[list["Storyboard"]] = relationship(back_populates="project", cascade="all, delete-orphan")
 
     @property
     def reference_work_style_traits(self) -> list[str]:
@@ -219,6 +231,232 @@ class ProjectChapter(Base, TimestampMixin):
 
     project: Mapped["Project"] = relationship(back_populates="project_chapters")
     generations: Mapped[list["GenerationRun"]] = relationship(back_populates="project_chapter")
+
+
+class SeriesPlan(Base, TimestampMixin):
+    __tablename__ = "series_plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    target_chapter_count: Mapped[int] = mapped_column(Integer, default=12, nullable=False)
+    theme: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    main_conflict: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    ending_direction: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="draft", nullable=False)
+    current_version_id: Mapped[int | None] = mapped_column(ForeignKey("series_plan_versions.id"), nullable=True)
+
+    project: Mapped["Project"] = relationship(back_populates="series_plans")
+    versions: Mapped[list["SeriesPlanVersion"]] = relationship(
+        back_populates="series_plan",
+        cascade="all, delete-orphan",
+        foreign_keys="SeriesPlanVersion.series_plan_id",
+    )
+    current_version: Mapped["SeriesPlanVersion | None"] = relationship(
+        foreign_keys=[current_version_id],
+        post_update=True,
+    )
+    arc_plans: Mapped[list["ArcPlan"]] = relationship(back_populates="series_plan", cascade="all, delete-orphan")
+    chapter_outlines: Mapped[list["ChapterOutline"]] = relationship(back_populates="series_plan", cascade="all, delete-orphan")
+    batch_generation_jobs: Mapped[list["BatchGenerationJob"]] = relationship(back_populates="series_plan")
+
+
+class SeriesPlanVersion(Base):
+    __tablename__ = "series_plan_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    series_plan_id: Mapped[int] = mapped_column(ForeignKey("series_plans.id"), nullable=False)
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    summary_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    change_note: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    source_feedback_snapshot: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_by: Mapped[str] = mapped_column(String(40), default="planner", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    series_plan: Mapped["SeriesPlan"] = relationship(
+        back_populates="versions",
+        foreign_keys=[series_plan_id],
+    )
+    arc_plans: Mapped[list["ArcPlan"]] = relationship(back_populates="version")
+
+
+class ArcPlan(Base):
+    __tablename__ = "arc_plans"
+    __table_args__ = (UniqueConstraint("series_plan_id", "version_id", "arc_no", name="uq_arc_plans_series_version_arc"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    series_plan_id: Mapped[int] = mapped_column(ForeignKey("series_plans.id"), nullable=False)
+    version_id: Mapped[int] = mapped_column(ForeignKey("series_plan_versions.id"), nullable=False)
+    arc_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_chapter_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_chapter_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    goal: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    conflict: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    turning_points_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="draft", nullable=False)
+
+    series_plan: Mapped["SeriesPlan"] = relationship(back_populates="arc_plans")
+    version: Mapped["SeriesPlanVersion"] = relationship(back_populates="arc_plans")
+    chapter_outlines: Mapped[list["ChapterOutline"]] = relationship(back_populates="arc_plan")
+
+
+class ChapterOutline(Base, TimestampMixin):
+    __tablename__ = "chapter_outlines"
+    __table_args__ = (UniqueConstraint("series_plan_id", "chapter_no", name="uq_chapter_outlines_series_chapter_no"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    series_plan_id: Mapped[int] = mapped_column(ForeignKey("series_plans.id"), nullable=False)
+    arc_plan_id: Mapped[int | None] = mapped_column(ForeignKey("arc_plans.id"), nullable=True)
+    chapter_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    outline_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="outline_draft", nullable=False)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    project: Mapped["Project"] = relationship(back_populates="chapter_outlines")
+    series_plan: Mapped["SeriesPlan"] = relationship(back_populates="chapter_outlines")
+    arc_plan: Mapped["ArcPlan | None"] = relationship(back_populates="chapter_outlines")
+    draft_versions: Mapped[list["DraftVersion"]] = relationship(back_populates="chapter_outline")
+
+
+class OutlineFeedbackItem(Base, TimestampMixin):
+    __tablename__ = "outline_feedback_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    target_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    feedback_text: Mapped[str] = mapped_column(Text, nullable=False)
+    feedback_type: Mapped[str] = mapped_column(String(60), default="general", nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="pending", nullable=False)
+
+    project: Mapped["Project"] = relationship(back_populates="outline_feedback_items")
+    revision_plans: Mapped[list["OutlineRevisionPlan"]] = relationship(
+        back_populates="feedback_item",
+        cascade="all, delete-orphan",
+    )
+
+
+class OutlineRevisionPlan(Base):
+    __tablename__ = "outline_revision_plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    feedback_item_id: Mapped[int] = mapped_column(ForeignKey("outline_feedback_items.id"), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    target_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    plan_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    applied: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    feedback_item: Mapped["OutlineFeedbackItem"] = relationship(back_populates="revision_plans")
+
+
+class DraftVersion(Base):
+    __tablename__ = "draft_versions"
+    __table_args__ = (UniqueConstraint("chapter_outline_id", "version_no", name="uq_draft_versions_outline_version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    chapter_outline_id: Mapped[int] = mapped_column(ForeignKey("chapter_outlines.id"), nullable=False)
+    generation_run_id: Mapped[int | None] = mapped_column(ForeignKey("generation_runs.id"), nullable=True)
+    parent_version_id: Mapped[int | None] = mapped_column(ForeignKey("draft_versions.id"), nullable=True)
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="draft_generated", nullable=False)
+    revision_reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    project: Mapped["Project"] = relationship(back_populates="draft_versions")
+    chapter_outline: Mapped["ChapterOutline"] = relationship(back_populates="draft_versions")
+    generation_run: Mapped["GenerationRun | None"] = relationship()
+    parent_version: Mapped["DraftVersion | None"] = relationship(remote_side=[id])
+
+
+class BatchGenerationJob(Base, TimestampMixin):
+    __tablename__ = "batch_generation_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    series_plan_id: Mapped[int] = mapped_column(ForeignKey("series_plans.id"), nullable=False)
+    start_chapter_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_chapter_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    job_status: Mapped[str] = mapped_column(String(40), default="pending", nullable=False)
+    current_chapter_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    result_summary_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+
+    project: Mapped["Project"] = relationship(back_populates="batch_generation_jobs")
+    series_plan: Mapped["SeriesPlan"] = relationship(back_populates="batch_generation_jobs")
+
+
+class Storyboard(Base, TimestampMixin):
+    __tablename__ = "storyboards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_chapter_ids_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="draft", nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    project: Mapped["Project"] = relationship(back_populates="storyboards")
+    shots: Mapped[list["StoryboardShot"]] = relationship(back_populates="storyboard", cascade="all, delete-orphan")
+    media_assets: Mapped[list["MediaAsset"]] = relationship(back_populates="storyboard")
+    video_tasks: Mapped[list["VideoTask"]] = relationship(back_populates="storyboard")
+
+
+class StoryboardShot(Base):
+    __tablename__ = "storyboard_shots"
+    __table_args__ = (UniqueConstraint("storyboard_id", "shot_no", name="uq_storyboard_shots_storyboard_shot_no"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    storyboard_id: Mapped[int] = mapped_column(ForeignKey("storyboards.id"), nullable=False)
+    shot_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    narration_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    visual_prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    character_refs_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    scene_refs_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    duration_seconds: Mapped[float] = mapped_column(Float, default=4.0, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="draft", nullable=False)
+
+    storyboard: Mapped["Storyboard"] = relationship(back_populates="shots")
+
+
+class MediaAsset(Base, TimestampMixin):
+    __tablename__ = "media_assets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    storyboard_id: Mapped[int | None] = mapped_column(ForeignKey("storyboards.id"), nullable=True)
+    shot_id: Mapped[int | None] = mapped_column(ForeignKey("storyboard_shots.id"), nullable=True)
+    asset_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    uri: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="pending", nullable=False)
+    meta_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+
+    project: Mapped["Project"] = relationship()
+    storyboard: Mapped["Storyboard | None"] = relationship(back_populates="media_assets")
+    shot: Mapped["StoryboardShot | None"] = relationship()
+
+
+class VideoTask(Base, TimestampMixin):
+    __tablename__ = "video_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    storyboard_id: Mapped[int] = mapped_column(ForeignKey("storyboards.id"), nullable=False)
+    task_status: Mapped[str] = mapped_column(String(40), default="pending", nullable=False)
+    output_uri: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    progress_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    project: Mapped["Project"] = relationship()
+    storyboard: Mapped["Storyboard"] = relationship(back_populates="video_tasks")
 
 
 class GenerationRun(Base, TimestampMixin):
