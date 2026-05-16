@@ -176,6 +176,7 @@ class EvolutionService:
             model=self.settings.utility_model,
             system_prompt=system_prompt,
             user_prompt=prompt,
+            json_mode=True,
         )
         if trace is not None:
             trace["evolution"] = {

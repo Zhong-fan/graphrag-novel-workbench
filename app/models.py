@@ -68,6 +68,7 @@ class Project(Base, TimestampMixin):
     world_brief: Mapped[str] = mapped_column(Text, default="", nullable=False)
     writing_rules: Mapped[str] = mapped_column(Text, default="", nullable=False)
     style_profile: Mapped[str] = mapped_column(String(40), default="light_novel", nullable=False)
+    indexing_status: Mapped[str] = mapped_column(String(40), default="stale", nullable=False)
     punctuation_rule: Mapped[str] = mapped_column(
         String(120),
         default="对话使用「」，嵌套引号使用『』。",

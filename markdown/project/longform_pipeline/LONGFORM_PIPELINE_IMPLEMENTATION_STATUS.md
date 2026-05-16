@@ -47,7 +47,7 @@
 
 - `media_pipeline_service.py`
   - 创建视频导出任务的任务计划。
-  - 为镜头生成图片、旁白、字幕素材占位。
+  - 生成视频任务初始进度结构（步骤、预计时长、状态占位）。
 
 ### 3. 后端接口
 
@@ -144,13 +144,186 @@
 -> 更新素材与导出状态
 ```
 
+## 本轮修复与验证
+
+### 已修复
+
+- 修复历史数据库兼容问题：
+  - 本机历史库的 `projects.indexing_status` 是非空列。
+  - 当前 `Project` 模型曾漏掉该字段，导致新建项目 `POST /api/projects` 返回 500。
+  - 已在 `app/models.py` 补回 `Project.indexing_status`，默认值为 `stale`。
+  - 已在 `app/db.py` 的手写迁移中补齐 `indexing_status` 缺列和空值回填逻辑。
+
+- 修复长篇正文生成的 JSON 输出失败问题：
+  - 之前第 1 章批量正文生成失败，接口返回 `写作模型没有返回可解析的 JSON。`
+  - 已在 `app/llm.py` 增加 `json_mode` 参数。
+  - Chat Completions 请求在 `json_mode=True` 时发送 `response_format: {"type": "json_object"}`。
+  - Responses 请求在 `json_mode=True` 时发送对应 JSON 对象输出格式。
+  - 已将所有本来就要求 JSON 的模型调用切到严格 JSON 模式：
+    - 长篇概要生成。
+    - 概要反馈修订。
+    - 正文初稿生成。
+    - 正文意图覆盖检查。
+    - 正文重写。
+    - 演化状态抽取。
+    - 分镜生成。
+    - 项目设定建议 / 参考作品识别。
+
+### 明确保留的行为
+
+- 没有增加兜底。
+- 没有增加容错。
+- 没有把非 JSON 文本强行包装成成功结果。
+- 如果模型仍未返回合法 JSON，系统继续报错并中止当前步骤。
+- 润色正文、参考作品写作指导等本来返回纯文本的模型调用没有切换为 JSON 模式。
+
+### 已验证
+
+- 新建项目成功。
+- 进入长篇流水线成功。
+- 生成 3 章长篇概要成功。
+- 提交概要反馈并生成新概要版本成功。
+- 锁定概要成功。
+- 按锁定概要生成第 1 章正文成功。
+- 前端长篇流水线页面可看到 `draft_generated` 草稿版本。
+
+### 本轮新增发现
+
+- 已新增 `scripts/longform_pipeline_smoke.py`，用于从 API 层跑长篇流水线 smoke：
+  - 注册临时用户。
+  - 新建项目。
+  - 生成 3 章概要。
+  - 提交概要反馈。
+  - 锁定概要。
+  - 批量生成正文。
+  - 重写、定稿、分镜、分镜 CRUD、视频任务和素材状态更新。
+- smoke 实际跑到批量正文生成阶段时暴露当前同步接口问题：
+  - `POST /api/projects/{project_id}/batch-generation` 当前会在同一个 HTTP 请求里按章节串行生成。
+  - 每章内部会调用初稿生成、润色、意图覆盖检查、演化抽取等多个模型步骤。
+  - 3 章同步生成耗时过长，客户端中断后任务可能长时间停留在 `running`。
+  - 原 retry 逻辑依赖 `current_chapter_no + 1`，如果第 N 章生成过程中中断，存在跳过第 N 章的风险。
+- 已开始修补当前同步实现的两个明显问题：
+  - retry 改为查询最早缺失 `DraftVersion` 的章节继续，而不是依赖 `current_chapter_no + 1`。
+  - 每章成功后立即更新 `batch_generation_jobs.result_summary_json`，避免只在整批完成后才写入生成摘要。
+
+## 商业化落地决策
+
+### 批量正文生成的目标形态
+
+用户体验上仍保留“批量生成多章”，允许用户一次选择更大的章节范围，例如 1-10、1-20。
+
+技术执行上不再把多章塞进一个同步 HTTP 请求，也不依赖前端循环发起多次单章请求。
+
+正式路线改为后端接管的 DB-backed 顺序任务队列：
+
+```text
+用户创建批量任务
+-> 后端创建 batch_generation_job
+-> 后端为章节范围创建单章任务
+-> worker 固定并发 1，按章节顺序执行
+-> 每章成功立即落 DraftVersion
+-> 每个阶段写进度事件
+-> 前端轮询任务状态
+```
+
+### 执行约束
+
+- 同一个批量任务内固定并发为 1。
+- 必须按章节顺序生成，不并发生成正文。
+- 第 N 章成功后才允许进入第 N+1 章。
+- 每章是最小可重试单元。
+- 失败时停在失败章，已成功章节保留。
+- retry 只重试失败章或缺失草稿的章节，不重跑已成功章节。
+- 页面刷新、浏览器关闭、客户端断开不应影响后端任务继续执行。
+- 服务重启后应能识别 stale `running` 任务，并恢复为可重试状态。
+
+### 建议新增数据结构
+
+保留现有 `batch_generation_jobs` 作为批量任务主表，并新增：
+
+- `batch_generation_chapter_tasks`
+  - 记录每一章的任务状态。
+  - 字段建议：`job_id`、`chapter_outline_id`、`chapter_no`、`status`、`draft_version_id`、`generation_run_id`、`error_message`、`started_at`、`finished_at`。
+- `task_events`
+  - 记录任务进度事件。
+  - 字段建议：`job_id`、`chapter_task_id`、`event_type`、`message`、`payload_json`、`created_at`。
+
+### 建议接口形态
+
+```text
+POST /api/projects/{project_id}/batch-generation
+创建任务，立即返回 job_id。
+
+GET /api/projects/{project_id}/batch-generation/{job_id}
+查询任务、章节子任务和进度事件。
+
+POST /api/projects/{project_id}/batch-generation/{job_id}/pause
+暂停任务。
+
+POST /api/projects/{project_id}/batch-generation/{job_id}/resume
+继续任务。
+
+POST /api/projects/{project_id}/batch-generation/{job_id}/retry
+从失败章或最早缺失草稿章节继续。
+
+POST /api/projects/{project_id}/batch-generation/{job_id}/cancel
+取消任务。
+```
+
+### 落地策略
+
+第一版不必立即引入 Redis + Celery / RQ。
+
+建议先实现本地 DB-backed worker：
+
+- 后端启动时拉起一个本地 worker 线程。
+- worker 从数据库领取 `queued` 任务。
+- 单实例本地部署先固定一个 worker。
+- 所有状态、错误和进度都落库。
+- 后续需要云部署、多实例或更强可靠性时，再把 worker 替换为 Celery / RQ，不改前端任务接口。
+
+## 尚未完成
+
+### 主流程尚未完整走通
+
+以下步骤还没有在本轮 Playwright 自动测试中跑完：
+
+- 批量生成第 2-3 章正文在同步接口下耗时过长，需先改为后端顺序任务队列。
+- 对草稿执行全章重写。
+- 将草稿定稿为正式章节。
+- 从已定稿章节生成分镜。
+- 新增、编辑、删除、重排分镜镜头的完整回归。
+- 创建视频任务。
+- 更新素材状态和视频任务状态。
+
+### 产品化和工程化尚未完成
+
+- 批量正文生成、分镜生成、视频任务创建仍是同步接口。
+- 尚未接入 Redis + Celery / RQ 等后台任务系统。
+- 尚未把长耗时任务改成可轮询进度的异步任务。
+- 尚未增加更细的任务进度事件表。
+- 尚未将概要 JSON 文本框改成字段化编辑表单。
+- 尚未实现章节版本对比。
+- 尚未实现分镜拖拽排序。
+- 尚未实现素材预览、视频预览、导出下载。
+
+### 真实视频生产尚未完成
+
+- 尚未调用图像生成模型。
+- 尚未调用 TTS。
+- 尚未生成真实字幕文件。
+- 尚未调用 FFmpeg 合成 MP4。
+- 尚未接入 MinIO / S3 等文件存储服务。
+
 ## 已知限制
 
 ### 1. 任务仍是同步执行
 
 批量正文生成、分镜生成、视频任务创建目前仍是同步接口。
 
-设计文档建议引入 Redis + Celery / RQ，但当前尚未接入异步任务系统。
+批量正文生成虽是按章节顺序执行，但当前仍运行在同一个 HTTP 请求内，不适合作为商业化落地形态。
+
+下一步应先把批量正文生成改为 DB-backed 后端顺序任务队列，再考虑分镜生成、素材生成和视频导出的异步化。
 
 ### 2. 视频管线仍是占位
 
@@ -192,40 +365,61 @@
 
 ## 验证状态
 
-中途曾跑过：
+已于 2026-05-16 重新验证：
 
 - `python -m compileall app`
 - `npm run build`
+- `python -c "from app.db import init_db; init_db(); print('init_db ok')"`
+- Playwright 自动测试：
+  - 新建项目成功。
+  - 进入长篇流水线成功。
+  - 生成 3 章长篇概要成功。
+  - 提交概要反馈并生成新概要版本成功。
+  - 锁定概要成功。
+  - 按锁定概要生成第 1 章正文成功。
+  - 前端可看到 `draft_generated` 草稿版本。
+- `python scripts/longform_pipeline_smoke.py`
+  - API smoke 跑到批量正文生成阶段。
+  - 验证了注册、新建项目、概要生成、概要反馈和锁定概要。
+  - 暴露了同步批量正文生成请求耗时过长、任务状态不够可恢复的问题。
 
-当时通过。
+结果：
 
-后续按要求继续写代码，没有再运行测试或构建。
-
-数据库初始化曾因本机 MySQL `127.0.0.1` 拒绝连接未完成，不是代码层面的验证结果。
+- 后端编译检查通过。
+- 前端构建通过（在 `frontend/` 目录执行）。
+- `init_db()` 执行成功，长篇流水线新增表与手写迁移可以落库。
+- 长篇生成链路的 JSON 产物调用已启用模型侧严格 JSON 模式；不做兜底或容错，模型未返回合法 JSON 时仍会报错。
+- 已修复历史数据库中 `projects.indexing_status` 非空列导致新建项目 500 的兼容问题。
 
 ## 后续建议
 
 ### 第一优先级
 
-1. 跑一次后端编译检查。
-2. 跑一次前端构建。
-3. 启动 MySQL 后执行 `init_db()`，确认新增表和迁移能落库。
-4. 从前端手动走一遍主流程：
-   - 生成概要
-   - 提交概要反馈
-   - 锁定概要
-   - 批量生成 1-2 章正文
-   - 重写正文版本
-   - 定稿章节
-   - 生成分镜
-   - 创建视频任务
+1. 将批量正文生成改成商业化最小任务队列：
+   - 新增单章任务表。
+   - 新增任务事件表。
+   - `POST /batch-generation` 只创建任务并立即返回。
+   - 本地 worker 顺序消费章节任务。
+   - 前端轮询任务状态和事件。
+2. 重新跑 API smoke：
+   - 生成 3 章概要。
+   - 提交概要反馈。
+   - 锁定概要。
+   - 创建 3 章或更多章批量任务。
+   - 确认 worker 按顺序逐章生成，不并发。
+   - 验证失败章 retry 不跳章。
+3. 再继续走完下游主流程：
+   - 重写正文版本。
+   - 定稿章节。
+   - 生成分镜。
+   - 创建视频任务。
 
 ### 第二优先级
 
-1. 引入后台任务系统。
-2. 将批量正文生成改成可轮询进度的异步任务。
-3. 将分镜生成、素材生成、视频导出改成异步任务。
-4. 给 `batch_generation_jobs` 和 `video_tasks` 增加更细的进度事件表。
+1. 将分镜生成、素材生成、视频导出也改成异步任务。
+2. 给 `video_tasks` 增加更细的进度事件。
+3. 增加任务暂停、恢复、取消。
+4. 评估是否从本地 worker 迁移到 Redis + Celery / RQ。
 
 ### 第三优先级
 
@@ -269,4 +463,3 @@
 - `frontend/src/stores/workbench.ts`
 - `frontend/src/components/workspace/LongformPipelinePanel.vue`
 - `frontend/src/styles/workspace.css`
-

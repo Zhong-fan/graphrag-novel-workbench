@@ -75,7 +75,12 @@ class StoryboardService:
 - 不要改写章节既定事实。
 - 旁白简洁，适合短视频字幕。
 """.strip()
-        response = self.llm.generate(model=self.settings.utility_model, system_prompt=system_prompt, user_prompt=prompt)
+        response = self.llm.generate(
+            model=self.settings.utility_model,
+            system_prompt=system_prompt,
+            user_prompt=prompt,
+            json_mode=True,
+        )
         payload = parse_json_object(response.text)
         if not isinstance(payload.get("shots"), list):
             raise RuntimeError("分镜模型没有返回 shots。")

@@ -152,6 +152,9 @@ def _migrate_workspace_schema(connection) -> None:
     if "style_profile" not in project_columns:
         connection.execute(text("ALTER TABLE projects ADD COLUMN style_profile VARCHAR(40) NULL"))
         connection.execute(text("UPDATE projects SET style_profile = 'light_novel' WHERE style_profile IS NULL OR style_profile = ''"))
+    if "indexing_status" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN indexing_status VARCHAR(40) NULL"))
+        connection.execute(text("UPDATE projects SET indexing_status = 'stale' WHERE indexing_status IS NULL OR indexing_status = ''"))
     if "reference_work" not in project_columns:
         connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work VARCHAR(255) NULL"))
         connection.execute(text("UPDATE projects SET reference_work = '' WHERE reference_work IS NULL"))
@@ -182,6 +185,8 @@ def _migrate_workspace_schema(connection) -> None:
         connection.execute(text("ALTER TABLE projects ADD COLUMN deleted_at DATETIME NULL"))
     if "premise" in project_columns:
         connection.execute(text("UPDATE projects SET premise = '' WHERE premise IS NULL"))
+    if "indexing_status" in _column_names("projects"):
+        connection.execute(text("UPDATE projects SET indexing_status = 'stale' WHERE indexing_status IS NULL OR indexing_status = ''"))
 
     if "project_chapters" not in tables:
         connection.execute(
@@ -303,6 +308,9 @@ def _migrate_project_reference_work_fields(connection) -> None:
         return
 
     project_columns = _column_names("projects")
+    if "indexing_status" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN indexing_status VARCHAR(40) NULL"))
+        connection.execute(text("UPDATE projects SET indexing_status = 'stale' WHERE indexing_status IS NULL OR indexing_status = ''"))
     if "reference_work" not in project_columns:
         connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work VARCHAR(255) NULL"))
         connection.execute(text("UPDATE projects SET reference_work = '' WHERE reference_work IS NULL"))
@@ -336,6 +344,8 @@ def _migrate_project_reference_work_fields(connection) -> None:
     if "reference_work_confidence_note" not in project_columns:
         connection.execute(text("ALTER TABLE projects ADD COLUMN reference_work_confidence_note TEXT NULL"))
         connection.execute(text("UPDATE projects SET reference_work_confidence_note = '' WHERE reference_work_confidence_note IS NULL"))
+    if "indexing_status" in _column_names("projects"):
+        connection.execute(text("UPDATE projects SET indexing_status = 'stale' WHERE indexing_status IS NULL OR indexing_status = ''"))
 
 
 def _migrate_generation_run_mediumtext(connection) -> None:

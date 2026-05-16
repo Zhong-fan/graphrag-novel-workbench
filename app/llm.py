@@ -67,6 +67,7 @@ class OpenAIResponsesLLM:
         model: str,
         system_prompt: str,
         user_prompt: str,
+        json_mode: bool = False,
         event_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> LLMResponse:
         if not self.use_responses:
@@ -74,6 +75,7 @@ class OpenAIResponsesLLM:
                 model=model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
+                json_mode=json_mode,
                 event_callback=event_callback,
             )
         try:
@@ -81,6 +83,7 @@ class OpenAIResponsesLLM:
                 model=model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
+                json_mode=json_mode,
                 event_callback=event_callback,
             )
         except APIHTTPError as exc:
@@ -97,6 +100,7 @@ class OpenAIResponsesLLM:
                     model=model,
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
+                    json_mode=json_mode,
                     event_callback=event_callback,
                 )
             raise
@@ -113,6 +117,7 @@ class OpenAIResponsesLLM:
                     model=model,
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
+                    json_mode=json_mode,
                     event_callback=event_callback,
                 )
             except (APIHTTPError, APINetworkError) as fallback_exc:
@@ -126,6 +131,7 @@ class OpenAIResponsesLLM:
         model: str,
         system_prompt: str,
         user_prompt: str,
+        json_mode: bool,
         event_callback: Callable[[dict[str, Any]], None] | None,
     ) -> LLMResponse:
         payload = {
@@ -135,6 +141,8 @@ class OpenAIResponsesLLM:
                 {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
             ],
         }
+        if json_mode:
+            payload["text"] = {"format": {"type": "json_object"}}
         if self.stream_responses:
             payload["stream"] = True
         body = self._post_json("/responses", payload, event_callback=event_callback)
@@ -161,6 +169,7 @@ class OpenAIResponsesLLM:
         model: str,
         system_prompt: str,
         user_prompt: str,
+        json_mode: bool,
         event_callback: Callable[[dict[str, Any]], None] | None,
     ) -> LLMResponse:
         payload = {
@@ -170,6 +179,8 @@ class OpenAIResponsesLLM:
                 {"role": "user", "content": user_prompt},
             ],
         }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
         body = self._post_json("/chat/completions", payload, event_callback=event_callback)
         choices = body.get("choices", [])
         if not choices:

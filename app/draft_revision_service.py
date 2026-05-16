@@ -78,7 +78,12 @@ class DraftRevisionService:
   "change_note": "这次重写主要调整了什么"
 }}
 """.strip()
-        response = self.llm.generate(model=self.settings.writer_model, system_prompt=system_prompt, user_prompt=prompt)
+        response = self.llm.generate(
+            model=self.settings.writer_model,
+            system_prompt=system_prompt,
+            user_prompt=prompt,
+            json_mode=True,
+        )
         payload = parse_json_object(response.text)
         title = str(payload.get("title") or draft.title).strip()
         summary = str(payload.get("summary") or draft.summary).strip()

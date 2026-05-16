@@ -82,6 +82,7 @@ class StoryGenerationService:
             model=self.settings.writer_model,
             system_prompt=system_prompt,
             user_prompt=prompt,
+            json_mode=True,
             event_callback=self._model_event_callback(progress, "draft"),
         )
         if trace is not None:
@@ -318,6 +319,7 @@ class StoryGenerationService:
             model=self.settings.utility_model,
             system_prompt=system_prompt,
             user_prompt=user_prompt_text,
+            json_mode=True,
             event_callback=self._model_event_callback(progress, "intent_check"),
         )
         payload = self._parse_json(response.text)

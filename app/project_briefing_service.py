@@ -120,6 +120,7 @@ class ProjectBriefingService:
                 model=self.settings.utility_model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
+                json_mode=True,
             )
             payload = json.loads(response.text)
         except (RuntimeError, ValueError, TypeError, APIHTTPError, APINetworkError) as exc:

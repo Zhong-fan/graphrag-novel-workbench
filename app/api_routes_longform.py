@@ -311,9 +311,15 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         plan = _series_plan_or_404(db, project.id, previous_job.series_plan_id)
         if plan.status != "locked":
             raise HTTPException(status_code=409, detail="请先锁定长篇概要再重试批量生成。")
-        retry_start = previous_job.start_chapter_no
-        if previous_job.current_chapter_no is not None and previous_job.current_chapter_no < previous_job.end_chapter_no:
-            retry_start = previous_job.current_chapter_no + 1
+        retry_start = _first_missing_draft_chapter_no(
+            db,
+            project_id=project.id,
+            series_plan_id=plan.id,
+            start_chapter_no=previous_job.start_chapter_no,
+            end_chapter_no=previous_job.end_chapter_no,
+        )
+        if retry_start is None:
+            retry_start = previous_job.end_chapter_no
         try:
             job = BatchGenerationService(settings).run_job(
                 db=db,
@@ -786,6 +792,31 @@ def _state_out(db: Session, project: Project) -> SeriesPlanningStateOut:
         media_assets=[_media_asset_out(item) for item in media_assets],
         video_tasks=[_video_task_out(item) for item in video_tasks],
     )
+
+
+def _first_missing_draft_chapter_no(
+    db: Session,
+    *,
+    project_id: int,
+    series_plan_id: int,
+    start_chapter_no: int,
+    end_chapter_no: int,
+) -> int | None:
+    rows = db.execute(
+        select(ChapterOutline.chapter_no, DraftVersion.id)
+        .join(DraftVersion, DraftVersion.chapter_outline_id == ChapterOutline.id, isouter=True)
+        .where(
+            ChapterOutline.project_id == project_id,
+            ChapterOutline.series_plan_id == series_plan_id,
+            ChapterOutline.chapter_no >= start_chapter_no,
+            ChapterOutline.chapter_no <= end_chapter_no,
+        )
+        .order_by(ChapterOutline.chapter_no.asc())
+    ).all()
+    for chapter_no, draft_id in rows:
+        if draft_id is None:
+            return int(chapter_no)
+    return None
 
 
 def _persist_generated_plan(db: Session, project: Project, payload: dict, *, created_by: str) -> SeriesPlan:

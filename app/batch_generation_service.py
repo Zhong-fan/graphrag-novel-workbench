@@ -81,6 +81,8 @@ class BatchGenerationService:
                         "title": generation.title,
                     }
                 )
+                job.result_summary_json = json.dumps({"generated": generated, "failed": failed}, ensure_ascii=False)
+                db.commit()
             except Exception as exc:
                 failed.append({"chapter_no": outline.chapter_no, "outline_id": outline.id, "error": str(exc)})
                 job.job_status = "failed"

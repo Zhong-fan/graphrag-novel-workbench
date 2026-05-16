@@ -121,7 +121,12 @@ class SeriesPlanningService:
 - Arc 建议每 5 到 10 章一段，覆盖所有章节且不重叠。
 - 每章概要必须能直接驱动正文生成，避免空泛。
 """.strip()
-        response = self.llm.generate(model=self.settings.writer_model, system_prompt=system_prompt, user_prompt=prompt)
+        response = self.llm.generate(
+            model=self.settings.writer_model,
+            system_prompt=system_prompt,
+            user_prompt=prompt,
+            json_mode=True,
+        )
         payload = parse_json_object(response.text)
         self._validate_payload(payload, target_chapter_count=target_chapter_count)
         return payload

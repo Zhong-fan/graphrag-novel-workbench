@@ -72,7 +72,12 @@ class OutlineRevisionService:
 - 不要把反馈原样塞进正文提示，要体现在概要结构里。
 - revised_plan 必须仍包含 series、arcs、chapters 三层。
 """.strip()
-        response = self.llm.generate(model=self.settings.utility_model, system_prompt=system_prompt, user_prompt=prompt)
+        response = self.llm.generate(
+            model=self.settings.utility_model,
+            system_prompt=system_prompt,
+            user_prompt=prompt,
+            json_mode=True,
+        )
         payload = parse_json_object(response.text)
         if not isinstance(payload.get("revision_plan"), dict) or not isinstance(payload.get("revised_plan"), dict):
             raise RuntimeError("修订模型没有返回 revision_plan 和 revised_plan。")
