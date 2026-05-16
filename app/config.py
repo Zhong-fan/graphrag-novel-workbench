@@ -30,6 +30,15 @@ class Settings:
     mysql_database: str
     auth_secret: str
     auth_exp_hours: int
+    image_api_key: str
+    image_base_url: str
+    image_model: str
+    image_size: str
+    tts_api_key: str
+    tts_base_url: str
+    tts_model: str
+    tts_voice: str
+    ffmpeg_path: str
 
     @property
     def sqlalchemy_database_url(self) -> str:
@@ -200,4 +209,13 @@ def load_settings() -> Settings:
         mysql_database=_require_first(("MYSQL_DATABASE",), dotenv_values),
         auth_secret=_require_first(("AUTH_SECRET",), dotenv_values),
         auth_exp_hours=int(_require_first(("AUTH_EXP_HOURS",), dotenv_values)),
+        image_api_key=_resolve_first(("CHENFLOW_IMAGE_API_KEY",), dotenv_values, "") or "",
+        image_base_url=_resolve_first(("CHENFLOW_IMAGE_BASE_URL",), dotenv_values, "") or "",
+        image_model=_resolve_first(("CHENFLOW_IMAGE_MODEL",), dotenv_values, "") or "",
+        image_size=_resolve_first(("CHENFLOW_IMAGE_SIZE",), dotenv_values, "1024x1024") or "1024x1024",
+        tts_api_key=_resolve_first(("CHENFLOW_TTS_API_KEY",), dotenv_values, "") or "",
+        tts_base_url=_resolve_first(("CHENFLOW_TTS_BASE_URL",), dotenv_values, "") or "",
+        tts_model=_resolve_first(("CHENFLOW_TTS_MODEL",), dotenv_values, "") or "",
+        tts_voice=_resolve_first(("CHENFLOW_TTS_VOICE",), dotenv_values, "") or "",
+        ffmpeg_path=_resolve_first(("CHENFLOW_FFMPEG_PATH",), dotenv_values, "ffmpeg") or "ffmpeg",
     )

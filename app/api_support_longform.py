@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .contracts import (
     ArcPlanOut,
+    BatchGenerationChapterTaskOut,
     BatchGenerationJobOut,
     ChapterOutlineOut,
     DraftVersionOut,
@@ -12,11 +13,13 @@ from .contracts import (
     SeriesPlanVersionOut,
     StoryboardOut,
     StoryboardShotOut,
+    TaskEventOut,
     VideoTaskOut,
 )
 from .json_utils import json_loads_list, json_loads_object
 from .models import (
     ArcPlan,
+    BatchGenerationChapterTask,
     BatchGenerationJob,
     ChapterOutline,
     DraftVersion,
@@ -27,6 +30,7 @@ from .models import (
     SeriesPlanVersion,
     Storyboard,
     StoryboardShot,
+    TaskEvent,
     VideoTask,
 )
 
@@ -133,6 +137,8 @@ def _outline_revision_plan_out(plan: OutlineRevisionPlan) -> OutlineRevisionPlan
 
 
 def _batch_job_out(job: BatchGenerationJob) -> BatchGenerationJobOut:
+    tasks = sorted(job.chapter_tasks, key=lambda item: item.chapter_no)
+    events = sorted(job.events, key=lambda item: item.created_at)
     return BatchGenerationJobOut(
         id=job.id,
         project_id=job.project_id,
@@ -142,8 +148,45 @@ def _batch_job_out(job: BatchGenerationJob) -> BatchGenerationJobOut:
         job_status=job.job_status,
         current_chapter_no=job.current_chapter_no,
         result_summary=json_loads_object(job.result_summary_json),
+        worker_id=job.worker_id,
+        worker_started_at=job.worker_started_at,
+        last_heartbeat_at=job.last_heartbeat_at,
+        chapter_tasks=[_batch_chapter_task_out(item) for item in tasks],
+        events=[_task_event_out(item) for item in events[-80:]],
         created_at=job.created_at,
         updated_at=job.updated_at,
+    )
+
+
+def _batch_chapter_task_out(task: BatchGenerationChapterTask) -> BatchGenerationChapterTaskOut:
+    return BatchGenerationChapterTaskOut(
+        id=task.id,
+        job_id=task.job_id,
+        chapter_outline_id=task.chapter_outline_id,
+        chapter_no=task.chapter_no,
+        status=task.status,
+        draft_version_id=task.draft_version_id,
+        generation_run_id=task.generation_run_id,
+        error_message=task.error_message,
+        started_at=task.started_at,
+        finished_at=task.finished_at,
+        created_at=task.created_at,
+        updated_at=task.updated_at,
+    )
+
+
+def _task_event_out(event: TaskEvent) -> TaskEventOut:
+    return TaskEventOut(
+        id=event.id,
+        project_id=event.project_id,
+        job_id=event.job_id,
+        storyboard_id=event.storyboard_id,
+        video_task_id=event.video_task_id,
+        chapter_task_id=event.chapter_task_id,
+        event_type=event.event_type,
+        message=event.message,
+        payload=json_loads_object(event.payload_json),
+        created_at=event.created_at,
     )
 
 
@@ -162,6 +205,7 @@ def _storyboard_shot_out(shot: StoryboardShot) -> StoryboardShotOut:
 
 
 def _storyboard_out(storyboard: Storyboard) -> StoryboardOut:
+    events = sorted(storyboard.events, key=lambda item: item.created_at)
     return StoryboardOut(
         id=storyboard.id,
         project_id=storyboard.project_id,
@@ -169,13 +213,19 @@ def _storyboard_out(storyboard: Storyboard) -> StoryboardOut:
         source_chapter_ids=json_loads_list(storyboard.source_chapter_ids_json),
         status=storyboard.status,
         summary=storyboard.summary,
+        worker_id=storyboard.worker_id,
+        worker_started_at=storyboard.worker_started_at,
+        last_heartbeat_at=storyboard.last_heartbeat_at,
+        error_message=storyboard.error_message,
         shots=[_storyboard_shot_out(item) for item in sorted(storyboard.shots, key=lambda shot: shot.shot_no)],
+        events=[_task_event_out(item) for item in events[-80:]],
         created_at=storyboard.created_at,
         updated_at=storyboard.updated_at,
     )
 
 
 def _video_task_out(task: VideoTask) -> VideoTaskOut:
+    events = sorted(task.events, key=lambda item: item.created_at)
     return VideoTaskOut(
         id=task.id,
         project_id=task.project_id,
@@ -184,6 +234,7 @@ def _video_task_out(task: VideoTask) -> VideoTaskOut:
         output_uri=task.output_uri,
         progress=json_loads_object(task.progress_json),
         error_message=task.error_message,
+        events=[_task_event_out(item) for item in events[-80:]],
         created_at=task.created_at,
         updated_at=task.updated_at,
     )

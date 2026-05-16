@@ -604,6 +604,34 @@ class BatchGenerationRequest(BaseModel):
     end_chapter_no: int = Field(..., ge=1, le=10000)
 
 
+class BatchGenerationChapterTaskOut(BaseModel):
+    id: int
+    job_id: int
+    chapter_outline_id: int
+    chapter_no: int
+    status: str
+    draft_version_id: int | None = None
+    generation_run_id: int | None = None
+    error_message: str
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TaskEventOut(BaseModel):
+    id: int
+    project_id: int
+    job_id: int | None = None
+    storyboard_id: int | None = None
+    video_task_id: int | None = None
+    chapter_task_id: int | None = None
+    event_type: str
+    message: str
+    payload: dict[str, Any]
+    created_at: datetime
+
+
 class BatchGenerationJobOut(BaseModel):
     id: int
     project_id: int
@@ -613,6 +641,11 @@ class BatchGenerationJobOut(BaseModel):
     job_status: str
     current_chapter_no: int | None = None
     result_summary: dict[str, Any]
+    worker_id: str = ""
+    worker_started_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
+    chapter_tasks: list[BatchGenerationChapterTaskOut] = []
+    events: list[TaskEventOut] = []
     created_at: datetime
     updated_at: datetime
 
@@ -641,7 +674,12 @@ class StoryboardOut(BaseModel):
     source_chapter_ids: list[Any]
     status: str
     summary: str
+    worker_id: str = ""
+    worker_started_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
+    error_message: str = ""
     shots: list[StoryboardShotOut] = []
+    events: list[TaskEventOut] = []
     created_at: datetime
     updated_at: datetime
 
@@ -691,6 +729,7 @@ class VideoTaskOut(BaseModel):
     output_uri: str
     progress: dict[str, Any]
     error_message: str
+    events: list[TaskEventOut] = []
     created_at: datetime
     updated_at: datetime
 

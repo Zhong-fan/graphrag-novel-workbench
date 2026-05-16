@@ -61,6 +61,7 @@ from .models import (
     SeriesPlanVersion,
     Storyboard,
     StoryboardShot,
+    TaskEvent,
     User,
     GenerationRun,
     VideoTask,
@@ -71,7 +72,7 @@ from .draft_revision_service import DraftRevisionService
 from .media_pipeline_service import MediaPipelineService
 from .outline_revision_service import OutlineRevisionService
 from .series_planning_service import SeriesPlanningService
-from .storyboard_service import StoryboardService
+from .storyboard_job_service import StoryboardJobService
 
 
 def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
@@ -284,7 +285,7 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         if plan.status != "locked":
             raise HTTPException(status_code=409, detail="请先锁定长篇概要再批量生成正文。")
         try:
-            job = BatchGenerationService(settings).run_job(
+            job = BatchGenerationService(settings).create_job(
                 db=db,
                 project=project,
                 series_plan=plan,
@@ -294,6 +295,16 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _batch_job_out(job)
+
+    @router.get("/api/projects/{project_id}/batch-generation/{job_id}", response_model=BatchGenerationJobOut)
+    def get_batch_generation(
+        project_id: int,
+        job_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> BatchGenerationJobOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        return _batch_job_out(_batch_job_or_404(db, project.id, job_id))
 
     @router.post("/api/projects/{project_id}/batch-generation/{job_id}/retry", response_model=BatchGenerationJobOut)
     def retry_batch_generation(
@@ -311,26 +322,41 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         plan = _series_plan_or_404(db, project.id, previous_job.series_plan_id)
         if plan.status != "locked":
             raise HTTPException(status_code=409, detail="请先锁定长篇概要再重试批量生成。")
-        retry_start = _first_missing_draft_chapter_no(
-            db,
-            project_id=project.id,
-            series_plan_id=plan.id,
-            start_chapter_no=previous_job.start_chapter_no,
-            end_chapter_no=previous_job.end_chapter_no,
-        )
-        if retry_start is None:
-            retry_start = previous_job.end_chapter_no
-        try:
-            job = BatchGenerationService(settings).run_job(
-                db=db,
-                project=project,
-                series_plan=plan,
-                start_chapter_no=retry_start,
-                end_chapter_no=previous_job.end_chapter_no,
-            )
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        job = BatchGenerationService(settings).retry_job(db=db, job=previous_job)
         return _batch_job_out(job)
+
+    @router.post("/api/projects/{project_id}/batch-generation/{job_id}/pause", response_model=BatchGenerationJobOut)
+    def pause_batch_generation(
+        project_id: int,
+        job_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> BatchGenerationJobOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        job = _batch_job_or_404(db, project.id, job_id)
+        return _batch_job_out(BatchGenerationService(settings).pause_job(db=db, job=job))
+
+    @router.post("/api/projects/{project_id}/batch-generation/{job_id}/resume", response_model=BatchGenerationJobOut)
+    def resume_batch_generation(
+        project_id: int,
+        job_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> BatchGenerationJobOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        job = _batch_job_or_404(db, project.id, job_id)
+        return _batch_job_out(BatchGenerationService(settings).resume_job(db=db, job=job))
+
+    @router.post("/api/projects/{project_id}/batch-generation/{job_id}/cancel", response_model=BatchGenerationJobOut)
+    def cancel_batch_generation(
+        project_id: int,
+        job_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> BatchGenerationJobOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        job = _batch_job_or_404(db, project.id, job_id)
+        return _batch_job_out(BatchGenerationService(settings).cancel_job(db=db, job=job))
 
     @router.post("/api/projects/{project_id}/draft-versions/{draft_version_id}/revise", response_model=DraftVersionOut)
     def revise_draft_version(
@@ -497,51 +523,17 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         current_user: User = Depends(get_current_user),
     ) -> StoryboardOut:
         project = _project_or_404(db, current_user.id, project_id)
-        chapters = db.scalars(
-            select(NovelChapter)
-            .join(Novel, NovelChapter.novel_id == Novel.id)
-            .where(
-                Novel.owner_id == current_user.id,
-                Novel.project_id == project.id,
-                Novel.deleted_at.is_(None),
-                NovelChapter.id.in_(payload.novel_chapter_ids),
-            )
-            .order_by(NovelChapter.chapter_no.asc())
-        ).all()
-        if len(chapters) != len(set(payload.novel_chapter_ids)):
-            raise HTTPException(status_code=404, detail="只能选择当前项目下已发布/定稿章节生成分镜。")
         title = payload.title.strip() or f"{project.title} 读后短片"
         try:
-            generated = StoryboardService(settings).generate_storyboard(project=project, chapters=chapters, title=title)
-        except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-        storyboard = Storyboard(
-            project=project,
-            title=str(generated.get("title") or title).strip(),
-            source_chapter_ids_json=json_dumps(payload.novel_chapter_ids),
-            summary=str(generated.get("summary") or "").strip(),
-            status="draft",
-        )
-        db.add(storyboard)
-        db.flush()
-        for index, shot_payload in enumerate(ensure_list(generated.get("shots")), start=1):
-            if not isinstance(shot_payload, dict):
-                continue
-            db.add(
-                StoryboardShot(
-                    storyboard=storyboard,
-                    shot_no=int(shot_payload.get("shot_no") or index),
-                    narration_text=str(shot_payload.get("narration_text") or "").strip(),
-                    visual_prompt=str(shot_payload.get("visual_prompt") or "").strip(),
-                    character_refs_json=json_dumps(ensure_list(shot_payload.get("character_refs"))),
-                    scene_refs_json=json_dumps(ensure_list(shot_payload.get("scene_refs"))),
-                    duration_seconds=float(shot_payload.get("duration_seconds") or 4),
-                    status="draft",
-                )
+            storyboard = StoryboardJobService(settings).create_job(
+                db=db,
+                project=project,
+                current_user_id=current_user.id,
+                novel_chapter_ids=payload.novel_chapter_ids,
+                title=title,
             )
-        db.commit()
-        db.refresh(storyboard)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _storyboard_out(storyboard)
 
     @router.post("/api/projects/{project_id}/storyboards/{storyboard_id}/video-tasks", response_model=VideoTaskOut)
@@ -555,6 +547,8 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         storyboard = db.scalar(select(Storyboard).where(Storyboard.project_id == project.id, Storyboard.id == storyboard_id))
         if storyboard is None:
             raise HTTPException(status_code=404, detail="分镜稿不存在。")
+        if storyboard.status != "draft" or not storyboard.shots:
+            raise HTTPException(status_code=409, detail="分镜稿尚未生成完成，不能创建视频任务。")
         existing_task = db.scalar(
             select(VideoTask)
             .where(
@@ -624,6 +618,14 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
                 existing_asset_keys.add((shot.id, "subtitle"))
         storyboard.status = "video_queued"
         db.add(task)
+        db.flush()
+        _add_video_task_event(
+            db,
+            task=task,
+            event_type="video_task_queued",
+            message="视频导出任务已创建。",
+            payload={"storyboard_id": storyboard.id, "shot_count": len(storyboard.shots)},
+        )
         db.commit()
         db.refresh(task)
         return _video_task_out(task)
@@ -648,6 +650,13 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
             task.storyboard.status = "video_completed"
         elif task.task_status == "failed":
             task.storyboard.status = "video_failed"
+        _add_video_task_event(
+            db,
+            task=task,
+            event_type=f"video_task_{task.task_status}",
+            message=f"视频任务状态已更新为 {task.task_status}。",
+            payload={"output_uri": task.output_uri, "progress": payload.progress},
+        )
         db.commit()
         db.refresh(task)
         return _video_task_out(task)
@@ -932,6 +941,13 @@ def _draft_version_or_404(db: Session, project_id: int, draft_version_id: int) -
     return draft
 
 
+def _batch_job_or_404(db: Session, project_id: int, job_id: int) -> BatchGenerationJob:
+    job = db.scalar(select(BatchGenerationJob).where(BatchGenerationJob.project_id == project_id, BatchGenerationJob.id == job_id))
+    if job is None:
+        raise HTTPException(status_code=404, detail="批量任务不存在。")
+    return job
+
+
 def _chapter_outline_or_404(db: Session, project_id: int, outline_id: int) -> ChapterOutline:
     outline = db.scalar(select(ChapterOutline).where(ChapterOutline.project_id == project_id, ChapterOutline.id == outline_id))
     if outline is None:
@@ -944,6 +960,26 @@ def _storyboard_or_404(db: Session, project_id: int, storyboard_id: int) -> Stor
     if storyboard is None:
         raise HTTPException(status_code=404, detail="分镜稿不存在。")
     return storyboard
+
+
+def _add_video_task_event(
+    db: Session,
+    *,
+    task: VideoTask,
+    event_type: str,
+    message: str,
+    payload: dict,
+) -> None:
+    db.add(
+        TaskEvent(
+            project_id=task.project_id,
+            storyboard_id=task.storyboard_id,
+            video_task=task,
+            event_type=event_type,
+            message=message,
+            payload_json=json_dumps(payload),
+        )
+    )
 
 
 def _renumber_storyboard_shots(storyboard: Storyboard) -> None:

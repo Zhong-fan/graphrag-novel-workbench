@@ -868,6 +868,18 @@ async function submitRetryBatch(jobId: number) {
   if (!error.value) workshopMode.value = "drafts";
 }
 
+async function submitPauseBatch(jobId: number) {
+  await store.pauseBatchGeneration(jobId);
+}
+
+async function submitResumeBatch(jobId: number) {
+  await store.resumeBatchGeneration(jobId);
+}
+
+async function submitCancelBatch(jobId: number) {
+  await store.cancelBatchGeneration(jobId);
+}
+
 async function submitCreateStoryboard(payload: { novel_chapter_ids: number[]; title: string }) {
   await store.createStoryboard(payload);
 }
@@ -1356,6 +1368,9 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               @restore-plan-version="submitRestorePlanVersion"
               @batch-generate="submitBatchGeneration"
               @retry-batch="submitRetryBatch"
+              @pause-batch="submitPauseBatch"
+              @resume-batch="submitResumeBatch"
+              @cancel-batch="submitCancelBatch"
               @open-novel="openNovelForLongform"
               @create-storyboard="submitCreateStoryboard"
               @revise-draft="submitReviseDraft"

@@ -77,6 +77,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
   const success = ref("");
 
   let generationProgressTimer: number | null = null;
+  let longformPollingTimer: number | null = null;
+  let longformPollingProjectId: number | null = null;
 
   const isAuthenticated = computed(() => Boolean(token.value && currentUser.value));
 
@@ -100,6 +102,37 @@ export const useWorkbenchStore = defineStore("workbench", () => {
           // The main generate request owns user-facing errors.
         });
     }, 1500);
+  }
+
+  function hasActiveLongformJobs() {
+    const hasActiveBatchJob = longformState.value.batch_jobs.some((job) =>
+      ["queued", "retry_queued", "running", "pause_requested", "cancel_requested"].includes(job.job_status),
+    );
+    const hasActiveStoryboardJob = longformState.value.storyboards.some((storyboard) => ["queued", "running"].includes(storyboard.status));
+    const hasActiveVideoTask = longformState.value.video_tasks.some((task) => ["queued", "running"].includes(task.task_status));
+    return hasActiveBatchJob || hasActiveStoryboardJob || hasActiveVideoTask;
+  }
+
+  function stopLongformPolling() {
+    if (longformPollingTimer !== null) {
+      window.clearInterval(longformPollingTimer);
+      longformPollingTimer = null;
+    }
+    longformPollingProjectId = null;
+  }
+
+  function startLongformPolling(projectId: number) {
+    if (longformPollingTimer !== null && longformPollingProjectId === projectId) return;
+    stopLongformPolling();
+    longformPollingProjectId = projectId;
+    longformPollingTimer = window.setInterval(() => {
+      if (!token.value) return;
+      void loadLongformState(projectId, { silent: true }).then(() => {
+        if (!hasActiveLongformJobs()) {
+          stopLongformPolling();
+        }
+      });
+    }, 2500);
   }
 
   function syncProjectSummary(project: Project) {
@@ -188,6 +221,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     activeProject.value = null;
     currentGeneration.value = null;
     void refreshCaptcha();
+    stopLongformPolling();
     success.value = "已退出登录。";
     error.value = "";
   }
@@ -746,6 +780,11 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     if (!targetProjectId) return;
     try {
       longformState.value = await api.longformState(token.value, targetProjectId);
+      if (hasActiveLongformJobs()) {
+        startLongformPolling(targetProjectId);
+      } else {
+        stopLongformPolling();
+      }
     } catch (err) {
       if (!options.silent) {
         error.value = err instanceof Error ? err.message : "加载长篇流水线失败。";
@@ -834,7 +873,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       const job = await api.runBatchGeneration(token.value, activeProject.value.project.id, payload);
       await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
       await loadLongformState(activeProject.value.project.id);
-      success.value = "批量正文生成完成。";
+      startLongformPolling(activeProject.value.project.id);
+      success.value = "批量正文生成任务已创建。";
       return job;
     } catch (err) {
       error.value = err instanceof Error ? err.message : "批量正文生成失败。";
@@ -853,10 +893,66 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       const job = await api.retryBatchGeneration(token.value, activeProject.value.project.id, jobId);
       await selectProject(activeProject.value.project.id, { showLoading: false, silent: true });
       await loadLongformState(activeProject.value.project.id);
+      startLongformPolling(activeProject.value.project.id);
       success.value = "批量任务已重试。";
       return job;
     } catch (err) {
       error.value = err instanceof Error ? err.message : "重试批量任务失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function pauseBatchGeneration(jobId: number) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const job = await api.pauseBatchGeneration(token.value, activeProject.value.project.id, jobId);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "批量任务已请求暂停。";
+      return job;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "暂停批量任务失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function resumeBatchGeneration(jobId: number) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const job = await api.resumeBatchGeneration(token.value, activeProject.value.project.id, jobId);
+      await loadLongformState(activeProject.value.project.id);
+      startLongformPolling(activeProject.value.project.id);
+      success.value = "批量任务已恢复。";
+      return job;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "恢复批量任务失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function cancelBatchGeneration(jobId: number) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const job = await api.cancelBatchGeneration(token.value, activeProject.value.project.id, jobId);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "批量任务已请求取消。";
+      return job;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "取消批量任务失败。";
       return null;
     } finally {
       loading.value = false;
@@ -871,7 +967,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     try {
       const storyboard = await api.createStoryboard(token.value, activeProject.value.project.id, payload);
       await loadLongformState(activeProject.value.project.id);
-      success.value = "分镜短片方案已生成。";
+      startLongformPolling(activeProject.value.project.id);
+      success.value = "分镜生成任务已创建。";
       return storyboard;
     } catch (err) {
       error.value = err instanceof Error ? err.message : "生成分镜失败。";
@@ -926,7 +1023,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     try {
       const task = await api.createVideoTask(token.value, activeProject.value.project.id, storyboardId);
       await loadLongformState(activeProject.value.project.id);
-      success.value = "视频导出任务已创建。";
+      startLongformPolling(activeProject.value.project.id);
+      success.value = "视频生产任务已创建。";
       return task;
     } catch (err) {
       error.value = err instanceof Error ? err.message : "创建视频任务失败。";
@@ -1101,6 +1199,9 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     restoreSeriesPlanVersion,
     runBatchGeneration,
     retryBatchGeneration,
+    pauseBatchGeneration,
+    resumeBatchGeneration,
+    cancelBatchGeneration,
     createStoryboard,
     reviseDraftVersion,
     canonicalizeDraftVersion,

@@ -13,6 +13,8 @@ NOVEL_PROJECT_TITLE_MIGRATION = "20260510_0002_novel_project_titles"
 PROJECT_REFERENCE_WORK_FIELDS_MIGRATION = "20260511_0003_project_reference_work_fields"
 GENERATION_RUN_MEDIUMTEXT_MIGRATION = "20260512_0004_generation_run_mediumtext"
 LONGFORM_PIPELINE_SCHEMA_MIGRATION = "20260515_0005_longform_pipeline_schema"
+LONGFORM_BATCH_QUEUE_SCHEMA_MIGRATION = "20260516_0006_longform_batch_queue_schema"
+LONGFORM_ASYNC_METADATA_SCHEMA_MIGRATION = "20260516_0007_longform_async_metadata_schema"
 
 
 settings = load_settings()
@@ -75,6 +77,18 @@ def _migrate_schema() -> None:
             LONGFORM_PIPELINE_SCHEMA_MIGRATION,
             "Longform planning, revision, batch generation, and storyboard pipeline tables",
             _migrate_longform_pipeline_schema,
+        )
+        _run_schema_migration(
+            connection,
+            LONGFORM_BATCH_QUEUE_SCHEMA_MIGRATION,
+            "Longform DB-backed batch generation chapter tasks and task events",
+            _migrate_longform_batch_queue_schema,
+        )
+        _run_schema_migration(
+            connection,
+            LONGFORM_ASYNC_METADATA_SCHEMA_MIGRATION,
+            "Longform async worker metadata for batch and storyboard jobs",
+            _migrate_longform_async_metadata_schema,
         )
 
 
@@ -534,6 +548,9 @@ def _migrate_longform_pipeline_schema(connection) -> None:
                     job_status VARCHAR(40) NOT NULL DEFAULT 'pending',
                     current_chapter_no INTEGER NULL,
                     result_summary_json MEDIUMTEXT NOT NULL,
+                    worker_id VARCHAR(120) NOT NULL DEFAULT '',
+                    worker_started_at DATETIME NULL,
+                    last_heartbeat_at DATETIME NULL,
                     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
@@ -552,6 +569,10 @@ def _migrate_longform_pipeline_schema(connection) -> None:
                     source_chapter_ids_json TEXT NOT NULL,
                     status VARCHAR(40) NOT NULL DEFAULT 'draft',
                     summary TEXT NOT NULL,
+                    worker_id VARCHAR(120) NOT NULL DEFAULT '',
+                    worker_started_at DATETIME NULL,
+                    last_heartbeat_at DATETIME NULL,
+                    error_message TEXT NOT NULL,
                     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
@@ -618,6 +639,120 @@ def _migrate_longform_pipeline_schema(connection) -> None:
                 """
             )
         )
+
+
+def _migrate_longform_batch_queue_schema(connection) -> None:
+    tables = _table_names()
+    if "batch_generation_jobs" not in tables:
+        return
+
+    job_columns = _column_names("batch_generation_jobs")
+    if "worker_id" not in job_columns:
+        connection.execute(text("ALTER TABLE batch_generation_jobs ADD COLUMN worker_id VARCHAR(120) NOT NULL DEFAULT ''"))
+    if "worker_started_at" not in job_columns:
+        connection.execute(text("ALTER TABLE batch_generation_jobs ADD COLUMN worker_started_at DATETIME NULL"))
+    if "last_heartbeat_at" not in job_columns:
+        connection.execute(text("ALTER TABLE batch_generation_jobs ADD COLUMN last_heartbeat_at DATETIME NULL"))
+
+    if "batch_generation_chapter_tasks" not in tables:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE batch_generation_chapter_tasks (
+                    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+                    job_id INTEGER NOT NULL,
+                    chapter_outline_id INTEGER NOT NULL,
+                    chapter_no INTEGER NOT NULL,
+                    status VARCHAR(40) NOT NULL DEFAULT 'queued',
+                    draft_version_id INTEGER NULL,
+                    generation_run_id INTEGER NULL,
+                    error_message TEXT NOT NULL,
+                    started_at DATETIME NULL,
+                    finished_at DATETIME NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_batch_generation_task_job_chapter UNIQUE (job_id, chapter_no)
+                )
+                """
+            )
+        )
+
+    if "task_events" not in tables:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE task_events (
+                    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+                    project_id INTEGER NOT NULL,
+                    job_id INTEGER NULL,
+                    storyboard_id INTEGER NULL,
+                    video_task_id INTEGER NULL,
+                    chapter_task_id INTEGER NULL,
+                    event_type VARCHAR(60) NOT NULL,
+                    message TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+    else:
+        event_columns = _column_names("task_events")
+        if "storyboard_id" not in event_columns:
+            connection.execute(text("ALTER TABLE task_events ADD COLUMN storyboard_id INTEGER NULL"))
+        if "video_task_id" not in event_columns:
+            connection.execute(text("ALTER TABLE task_events ADD COLUMN video_task_id INTEGER NULL"))
+        job_column = _column_specs("task_events").get("job_id")
+        if job_column is not None and not job_column.get("nullable", True):
+            connection.execute(text("ALTER TABLE task_events MODIFY COLUMN job_id INTEGER NULL"))
+
+    if "storyboards" in tables:
+        storyboard_columns = _column_names("storyboards")
+        if "worker_id" not in storyboard_columns:
+            connection.execute(text("ALTER TABLE storyboards ADD COLUMN worker_id VARCHAR(120) NOT NULL DEFAULT ''"))
+        if "worker_started_at" not in storyboard_columns:
+            connection.execute(text("ALTER TABLE storyboards ADD COLUMN worker_started_at DATETIME NULL"))
+        if "last_heartbeat_at" not in storyboard_columns:
+            connection.execute(text("ALTER TABLE storyboards ADD COLUMN last_heartbeat_at DATETIME NULL"))
+        if "error_message" not in storyboard_columns:
+            connection.execute(text("ALTER TABLE storyboards ADD COLUMN error_message TEXT NULL"))
+            connection.execute(text("UPDATE storyboards SET error_message = '' WHERE error_message IS NULL"))
+            connection.execute(text("ALTER TABLE storyboards MODIFY COLUMN error_message TEXT NOT NULL"))
+
+
+def _migrate_longform_async_metadata_schema(connection) -> None:
+    tables = _table_names()
+    if "batch_generation_jobs" in tables:
+        job_columns = _column_names("batch_generation_jobs")
+        if "worker_id" not in job_columns:
+            connection.execute(text("ALTER TABLE batch_generation_jobs ADD COLUMN worker_id VARCHAR(120) NOT NULL DEFAULT ''"))
+        if "worker_started_at" not in job_columns:
+            connection.execute(text("ALTER TABLE batch_generation_jobs ADD COLUMN worker_started_at DATETIME NULL"))
+        if "last_heartbeat_at" not in job_columns:
+            connection.execute(text("ALTER TABLE batch_generation_jobs ADD COLUMN last_heartbeat_at DATETIME NULL"))
+
+    if "task_events" in tables:
+        event_columns = _column_names("task_events")
+        if "storyboard_id" not in event_columns:
+            connection.execute(text("ALTER TABLE task_events ADD COLUMN storyboard_id INTEGER NULL"))
+        if "video_task_id" not in event_columns:
+            connection.execute(text("ALTER TABLE task_events ADD COLUMN video_task_id INTEGER NULL"))
+        job_column = _column_specs("task_events").get("job_id")
+        if job_column is not None and not job_column.get("nullable", True):
+            connection.execute(text("ALTER TABLE task_events MODIFY COLUMN job_id INTEGER NULL"))
+
+    if "storyboards" in tables:
+        storyboard_columns = _column_names("storyboards")
+        if "worker_id" not in storyboard_columns:
+            connection.execute(text("ALTER TABLE storyboards ADD COLUMN worker_id VARCHAR(120) NOT NULL DEFAULT ''"))
+        if "worker_started_at" not in storyboard_columns:
+            connection.execute(text("ALTER TABLE storyboards ADD COLUMN worker_started_at DATETIME NULL"))
+        if "last_heartbeat_at" not in storyboard_columns:
+            connection.execute(text("ALTER TABLE storyboards ADD COLUMN last_heartbeat_at DATETIME NULL"))
+        if "error_message" not in storyboard_columns:
+            connection.execute(text("ALTER TABLE storyboards ADD COLUMN error_message TEXT NULL"))
+            connection.execute(text("UPDATE storyboards SET error_message = '' WHERE error_message IS NULL"))
+            connection.execute(text("ALTER TABLE storyboards MODIFY COLUMN error_message TEXT NOT NULL"))
 
 
 def db_session() -> Session:

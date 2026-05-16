@@ -335,8 +335,41 @@ export interface BatchGenerationJob {
   job_status: string;
   current_chapter_no?: number | null;
   result_summary: Record<string, unknown>;
+  worker_id: string;
+  worker_started_at?: string | null;
+  last_heartbeat_at?: string | null;
+  chapter_tasks: BatchGenerationChapterTask[];
+  events: TaskEvent[];
   created_at: string;
   updated_at: string;
+}
+
+export interface BatchGenerationChapterTask {
+  id: number;
+  job_id: number;
+  chapter_outline_id: number;
+  chapter_no: number;
+  status: string;
+  draft_version_id?: number | null;
+  generation_run_id?: number | null;
+  error_message: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskEvent {
+  id: number;
+  project_id: number;
+  job_id?: number | null;
+  storyboard_id?: number | null;
+  video_task_id?: number | null;
+  chapter_task_id?: number | null;
+  event_type: string;
+  message: string;
+  payload: Record<string, unknown>;
+  created_at: string;
 }
 
 export interface StoryboardShot {
@@ -358,7 +391,12 @@ export interface Storyboard {
   source_chapter_ids: unknown[];
   status: string;
   summary: string;
+  worker_id: string;
+  worker_started_at?: string | null;
+  last_heartbeat_at?: string | null;
+  error_message: string;
   shots: StoryboardShot[];
+  events: TaskEvent[];
   created_at: string;
   updated_at: string;
 }
@@ -371,6 +409,7 @@ export interface VideoTask {
   output_uri: string;
   progress: Record<string, unknown>;
   error_message: string;
+  events: TaskEvent[];
   created_at: string;
   updated_at: string;
 }

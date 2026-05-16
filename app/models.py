@@ -124,6 +124,7 @@ class Project(Base, TimestampMixin):
         back_populates="project",
         cascade="all, delete-orphan",
     )
+    task_events: Mapped[list["TaskEvent"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     storyboards: Mapped[list["Storyboard"]] = relationship(back_populates="project", cascade="all, delete-orphan")
 
     @property
@@ -389,9 +390,61 @@ class BatchGenerationJob(Base, TimestampMixin):
     job_status: Mapped[str] = mapped_column(String(40), default="pending", nullable=False)
     current_chapter_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
     result_summary_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    worker_id: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    worker_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="batch_generation_jobs")
     series_plan: Mapped["SeriesPlan"] = relationship(back_populates="batch_generation_jobs")
+    chapter_tasks: Mapped[list["BatchGenerationChapterTask"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+    )
+    events: Mapped[list["TaskEvent"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+
+
+class BatchGenerationChapterTask(Base, TimestampMixin):
+    __tablename__ = "batch_generation_chapter_tasks"
+    __table_args__ = (UniqueConstraint("job_id", "chapter_no", name="uq_batch_generation_task_job_chapter"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("batch_generation_jobs.id"), nullable=True)
+    storyboard_id: Mapped[int | None] = mapped_column(ForeignKey("storyboards.id"), nullable=True)
+    chapter_outline_id: Mapped[int] = mapped_column(ForeignKey("chapter_outlines.id"), nullable=False)
+    chapter_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="queued", nullable=False)
+    draft_version_id: Mapped[int | None] = mapped_column(ForeignKey("draft_versions.id"), nullable=True)
+    generation_run_id: Mapped[int | None] = mapped_column(ForeignKey("generation_runs.id"), nullable=True)
+    error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    job: Mapped["BatchGenerationJob"] = relationship(back_populates="chapter_tasks")
+    chapter_outline: Mapped["ChapterOutline"] = relationship()
+    draft_version: Mapped["DraftVersion | None"] = relationship()
+    generation_run: Mapped["GenerationRun | None"] = relationship()
+    events: Mapped[list["TaskEvent"]] = relationship(back_populates="chapter_task")
+
+
+class TaskEvent(Base):
+    __tablename__ = "task_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("batch_generation_jobs.id"), nullable=True)
+    storyboard_id: Mapped[int | None] = mapped_column(ForeignKey("storyboards.id"), nullable=True)
+    video_task_id: Mapped[int | None] = mapped_column(ForeignKey("video_tasks.id"), nullable=True)
+    chapter_task_id: Mapped[int | None] = mapped_column(ForeignKey("batch_generation_chapter_tasks.id"), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    project: Mapped["Project"] = relationship(back_populates="task_events")
+    job: Mapped["BatchGenerationJob | None"] = relationship(back_populates="events")
+    storyboard: Mapped["Storyboard | None"] = relationship(back_populates="events")
+    video_task: Mapped["VideoTask | None"] = relationship(back_populates="events")
+    chapter_task: Mapped["BatchGenerationChapterTask | None"] = relationship(back_populates="events")
 
 
 class Storyboard(Base, TimestampMixin):
@@ -403,11 +456,16 @@ class Storyboard(Base, TimestampMixin):
     source_chapter_ids_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     status: Mapped[str] = mapped_column(String(40), default="draft", nullable=False)
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    worker_id: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    worker_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
 
     project: Mapped["Project"] = relationship(back_populates="storyboards")
     shots: Mapped[list["StoryboardShot"]] = relationship(back_populates="storyboard", cascade="all, delete-orphan")
     media_assets: Mapped[list["MediaAsset"]] = relationship(back_populates="storyboard")
     video_tasks: Mapped[list["VideoTask"]] = relationship(back_populates="storyboard")
+    events: Mapped[list["TaskEvent"]] = relationship(back_populates="storyboard")
 
 
 class StoryboardShot(Base):
@@ -458,6 +516,7 @@ class VideoTask(Base, TimestampMixin):
 
     project: Mapped["Project"] = relationship()
     storyboard: Mapped["Storyboard"] = relationship(back_populates="video_tasks")
+    events: Mapped[list["TaskEvent"]] = relationship(back_populates="video_task")
 
 
 class GenerationRun(Base, TimestampMixin):

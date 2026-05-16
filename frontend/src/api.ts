@@ -282,8 +282,25 @@ export const api = {
       token,
       body: JSON.stringify(payload),
     }),
+  batchGenerationJob: (token: string, projectId: number, jobId: number) =>
+    request<BatchGenerationJob>(`/api/projects/${projectId}/batch-generation/${jobId}`, { token }),
   retryBatchGeneration: (token: string, projectId: number, jobId: number) =>
     request<BatchGenerationJob>(`/api/projects/${projectId}/batch-generation/${jobId}/retry`, {
+      method: "POST",
+      token,
+    }),
+  pauseBatchGeneration: (token: string, projectId: number, jobId: number) =>
+    request<BatchGenerationJob>(`/api/projects/${projectId}/batch-generation/${jobId}/pause`, {
+      method: "POST",
+      token,
+    }),
+  resumeBatchGeneration: (token: string, projectId: number, jobId: number) =>
+    request<BatchGenerationJob>(`/api/projects/${projectId}/batch-generation/${jobId}/resume`, {
+      method: "POST",
+      token,
+    }),
+  cancelBatchGeneration: (token: string, projectId: number, jobId: number) =>
+    request<BatchGenerationJob>(`/api/projects/${projectId}/batch-generation/${jobId}/cancel`, {
       method: "POST",
       token,
     }),

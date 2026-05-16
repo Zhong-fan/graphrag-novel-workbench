@@ -72,12 +72,23 @@ MYSQL_DATABASE=chenflow_workbench
 
 AUTH_SECRET=change_me
 AUTH_EXP_HOURS=168
+
+CHENFLOW_IMAGE_API_KEY=
+CHENFLOW_IMAGE_BASE_URL=
+CHENFLOW_IMAGE_MODEL=
+CHENFLOW_IMAGE_SIZE=1024x1024
+CHENFLOW_TTS_API_KEY=
+CHENFLOW_TTS_BASE_URL=
+CHENFLOW_TTS_MODEL=
+CHENFLOW_TTS_VOICE=
+CHENFLOW_FFMPEG_PATH=ffmpeg
 ```
 
 说明：
 
 - embedding 配置目前仍保留，是为了兼容现有配置结构；当前主流程不再依赖 GraphRAG 索引。
 - 配置加载优先读取 `CHENFLOW_*`，同时兼容旧的 `GRAPH_MVP_*` 变量名。
+- 视频生产需要图像生成、TTS 和本机 FFmpeg。图像接口按 OpenAI-compatible `POST {CHENFLOW_IMAGE_BASE_URL}/images/generations` 调用；TTS 按 `POST {CHENFLOW_TTS_BASE_URL}/audio/speech` 调用。以上 key/model 可先留空，创建视频任务后会失败并提示缺失配置。
 
 ### 3. 启动 MySQL
 
