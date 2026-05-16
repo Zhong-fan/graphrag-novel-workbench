@@ -4,6 +4,7 @@ import base64
 import json
 import mimetypes
 import subprocess
+import time
 import urllib.request
 from datetime import timedelta
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from .config import Settings
+from .jimeng_video_client import JimengVideoClient
 from .json_utils import json_dumps, json_loads_object
 from .models import MediaAsset, StoryboardShot, TaskEvent, VideoTask
 
@@ -34,6 +36,126 @@ class VideoRenderService:
         if not shots:
             raise RuntimeError("分镜稿没有镜头，无法生成视频。")
 
+        if self._jimeng_enabled():
+            return self._render_with_jimeng(db=db, task=task, shots=shots, output_dir=output_dir)
+        return self._render_with_local_pipeline(db=db, task=task, shots=shots, output_dir=output_dir)
+
+    def _render_with_jimeng(
+        self,
+        *,
+        db: Session,
+        task: VideoTask,
+        shots: list[StoryboardShot],
+        output_dir: Path,
+    ) -> VideoTask:
+        client = JimengVideoClient(
+            access_key=self.settings.jimeng_access_key,
+            secret_key=self.settings.jimeng_secret_key,
+            endpoint=self.settings.jimeng_endpoint,
+            region=self.settings.jimeng_region,
+            service=self.settings.jimeng_service,
+            req_key=self.settings.jimeng_req_key,
+        )
+        segment_paths: list[Path] = []
+        for shot in shots:
+            prompt = self._build_jimeng_prompt(shot)
+            self._set_progress(
+                task,
+                stage="jimeng_submit",
+                message=f"提交即梦 720P 镜头 {shot.shot_no} 视频任务。",
+                extra={
+                    "provider": "jimeng",
+                    "req_key": self.settings.jimeng_req_key,
+                    "shot_no": shot.shot_no,
+                    "frames": self.settings.jimeng_frames,
+                    "aspect_ratio": self.settings.jimeng_aspect_ratio,
+                },
+            )
+            self._add_event(
+                db,
+                task=task,
+                event_type="video_task_jimeng_submit",
+                message=f"提交即梦镜头 {shot.shot_no} 视频任务。",
+                payload={"shot_no": shot.shot_no, "req_key": self.settings.jimeng_req_key, "prompt": prompt},
+            )
+            db.commit()
+            jimeng_task_id, submit_response = client.submit_text_to_video(
+                prompt=prompt,
+                frames=self.settings.jimeng_frames,
+                aspect_ratio=self.settings.jimeng_aspect_ratio,
+            )
+            self._upsert_asset(
+                db,
+                task=task,
+                shot=shot,
+                asset_type="video",
+                uri="",
+                prompt=prompt,
+                status="running",
+                meta={
+                    "provider": "jimeng",
+                    "jimeng_task_id": jimeng_task_id,
+                    "submit_response": submit_response,
+                    "req_key": self.settings.jimeng_req_key,
+                },
+            )
+            self._set_progress(
+                task,
+                stage="jimeng_poll",
+                message=f"等待即梦镜头 {shot.shot_no} 生成完成。",
+                extra={"shot_no": shot.shot_no, "jimeng_task_id": jimeng_task_id},
+            )
+            db.commit()
+            video_url, result_response = self._wait_for_jimeng_result(client=client, task_id=jimeng_task_id)
+            segment_path = output_dir / f"segment-{shot.shot_no:03d}.mp4"
+            self._download_file(url=video_url, path=segment_path)
+            segment_paths.append(segment_path)
+            self._upsert_asset(
+                db,
+                task=task,
+                shot=shot,
+                asset_type="video",
+                uri=str(segment_path),
+                prompt=prompt,
+                status="completed",
+                meta={
+                    "provider": "jimeng",
+                    "jimeng_task_id": jimeng_task_id,
+                    "video_url": video_url,
+                    "result_response": result_response,
+                    "req_key": self.settings.jimeng_req_key,
+                },
+            )
+            self._add_event(
+                db,
+                task=task,
+                event_type="video_task_jimeng_segment_completed",
+                message=f"即梦镜头 {shot.shot_no} 视频生成完成。",
+                payload={"shot_no": shot.shot_no, "jimeng_task_id": jimeng_task_id, "segment_path": str(segment_path)},
+            )
+            db.commit()
+
+        self._set_progress(task, stage="compose", message="合成最终 MP4。", extra={"provider": "jimeng"})
+        self._add_event(db, task=task, event_type="video_task_compose", message="合成最终 MP4。")
+        db.commit()
+        final_path = self._concat_segments(segment_paths=segment_paths, output_dir=output_dir)
+        task.output_uri = str(final_path)
+        task.task_status = "completed"
+        task.storyboard.status = "video_completed"
+        self._set_progress(task, stage="completed", message="视频生产完成。", extra={"output_uri": task.output_uri})
+        self._add_event(db, task=task, event_type="video_task_completed", message="视频生产完成。", payload={"output_uri": task.output_uri})
+        db.commit()
+        db.refresh(task)
+        return task
+
+    def _render_with_local_pipeline(
+        self,
+        *,
+        db: Session,
+        task: VideoTask,
+        shots: list[StoryboardShot],
+        output_dir: Path,
+    ) -> VideoTask:
         segment_paths: list[Path] = []
         for shot in shots:
             self._set_progress(task, stage="image", message=f"生成镜头 {shot.shot_no} 图片。")
@@ -85,6 +207,7 @@ class VideoRenderService:
         final_path = self._concat_segments(segment_paths=segment_paths, output_dir=output_dir)
         task.output_uri = str(final_path)
         task.task_status = "completed"
+        task.storyboard.status = "video_completed"
         self._set_progress(task, stage="completed", message="视频生产完成。")
         self._add_event(db, task=task, event_type="video_task_completed", message="视频生产完成。", payload={"output_uri": task.output_uri})
         db.commit()
@@ -92,6 +215,20 @@ class VideoRenderService:
         return task
 
     def _require_config(self) -> None:
+        if self._jimeng_enabled():
+            missing = []
+            if not self.settings.jimeng_access_key:
+                missing.append("JIMENG_ACCESS_KEY")
+            if not self.settings.jimeng_secret_key:
+                missing.append("JIMENG_SECRET_KEY")
+            if not self.settings.ffmpeg_path:
+                missing.append("CHENFLOW_FFMPEG_PATH")
+            if missing:
+                raise RuntimeError("即梦视频生产配置缺失：" + "、".join(missing))
+            if self.settings.jimeng_frames not in {121, 241}:
+                raise RuntimeError("JIMENG_VIDEO_FRAMES 只能配置为 121（5秒）或 241（10秒）。")
+            return
+
         missing = []
         if not self.settings.image_api_key:
             missing.append("CHENFLOW_IMAGE_API_KEY")
@@ -109,6 +246,46 @@ class VideoRenderService:
             missing.append("CHENFLOW_TTS_VOICE")
         if missing:
             raise RuntimeError("视频生产配置缺失：" + "、".join(missing))
+
+    def _jimeng_enabled(self) -> bool:
+        return bool(self.settings.jimeng_access_key or self.settings.jimeng_secret_key)
+
+    def _build_jimeng_prompt(self, shot: StoryboardShot) -> str:
+        parts = [
+            shot.visual_prompt.strip(),
+            "镜头要求：画面稳定，主体一致，动作自然，电影感，720P，避免文字水印、字幕、logo。",
+        ]
+        narration = shot.narration_text.strip()
+        if narration:
+            parts.append(f"剧情信息：{narration}")
+        return "\n".join(part for part in parts if part).strip()[:780]
+
+    def _wait_for_jimeng_result(self, *, client: JimengVideoClient, task_id: str) -> tuple[str, dict[str, Any]]:
+        deadline = time.monotonic() + self.settings.jimeng_poll_timeout_seconds
+        last_response: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            result = client.get_result(task_id=task_id)
+            last_response = result.raw
+            if result.status == "done":
+                if result.video_url:
+                    return result.video_url, result.raw
+                raise RuntimeError(f"即梦任务已完成但没有返回 video_url：{task_id}")
+            if result.status in {"not_found", "expired"}:
+                raise RuntimeError(f"即梦任务状态异常：{result.status}，task_id={task_id}")
+            if result.status not in {"in_queue", "generating"}:
+                raise RuntimeError(f"即梦任务返回未知状态：{result.status}，task_id={task_id}")
+            time.sleep(self.settings.jimeng_poll_interval_seconds)
+        raise RuntimeError(f"即梦任务等待超时：task_id={task_id}, last_response={last_response}")
+
+    def _download_file(self, *, url: str, path: Path) -> None:
+        try:
+            with urllib.request.urlopen(url, timeout=180) as response:
+                content = response.read()
+        except Exception as exc:
+            raise RuntimeError(f"下载即梦视频失败：{exc}") from exc
+        if not content:
+            raise RuntimeError("下载即梦视频失败：返回空文件。")
+        path.write_bytes(content)
 
     def _generate_image(self, *, shot: StoryboardShot, output_dir: Path) -> Path:
         payload = {
@@ -268,9 +445,12 @@ class VideoRenderService:
         uri: str,
         prompt: str,
         status: str,
+        meta: dict[str, Any] | None = None,
     ) -> None:
         asset = next((item for item in task.storyboard.media_assets if item.shot_id == shot.id and item.asset_type == asset_type), None)
-        meta = {"video_task_id": task.id, "shot_no": shot.shot_no, "mime_type": mimetypes.guess_type(uri)[0] or ""}
+        asset_meta = {"video_task_id": task.id, "shot_no": shot.shot_no, "mime_type": mimetypes.guess_type(uri)[0] or ""}
+        if meta:
+            asset_meta.update(meta)
         if asset is None:
             asset = MediaAsset(
                 project_id=task.project_id,
@@ -280,19 +460,21 @@ class VideoRenderService:
                 uri=uri,
                 prompt=prompt,
                 status=status,
-                meta_json=json_dumps(meta),
+                meta_json=json_dumps(asset_meta),
             )
             db.add(asset)
             return
         asset.uri = uri
         asset.prompt = prompt
         asset.status = status
-        asset.meta_json = json_dumps({**json_loads_object(asset.meta_json), **meta})
+        asset.meta_json = json_dumps({**json_loads_object(asset.meta_json), **asset_meta})
 
-    def _set_progress(self, task: VideoTask, *, stage: str, message: str) -> None:
+    def _set_progress(self, task: VideoTask, *, stage: str, message: str, extra: dict[str, Any] | None = None) -> None:
         payload = json_loads_object(task.progress_json)
         payload["stage"] = stage
         payload["message"] = message
+        if extra:
+            payload.update(extra)
         task.progress_json = json_dumps(payload)
 
     def _add_event(self, db: Session, *, task: VideoTask, event_type: str, message: str, payload: dict[str, Any] | None = None) -> None:

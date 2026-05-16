@@ -39,6 +39,16 @@ class Settings:
     tts_model: str
     tts_voice: str
     ffmpeg_path: str
+    jimeng_access_key: str
+    jimeng_secret_key: str
+    jimeng_endpoint: str
+    jimeng_region: str
+    jimeng_service: str
+    jimeng_req_key: str
+    jimeng_aspect_ratio: str
+    jimeng_frames: int
+    jimeng_poll_interval_seconds: int
+    jimeng_poll_timeout_seconds: int
 
     @property
     def sqlalchemy_database_url(self) -> str:
@@ -218,4 +228,14 @@ def load_settings() -> Settings:
         tts_model=_resolve_first(("CHENFLOW_TTS_MODEL",), dotenv_values, "") or "",
         tts_voice=_resolve_first(("CHENFLOW_TTS_VOICE",), dotenv_values, "") or "",
         ffmpeg_path=_resolve_first(("CHENFLOW_FFMPEG_PATH",), dotenv_values, "ffmpeg") or "ffmpeg",
+        jimeng_access_key=_resolve_first(("JIMENG_ACCESS_KEY", "VOLCENGINE_ACCESS_KEY"), dotenv_values, "") or "",
+        jimeng_secret_key=_resolve_first(("JIMENG_SECRET_KEY", "VOLCENGINE_SECRET_KEY"), dotenv_values, "") or "",
+        jimeng_endpoint=_resolve_first(("JIMENG_ENDPOINT",), dotenv_values, "https://visual.volcengineapi.com") or "https://visual.volcengineapi.com",
+        jimeng_region=_resolve_first(("JIMENG_REGION",), dotenv_values, "cn-north-1") or "cn-north-1",
+        jimeng_service=_resolve_first(("JIMENG_SERVICE",), dotenv_values, "cv") or "cv",
+        jimeng_req_key=_resolve_first(("JIMENG_VIDEO_REQ_KEY",), dotenv_values, "jimeng_t2v_v30") or "jimeng_t2v_v30",
+        jimeng_aspect_ratio=_resolve_first(("JIMENG_VIDEO_ASPECT_RATIO",), dotenv_values, "16:9") or "16:9",
+        jimeng_frames=_parse_positive_int(_resolve_first(("JIMENG_VIDEO_FRAMES",), dotenv_values), 121),
+        jimeng_poll_interval_seconds=_parse_positive_int(_resolve_first(("JIMENG_POLL_INTERVAL_SECONDS",), dotenv_values), 10),
+        jimeng_poll_timeout_seconds=_parse_positive_int(_resolve_first(("JIMENG_POLL_TIMEOUT_SECONDS",), dotenv_values), 900),
     )
