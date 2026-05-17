@@ -46,6 +46,9 @@ import type {
   UpdateChapterOutlinePayload,
   UpdateMediaAssetPayload,
   GenerateCharacterTurnaroundPayload,
+  GenerateVoicePayload,
+  GenerateAudioScriptsPayload,
+  VideoProductionPreflightPayload,
   UpdateStoryboardShotPayload,
   CreateStoryboardShotPayload,
   ReorderStoryboardShotsPayload,
@@ -365,6 +368,35 @@ export const api = {
     }),
   generateCharacterTurnaround: (token: string, projectId: number, payload: GenerateCharacterTurnaroundPayload) =>
     request<MediaAsset>(`/api/projects/${projectId}/visual-assets/character-turnaround`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  generateShotFirstFrame: (token: string, projectId: number, storyboardId: number, shotId: number) =>
+    request<MediaAsset>(`/api/projects/${projectId}/storyboards/${storyboardId}/shots/${shotId}/first-frame`, {
+      method: "POST",
+      token,
+    }),
+  generateStoryboardVoice: (token: string, projectId: number, storyboardId: number, payload: GenerateVoicePayload) =>
+    request<MediaAsset[]>(`/api/projects/${projectId}/storyboards/${storyboardId}/voice-tasks`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  generateStoryboardAudioScripts: (token: string, projectId: number, storyboardId: number, payload: GenerateAudioScriptsPayload) =>
+    request<Storyboard>(`/api/projects/${projectId}/storyboards/${storyboardId}/audio-scripts`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  generateShotVoice: (token: string, projectId: number, storyboardId: number, shotId: number, payload: GenerateVoicePayload) =>
+    request<MediaAsset>(`/api/projects/${projectId}/storyboards/${storyboardId}/shots/${shotId}/voice`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  prepareVideoProduction: (token: string, projectId: number, storyboardId: number, payload: VideoProductionPreflightPayload) =>
+    request<LongformState>(`/api/projects/${projectId}/storyboards/${storyboardId}/video-production/preflight`, {
       method: "POST",
       token,
       body: JSON.stringify(payload),

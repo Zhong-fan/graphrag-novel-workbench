@@ -111,7 +111,13 @@ class StoryboardJobService:
         storyboard.status = "running"
         storyboard.error_message = ""
         self._touch_worker(storyboard, started=True)
-        self._add_event(db, storyboard=storyboard, event_type="storyboard_started", message="分镜生成开始。")
+        self._add_event(
+            db,
+            storyboard=storyboard,
+            event_type="storyboard_started",
+            message="分镜生成开始。",
+            payload={"chapter_count": len(chapters)},
+        )
         db.commit()
 
         try:
@@ -122,6 +128,14 @@ class StoryboardJobService:
             )
             storyboard.title = str(generated.get("title") or storyboard.title).strip()
             storyboard.summary = str(generated.get("summary") or "").strip()
+            self._touch_worker(storyboard)
+            self._add_event(
+                db,
+                storyboard=storyboard,
+                event_type="storyboard_shots_parsed",
+                message="分镜内容已返回，正在整理镜头。",
+                payload={"raw_shot_count": len(ensure_list(generated.get("shots")))},
+            )
             shot_count = self._replace_shots(db, storyboard=storyboard, shots=ensure_list(generated.get("shots")))
             if shot_count <= 0:
                 raise RuntimeError("分镜模型没有返回可用镜头。")
@@ -185,6 +199,7 @@ class StoryboardJobService:
                     visual_prompt=str(shot_payload.get("visual_prompt") or "").strip(),
                     character_refs_json=json_dumps(ensure_list(shot_payload.get("character_refs"))),
                     scene_refs_json=json_dumps(ensure_list(shot_payload.get("scene_refs"))),
+                    meta_json=json_dumps({"audio_script": self._normalize_audio_script(shot_payload.get("audio_script"))}),
                     duration_seconds=float(shot_payload.get("duration_seconds") or 4),
                     status="draft",
                 )
@@ -192,6 +207,34 @@ class StoryboardJobService:
             created_count += 1
         db.flush()
         return created_count
+
+    def _normalize_audio_script(self, value: Any) -> dict[str, Any]:
+        payload = value if isinstance(value, dict) else {}
+        dialogues = []
+        for item in ensure_list(payload.get("dialogues")):
+            if not isinstance(item, dict):
+                continue
+            line = str(item.get("line") or "").strip()
+            if not line:
+                continue
+            dialogues.append(
+                {
+                    "character_name": str(item.get("character_name") or "").strip(),
+                    "character_card_id": item.get("character_card_id") if isinstance(item.get("character_card_id"), int) else None,
+                    "line": line,
+                    "emotion": str(item.get("emotion") or "novel_dialog").strip(),
+                    "voice_profile": str(item.get("voice_profile") or "").strip(),
+                    "start_hint": item.get("start_hint"),
+                    "duration_hint": item.get("duration_hint"),
+                }
+            )
+        return {
+            "dialogues": dialogues,
+            "narration": str(payload.get("narration") or "").strip(),
+            "subtitle_text": str(payload.get("subtitle_text") or "").strip(),
+            "music_cue": str(payload.get("music_cue") or "").strip(),
+            "sound_effects": [str(item).strip() for item in ensure_list(payload.get("sound_effects")) if str(item).strip()],
+        }
 
     def _add_event(
         self,

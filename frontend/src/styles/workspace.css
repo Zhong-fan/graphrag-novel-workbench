@@ -224,6 +224,44 @@
   background: #f7f8fb;
 }
 
+.asset-preview--audio {
+  max-height: none;
+  padding: 12px;
+  background: #f7f8fb;
+}
+
+.library-section-stack {
+  display: grid;
+  gap: 22px;
+}
+
+.library-section-block {
+  display: grid;
+  gap: 14px;
+}
+
+.library-chip-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.library-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.24rem 0.58rem;
+  border-radius: 999px;
+  background: rgba(255, 239, 244, 0.9);
+  color: color-mix(in oklab, var(--rose-strong) 68%, var(--ink));
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+.library-chip--soft {
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--ink-soft);
+}
+
 @media (max-width: 760px) {
   .shell--workspace {
     width: min(100vw - 16px, 100%);

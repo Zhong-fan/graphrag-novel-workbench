@@ -133,6 +133,11 @@ class CharacterCardCreateRequest(BaseModel):
     personality: str = Field(default="", max_length=2000)
     story_role: str = Field(default="", max_length=120)
     background: str = Field(default="", max_length=4000)
+    voice_provider: str = Field(default="", max_length=80)
+    voice_speaker: str = Field(default="", max_length=120)
+    voice_style: str = Field(default="", max_length=120)
+    voice_speed: float = Field(default=1.0, ge=0.25, le=4.0)
+    voice_pitch: float = Field(default=0.0, ge=-1.0, le=1.0)
 
 
 class CharacterCardUpdateRequest(CharacterCardCreateRequest):
@@ -147,6 +152,11 @@ class CharacterCardOut(BaseModel):
     personality: str
     story_role: str
     background: str
+    voice_provider: str
+    voice_speaker: str
+    voice_style: str
+    voice_speed: float
+    voice_pitch: float
     created_at: datetime
     updated_at: datetime
 
@@ -675,6 +685,7 @@ class StoryboardShotOut(BaseModel):
     visual_prompt: str
     character_refs: list[Any]
     scene_refs: list[Any]
+    audio_script: dict[str, Any]
     duration_seconds: float
     status: str
 
@@ -686,6 +697,7 @@ class StoryboardOut(BaseModel):
     source_chapter_ids: list[Any]
     status: str
     summary: str
+    progress: dict[str, Any] = {}
     worker_id: str = ""
     worker_started_at: datetime | None = None
     last_heartbeat_at: datetime | None = None
@@ -701,6 +713,7 @@ class UpdateStoryboardShotRequest(BaseModel):
     visual_prompt: str = Field(default="", max_length=8000)
     character_refs: list[Any] = []
     scene_refs: list[Any] = []
+    audio_script: dict[str, Any] = {}
     duration_seconds: float = Field(default=4, ge=0.5, le=60)
     status: str = Field(default="draft", max_length=40)
 
@@ -737,6 +750,37 @@ class GenerateCharacterTurnaroundRequest(BaseModel):
     character_card_id: int = Field(..., ge=1)
     chapter_no: int | None = Field(default=None, ge=1, le=10000)
     prompt_note: str = Field(default="", max_length=2000)
+
+
+class GenerateShotFirstFrameRequest(BaseModel):
+    shot_id: int = Field(..., ge=1)
+
+
+class GenerateVoiceRequest(BaseModel):
+    voice_profile: str = Field(default="", max_length=120)
+    provider: str = Field(default="", max_length=80)
+    voice_role: str = Field(default="narrator", max_length=40)
+    character_card_id: int | None = Field(default=None, ge=1)
+    dialogue_text: str = Field(default="", max_length=8000)
+    speed: float = Field(default=1.0, ge=0.25, le=4.0)
+    emotion: str = Field(default="", max_length=80)
+    text_override: str = Field(default="", max_length=8000)
+
+
+class GenerateAudioScriptsRequest(BaseModel):
+    dialogue_density: str = Field(default="normal", max_length=40)
+    narration_policy: str = Field(default="minimal", max_length=40)
+    music_policy: str = Field(default="cue_only", max_length=40)
+    sound_effect_policy: str = Field(default="cue_only", max_length=40)
+
+
+class VideoProductionPreflightRequest(BaseModel):
+    generate_character_turnarounds: bool = True
+    generate_audio_scripts: bool = True
+    refresh_audio_scripts: bool = False
+    generate_dialogue_audio: bool = True
+    create_video_task: bool = True
+    fallback_voice_profile: str = Field(default="", max_length=120)
 
 
 class VideoTaskOut(BaseModel):

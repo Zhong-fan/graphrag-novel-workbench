@@ -203,6 +203,9 @@ def _task_event_out(event: TaskEvent) -> TaskEventOut:
 
 
 def _storyboard_shot_out(shot: StoryboardShot) -> StoryboardShotOut:
+    meta = json_loads_object(shot.meta_json)
+    audio_script = meta.get("audio_script") if isinstance(meta.get("audio_script"), dict) else {}
+    audio_script = {**audio_script, "audio_script_locked": bool(audio_script.get("audio_script_locked"))}
     return StoryboardShotOut(
         id=shot.id,
         storyboard_id=shot.storyboard_id,
@@ -211,6 +214,7 @@ def _storyboard_shot_out(shot: StoryboardShot) -> StoryboardShotOut:
         visual_prompt=shot.visual_prompt,
         character_refs=json_loads_list(shot.character_refs_json),
         scene_refs=json_loads_list(shot.scene_refs_json),
+        audio_script=audio_script,
         duration_seconds=shot.duration_seconds,
         status=shot.status,
     )
@@ -225,6 +229,7 @@ def _storyboard_out(storyboard: Storyboard) -> StoryboardOut:
         source_chapter_ids=json_loads_list(storyboard.source_chapter_ids_json),
         status=storyboard.status,
         summary=storyboard.summary,
+        progress=_storyboard_progress(storyboard, events),
         worker_id=storyboard.worker_id,
         worker_started_at=storyboard.worker_started_at,
         last_heartbeat_at=storyboard.last_heartbeat_at,
@@ -234,6 +239,38 @@ def _storyboard_out(storyboard: Storyboard) -> StoryboardOut:
         created_at=storyboard.created_at,
         updated_at=storyboard.updated_at,
     )
+
+
+def _storyboard_progress(storyboard: Storyboard, events: list[TaskEvent]) -> dict[str, Any]:
+    latest_event = events[-1] if events else None
+    latest_payload = json_loads_object(latest_event.payload_json) if latest_event is not None else {}
+    preflight_event = next((item for item in reversed(events) if item.event_type == "storyboard_preflight_completed"), None)
+    preflight_summary = json_loads_object(preflight_event.payload_json) if preflight_event is not None else {}
+    shot_count = len(storyboard.shots)
+    source_chapter_ids = json_loads_list(storyboard.source_chapter_ids_json)
+    last_event_type = latest_event.event_type if latest_event is not None else ""
+    failure_stage = "storyboard_generate" if storyboard.status == "failed" else ""
+    current_step = ""
+    if last_event_type == "storyboard_started":
+        current_step = "storyboard_generate"
+    elif last_event_type == "storyboard_shots_parsed":
+        current_step = "storyboard_parse"
+    elif last_event_type == "storyboard_completed":
+        current_step = "storyboard_done"
+    return {
+        "stage": storyboard.status,
+        "current_step": current_step,
+        "failure_stage": failure_stage,
+        "status": storyboard.status,
+        "source_chapter_count": len(source_chapter_ids),
+        "shot_count": shot_count,
+        "last_event_type": last_event_type,
+        "last_event_message": latest_event.message if latest_event is not None else "",
+        "last_event_payload": latest_payload,
+        "preflight_summary": preflight_summary,
+        "last_updated_at": storyboard.last_heartbeat_at or storyboard.updated_at,
+        "error_message": storyboard.error_message or "",
+    }
 
 
 def _video_task_out(task: VideoTask) -> VideoTaskOut:

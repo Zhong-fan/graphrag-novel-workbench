@@ -39,7 +39,7 @@ class StoryboardService:
         )
         system_prompt = dedent(
             """
-            你是小说读后短片分镜导演。请把已定稿章节转成图像驱动、轻运镜、旁白配字幕的短片分镜。
+            你是小说视频化分镜导演。请把已定稿章节转成图像驱动、轻运镜、角色对白驱动的短片分镜。
             输出必须是严格 JSON，不要输出 Markdown。
             """
         ).strip()
@@ -67,6 +67,22 @@ class StoryboardService:
       "visual_prompt": "画面提示词，包含角色、场景、构图、光线、情绪",
       "character_refs": ["角色名"],
       "scene_refs": ["场景名"],
+      "audio_script": {{
+        "dialogues": [
+          {{
+            "character_name": "说话角色名",
+            "line": "从小说正文和当前镜头意图自动生成的角色对白",
+            "emotion": "novel_dialog|soft|sad|angry|hopeful|hesitant",
+            "voice_profile": "",
+            "start_hint": 0.2,
+            "duration_hint": 2.8
+          }}
+        ],
+        "narration": "可选旁白，能不用就留空",
+        "subtitle_text": "可用于字幕的压缩文本",
+        "music_cue": "音乐氛围提示，例如雨夜、钢琴、轻弦乐、压抑但温柔",
+        "sound_effects": ["雨声", "脚步声"]
+      }},
       "duration_seconds": 4
     }}
   ]
@@ -78,7 +94,10 @@ class StoryboardService:
 - 每个 visual_prompt 必须明确写出画面媒介、美术方向、角色外观、场景、构图、光影和色彩。
 - 必须遵守项目级视觉风格锁定；如果用户填写了作者/工作室画风参考，只借鉴可迁移的美术特征，不要复刻原作角色、剧情、专有名词或具体画面。
 - 不要改写章节既定事实。
-- 旁白简洁，适合短视频字幕。
+- 优先从小说正文、角色关系和镜头意图中生成自然角色对白；不要要求用户手动补对白。
+- 如果原文没有适合对白，可以用极短旁白或字幕补足信息。
+- `audio_script.dialogues` 必须只包含当前镜头内合理会说出口的话，不要把大段叙述硬改成台词。
+- `music_cue` 和 `sound_effects` 只写提示，不生成歌词、旋律名或受版权保护的曲名。
 """.strip()
         response = self.llm.generate(
             model=self.settings.utility_model,

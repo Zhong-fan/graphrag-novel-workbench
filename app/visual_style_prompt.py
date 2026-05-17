@@ -68,9 +68,10 @@ def build_visual_generation_prompt(
 ) -> str:
     parts = [
         build_visual_style_block(project),
+        _reference_constraint_block(shot),
         "镜头画面：",
         shot.visual_prompt.strip(),
-        "镜头生成要求：画面稳定，主体一致，动作自然，电影感，避免文字、水印、字幕、logo。",
+        "镜头生成要求：优先遵守镜头角色约束和场景约束，其次遵守项目级视觉风格；画面稳定，主体一致，动作自然，电影感，避免文字、水印、字幕、logo。",
     ]
     narration = shot.narration_text.strip()
     if include_narration and narration:
@@ -101,6 +102,59 @@ def build_character_visual_prompt(
         ]
     )
     return "\n".join(parts).strip()[:max_length]
+
+
+def _reference_constraint_block(shot: StoryboardShot) -> str:
+    character_refs = _normalize_refs(shot.character_refs_json)
+    scene_refs = _normalize_refs(shot.scene_refs_json)
+    lines: list[str] = []
+    if character_refs:
+        lines.append("镜头角色约束：")
+        for item in character_refs[:6]:
+            name = str(item.get("name") or item.get("character_name") or item.get("value") or "").strip()
+            role = str(item.get("story_role") or item.get("role") or "").strip()
+            look = str(item.get("appearance") or item.get("look") or item.get("description") or "").strip()
+            pieces = [piece for piece in [name, role, look] if piece]
+            if pieces:
+                lines.append(f"- {' / '.join(pieces)}")
+    if scene_refs:
+        lines.append("镜头场景约束：")
+        for item in scene_refs[:6]:
+            name = str(item.get("name") or item.get("scene_name") or item.get("value") or "").strip()
+            mood = str(item.get("mood") or item.get("lighting") or item.get("description") or "").strip()
+            props = str(item.get("props") or item.get("layout") or "").strip()
+            pieces = [piece for piece in [name, mood, props] if piece]
+            if pieces:
+                lines.append(f"- {' / '.join(pieces)}")
+    return "\n".join(lines).strip()
+
+
+def _normalize_refs(value: object) -> list[dict[str, object]]:
+    if isinstance(value, str):
+        try:
+            import json
+
+            parsed = json.loads(value)
+        except Exception:
+            return []
+        if isinstance(parsed, list):
+            normalized: list[dict[str, object]] = []
+            for item in parsed:
+                if isinstance(item, dict):
+                    normalized.append(item)
+                elif isinstance(item, str) and item.strip():
+                    normalized.append({"value": item.strip()})
+            return normalized
+        return []
+    if isinstance(value, list):
+        normalized: list[dict[str, object]] = []
+        for item in value:
+            if isinstance(item, dict):
+                normalized.append(item)
+            elif isinstance(item, str) and item.strip():
+                normalized.append({"value": item.strip()})
+        return normalized
+    return []
 
 
 def _clean_list(values: list[str]) -> list[str]:

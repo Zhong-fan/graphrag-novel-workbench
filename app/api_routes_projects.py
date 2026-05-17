@@ -439,6 +439,11 @@ def register_project_routes(router: APIRouter) -> None:
             personality=payload.personality.strip(),
             story_role=payload.story_role.strip(),
             background=payload.background.strip(),
+            voice_provider=payload.voice_provider.strip(),
+            voice_speaker=payload.voice_speaker.strip(),
+            voice_style=payload.voice_style.strip(),
+            voice_speed=payload.voice_speed,
+            voice_pitch=payload.voice_pitch,
         )
         db.add(card)
         db.commit()
@@ -461,6 +466,11 @@ def register_project_routes(router: APIRouter) -> None:
         card.personality = payload.personality.strip()
         card.story_role = payload.story_role.strip()
         card.background = payload.background.strip()
+        card.voice_provider = payload.voice_provider.strip()
+        card.voice_speaker = payload.voice_speaker.strip()
+        card.voice_style = payload.voice_style.strip()
+        card.voice_speed = payload.voice_speed
+        card.voice_pitch = payload.voice_pitch
         db.commit()
         db.refresh(card)
         return CharacterCardOut.model_validate(card)

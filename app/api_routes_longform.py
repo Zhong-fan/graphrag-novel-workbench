@@ -18,6 +18,7 @@ from .api_support_longform import (
     _video_task_out,
     _media_asset_out,
 )
+from .audio_script_service import AudioScriptService
 from .auth import get_current_user
 from .batch_generation_service import BatchGenerationService
 from .config import Settings
@@ -42,6 +43,10 @@ from .contracts import (
     UpdateMediaAssetRequest,
     MediaAssetOut,
     GenerateCharacterTurnaroundRequest,
+    GenerateShotFirstFrameRequest,
+    GenerateVoiceRequest,
+    GenerateAudioScriptsRequest,
+    VideoProductionPreflightRequest,
     CreateStoryboardShotRequest,
     ReorderStoryboardShotsRequest,
     UpdateVideoTaskRequest,
@@ -77,6 +82,7 @@ from .series_planning_service import SeriesPlanningService
 from .storyboard_job_service import StoryboardJobService
 from .visual_asset_service import VisualAssetService
 from .visual_style_prompt import build_visual_generation_prompt, project_visual_style_summary
+from .voice_service import VoiceService
 
 
 def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
@@ -636,6 +642,179 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         db.refresh(task)
         return _video_task_out(task)
 
+    @router.post("/api/projects/{project_id}/storyboards/{storyboard_id}/video-production/preflight", response_model=SeriesPlanningStateOut)
+    def prepare_video_production(
+        project_id: int,
+        storyboard_id: int,
+        payload: VideoProductionPreflightRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> SeriesPlanningStateOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        storyboard = _storyboard_or_404(db, project.id, storyboard_id)
+        preflight_summary: dict[str, Any] = {
+            "generated_character_turnarounds": [],
+            "skipped_locked_character_turnarounds": [],
+            "generated_audio_scripts": False,
+            "skipped_locked_audio_scripts": False,
+            "generated_dialogue_audio": 0,
+            "skipped_locked_dialogue_audio": 0,
+        }
+
+        if payload.generate_character_turnarounds:
+            turnaround_assets = db.scalars(
+                select(MediaAsset).where(MediaAsset.project_id == project.id, MediaAsset.asset_type == "character_turnaround")
+            ).all()
+            existing_turnarounds = {
+                json_loads_object(asset.meta_json).get("character_card_id")
+                for asset in turnaround_assets
+                if asset.status == "completed"
+            }
+            locked_turnarounds = {
+                json_loads_object(asset.meta_json).get("character_card_id")
+                for asset in turnaround_assets
+                if asset.status == "completed" and json_loads_object(asset.meta_json).get("locked") is True
+            }
+            for character in project.character_cards:
+                if character.deleted_at is not None:
+                    continue
+                if character.id in locked_turnarounds:
+                    preflight_summary["skipped_locked_character_turnarounds"].append(character.name)
+                    continue
+                if character.id in existing_turnarounds:
+                    continue
+                try:
+                    VisualAssetService(settings).generate_character_turnaround(
+                        db=db,
+                        project=project,
+                        character=character,
+                        chapter_no=None,
+                        prompt_note="视频生产前置资产：请生成角色三视图，保持项目视觉风格一致。",
+                    )
+                    preflight_summary["generated_character_turnarounds"].append(character.name)
+                except RuntimeError as exc:
+                    raise HTTPException(status_code=502, detail=f"生成 {character.name} 三视图失败：{exc}") from exc
+
+        if payload.generate_audio_scripts:
+            has_dialogues = any(
+                bool((json_loads_object(shot.meta_json).get("audio_script") or {}).get("dialogues"))
+                for shot in storyboard.shots
+            )
+            has_locked_scripts = any(
+                (
+                    json_loads_object(shot.meta_json).get("audio_script_locked") is True
+                    or (
+                        isinstance(json_loads_object(shot.meta_json).get("audio_script"), dict)
+                        and json_loads_object(shot.meta_json).get("audio_script", {}).get("audio_script_locked") is True
+                    )
+                )
+                for shot in storyboard.shots
+            )
+            if payload.refresh_audio_scripts or (not has_dialogues and not has_locked_scripts):
+                chapter_ids = [int(item) for item in json_loads_list(storyboard.source_chapter_ids_json) if str(item).isdigit()]
+                chapters = db.scalars(
+                    select(NovelChapter)
+                    .join(Novel, NovelChapter.novel_id == Novel.id)
+                    .where(
+                        Novel.owner_id == current_user.id,
+                        Novel.project_id == project.id,
+                        Novel.deleted_at.is_(None),
+                        NovelChapter.id.in_(chapter_ids),
+                    )
+                    .order_by(NovelChapter.chapter_no.asc())
+                ).all()
+                if not chapters:
+                    raise HTTPException(status_code=409, detail="分镜稿缺少可用于生成对白脚本的定稿章节。")
+                try:
+                    AudioScriptService(settings).generate_storyboard_audio_scripts(
+                        project=project,
+                        storyboard=storyboard,
+                        chapters=chapters,
+                    )
+                except RuntimeError as exc:
+                    db.rollback()
+                    raise HTTPException(status_code=502, detail=f"生成对白脚本失败：{exc}") from exc
+                db.commit()
+                db.refresh(storyboard)
+                preflight_summary["generated_audio_scripts"] = True
+            elif has_locked_scripts:
+                preflight_summary["skipped_locked_audio_scripts"] = True
+
+        if payload.generate_dialogue_audio:
+            before_dialogue_assets = db.scalars(
+                select(MediaAsset).where(
+                    MediaAsset.project_id == project.id,
+                    MediaAsset.storyboard_id == storyboard.id,
+                    MediaAsset.asset_type == "dialogue",
+                )
+            ).all()
+            locked_before = sum(
+                1
+                for asset in before_dialogue_assets
+                if asset.status == "completed" and json_loads_object(asset.meta_json).get("locked") is True
+            )
+            try:
+                generated_assets = VoiceService(settings).generate_storyboard_voice(
+                    db=db,
+                    project=project,
+                    storyboard=storyboard,
+                    voice_profile=payload.fallback_voice_profile.strip(),
+                    provider="",
+                    voice_role="dialogue",
+                )
+            except RuntimeError as exc:
+                db.rollback()
+                raise HTTPException(status_code=502, detail=f"生成角色对白音频失败：{exc}") from exc
+            db.commit()
+            db.refresh(storyboard)
+            preflight_summary["generated_dialogue_audio"] = len(generated_assets)
+            preflight_summary["skipped_locked_dialogue_audio"] = locked_before
+
+        if payload.create_video_task:
+            existing_task = db.scalar(
+                select(VideoTask)
+                .where(
+                    VideoTask.project_id == project.id,
+                    VideoTask.storyboard_id == storyboard.id,
+                    VideoTask.task_status.in_(("queued", "running")),
+                )
+                .order_by(VideoTask.created_at.desc())
+            )
+            if existing_task is None:
+                service = MediaPipelineService()
+                task = VideoTask(
+                    project_id=project.id,
+                    storyboard=storyboard,
+                    task_status="queued",
+                    output_uri="",
+                    progress_json=service.task_progress_json(storyboard=storyboard),
+                    error_message="",
+                )
+                db.add(task)
+                db.flush()
+                _add_video_task_event(
+                    db,
+                    task=task,
+                    event_type="video_task_queued",
+                    message="视频导出任务已创建。",
+                    payload={"storyboard_id": storyboard.id, "shot_count": len(storyboard.shots), "source": "preflight"},
+                )
+                storyboard.status = "video_queued"
+                db.commit()
+
+        db.add(
+            TaskEvent(
+                project_id=project.id,
+                storyboard=storyboard,
+                event_type="storyboard_preflight_completed",
+                message="视频生产前置检查完成。",
+                payload_json=json_dumps(preflight_summary),
+            )
+        )
+        db.commit()
+
+        return _state_out(db, project)
+
     @router.put("/api/projects/{project_id}/video-tasks/{task_id}", response_model=VideoTaskOut)
     def update_video_task(
         project_id: int,
@@ -692,6 +871,7 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
                 visual_prompt=payload.visual_prompt.strip(),
                 character_refs_json=json_dumps(payload.character_refs),
                 scene_refs_json=json_dumps(payload.scene_refs),
+                meta_json=json_dumps({"audio_script": _normalize_audio_script_payload(payload.audio_script, existing_meta={})}),
                 duration_seconds=payload.duration_seconds,
                 status=payload.status.strip() or "draft",
             )
@@ -719,6 +899,8 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         shot.visual_prompt = payload.visual_prompt.strip()
         shot.character_refs_json = json_dumps(payload.character_refs)
         shot.scene_refs_json = json_dumps(payload.scene_refs)
+        current_meta = json_loads_object(shot.meta_json)
+        shot.meta_json = json_dumps({**current_meta, "audio_script": _normalize_audio_script_payload(payload.audio_script, existing_meta=current_meta)})
         shot.duration_seconds = payload.duration_seconds
         shot.status = payload.status.strip() or "draft"
         storyboard.status = "draft"
@@ -818,6 +1000,151 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return _media_asset_out(asset)
+
+    @router.post("/api/projects/{project_id}/storyboards/{storyboard_id}/voice-tasks", response_model=list[MediaAssetOut])
+    def generate_storyboard_voice(
+        project_id: int,
+        storyboard_id: int,
+        payload: GenerateVoiceRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> list[MediaAssetOut]:
+        project = _project_or_404(db, current_user.id, project_id)
+        storyboard = _storyboard_or_404(db, project.id, storyboard_id)
+        try:
+            assets = VoiceService(settings).generate_storyboard_voice(
+                db=db,
+                project=project,
+                storyboard=storyboard,
+                voice_profile=payload.voice_profile.strip(),
+                provider=payload.provider.strip(),
+                voice_role=payload.voice_role.strip() or "narrator",
+                speed=payload.speed,
+                emotion=payload.emotion.strip(),
+                text_override="",
+            )
+        except RuntimeError as exc:
+            db.rollback()
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        db.commit()
+        for asset in assets:
+            db.refresh(asset)
+        return [_media_asset_out(asset) for asset in assets]
+
+    @router.post("/api/projects/{project_id}/storyboards/{storyboard_id}/audio-scripts", response_model=StoryboardOut)
+    def generate_storyboard_audio_scripts(
+        project_id: int,
+        storyboard_id: int,
+        payload: GenerateAudioScriptsRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> StoryboardOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        storyboard = _storyboard_or_404(db, project.id, storyboard_id)
+        chapter_ids = [int(item) for item in json_loads_list(storyboard.source_chapter_ids_json) if str(item).isdigit()]
+        chapters = db.scalars(
+            select(NovelChapter)
+            .join(Novel, NovelChapter.novel_id == Novel.id)
+            .where(
+                Novel.owner_id == current_user.id,
+                Novel.project_id == project.id,
+                Novel.deleted_at.is_(None),
+                NovelChapter.id.in_(chapter_ids),
+            )
+            .order_by(NovelChapter.chapter_no.asc())
+        ).all()
+        if not chapters:
+            raise HTTPException(status_code=409, detail="分镜稿缺少可用于生成对白脚本的定稿章节。")
+        try:
+            AudioScriptService(settings).generate_storyboard_audio_scripts(
+                project=project,
+                storyboard=storyboard,
+                chapters=chapters,
+                dialogue_density=payload.dialogue_density.strip() or "normal",
+                narration_policy=payload.narration_policy.strip() or "minimal",
+                music_policy=payload.music_policy.strip() or "cue_only",
+                sound_effect_policy=payload.sound_effect_policy.strip() or "cue_only",
+            )
+        except RuntimeError as exc:
+            db.rollback()
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        db.commit()
+        db.refresh(storyboard)
+        return _storyboard_out(storyboard)
+
+    @router.post("/api/projects/{project_id}/storyboards/{storyboard_id}/shots/{shot_id}/voice", response_model=MediaAssetOut)
+    def generate_shot_voice(
+        project_id: int,
+        storyboard_id: int,
+        shot_id: int,
+        payload: GenerateVoiceRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> MediaAssetOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        storyboard = _storyboard_or_404(db, project.id, storyboard_id)
+        shot = db.scalar(select(StoryboardShot).where(StoryboardShot.storyboard_id == storyboard.id, StoryboardShot.id == shot_id))
+        if shot is None:
+            raise HTTPException(status_code=404, detail="镜头不存在。")
+        character = None
+        if payload.character_card_id is not None:
+            character = db.scalar(
+                select(CharacterCard).where(
+                    CharacterCard.project_id == project.id,
+                    CharacterCard.id == payload.character_card_id,
+                    CharacterCard.deleted_at.is_(None),
+                )
+            )
+            if character is None:
+                raise HTTPException(status_code=404, detail="人物卡不存在。")
+        try:
+            asset = VoiceService(settings).generate_shot_voice(
+                db=db,
+                project=project,
+                storyboard=storyboard,
+                shot=shot,
+                voice_profile=payload.voice_profile.strip(),
+                provider=payload.provider.strip(),
+                voice_role=payload.voice_role.strip() or "narrator",
+                character=character,
+                dialogue_text=payload.dialogue_text.strip(),
+                speed=payload.speed,
+                emotion=payload.emotion.strip(),
+                text_override=payload.text_override.strip(),
+            )
+        except RuntimeError as exc:
+            db.rollback()
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        db.commit()
+        db.refresh(asset)
+        return _media_asset_out(asset)
+
+    @router.post("/api/projects/{project_id}/storyboards/{storyboard_id}/shots/{shot_id}/first-frame", response_model=MediaAssetOut)
+    def generate_shot_first_frame(
+        project_id: int,
+        storyboard_id: int,
+        shot_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> MediaAssetOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        storyboard = _storyboard_or_404(db, project.id, storyboard_id)
+        shot = db.scalar(select(StoryboardShot).where(StoryboardShot.storyboard_id == storyboard.id, StoryboardShot.id == shot_id))
+        if shot is None:
+            raise HTTPException(status_code=404, detail="镜头不存在。")
+        try:
+            asset = VisualAssetService(settings).generate_shot_first_frame(
+                db=db,
+                project=project,
+                storyboard=storyboard,
+                shot=shot,
+            )
+        except RuntimeError as exc:
+            db.rollback()
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        db.commit()
+        db.refresh(asset)
         return _media_asset_out(asset)
 
 
@@ -1023,6 +1350,13 @@ def _renumber_storyboard_shots(storyboard: Storyboard) -> None:
         shot.shot_no = 100_000 + index
     for index, shot in enumerate(ordered, start=1):
         shot.shot_no = index
+
+
+def _normalize_audio_script_payload(payload: dict[str, object], *, existing_meta: dict[str, object]) -> dict[str, object]:
+    audio_script = payload if isinstance(payload, dict) else {}
+    existing_script = existing_meta.get("audio_script") if isinstance(existing_meta.get("audio_script"), dict) else {}
+    locked = bool(audio_script.get("audio_script_locked")) if "audio_script_locked" in audio_script else bool(existing_script.get("audio_script_locked"))
+    return {**audio_script, "audio_script_locked": locked}
 
 
 def _series_plan_for_feedback(db: Session, project: Project, target_type: str, target_id: int) -> SeriesPlan:

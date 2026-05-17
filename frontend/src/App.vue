@@ -6,6 +6,7 @@ import AuthModal from "./components/auth/AuthModal.vue";
 import LongformPipelinePanel from "./components/workspace/LongformPipelinePanel.vue";
 import NovelEditorPanel from "./components/workspace/NovelEditorPanel.vue";
 import GenerationTracePanel from "./components/workspace/GenerationTracePanel.vue";
+import ProjectContentLibraryPanel from "./components/workspace/ProjectContentLibraryPanel.vue";
 import ProjectCreateWizard from "./components/workspace/ProjectCreateWizard.vue";
 import ProjectWorkshopPanel from "./components/workspace/ProjectWorkshopPanel.vue";
 import ProjectSettingsPanel from "./components/workspace/ProjectSettingsPanel.vue";
@@ -52,6 +53,7 @@ const restorableViews: ViewKey[] = [
   "trash",
   "projectCreate",
   "projectSettings",
+  "projectLibrary",
   "characters",
   "longform",
   "workshop",
@@ -226,6 +228,11 @@ const characterForm = reactive({
   personality: "",
   story_role: "",
   background: "",
+  voice_provider: "",
+  voice_speaker: "",
+  voice_style: "",
+  voice_speed: 1,
+  voice_pitch: 0,
 });
 const editingCharacterId = ref<number | null>(null);
 
@@ -263,6 +270,10 @@ const selectedDraftGenerationId = ref<number | null>(null);
 const selectedSettingsProjectId = ref<number | null>(null);
 const selectedProjectChapterId = ref<number | null>(null);
 const workshopMode = ref<"chapters" | "drafts">("chapters");
+const preferredSeriesPlanId = ref<number | null>(null);
+const preferredLongformDraftVersionId = ref<number | null>(null);
+const preferredStoryboardId = ref<number | null>(null);
+const preferredVideoTaskId = ref<number | null>(null);
 
 const hasProject = computed(() => Boolean(activeProject.value));
 const filteredWorkspaceProjects = computed(() => {
@@ -353,7 +364,7 @@ function goToView(view: ViewKey) {
     openAuthPanel("register", view);
     return;
   }
-  if (view !== "auth" && !isAuthenticated.value && ["studio", "trash", "projectSettings", "characters", "longform", "workshop", "generationTrace", "novelEditor"].includes(view)) {
+  if (view !== "auth" && !isAuthenticated.value && ["studio", "trash", "projectSettings", "projectLibrary", "characters", "longform", "workshop", "generationTrace", "novelEditor"].includes(view)) {
     openAuthPanel("login", view);
     return;
   }
@@ -641,6 +652,11 @@ function resetCharacterForm() {
   characterForm.personality = "";
   characterForm.story_role = "";
   characterForm.background = "";
+  characterForm.voice_provider = "";
+  characterForm.voice_speaker = "";
+  characterForm.voice_style = "";
+  characterForm.voice_speed = 1;
+  characterForm.voice_pitch = 0;
 }
 
 function editCharacterCard(card: CharacterCard) {
@@ -651,6 +667,11 @@ function editCharacterCard(card: CharacterCard) {
   characterForm.personality = card.personality;
   characterForm.story_role = card.story_role;
   characterForm.background = card.background;
+  characterForm.voice_provider = card.voice_provider;
+  characterForm.voice_speaker = card.voice_speaker;
+  characterForm.voice_style = card.voice_style;
+  characterForm.voice_speed = card.voice_speed;
+  characterForm.voice_pitch = card.voice_pitch;
 }
 
 function openProjectCreate() {
@@ -684,12 +705,64 @@ function openCharacters() {
   currentView.value = "characters";
 }
 
+function clearLongformPreferences() {
+  preferredSeriesPlanId.value = null;
+  preferredLongformDraftVersionId.value = null;
+  preferredStoryboardId.value = null;
+  preferredVideoTaskId.value = null;
+}
+
+async function openProjectLibrary() {
+  if (!isAuthenticated.value) return openAuthPanel("login");
+  if (activeProject.value?.project.id) {
+    await store.loadLongformState(activeProject.value.project.id, { silent: true });
+  }
+  clearLongformPreferences();
+  currentView.value = "projectLibrary";
+}
+
 async function openLongform() {
   if (!isAuthenticated.value) return openAuthPanel("login");
   if (activeProject.value?.project.id) {
     await store.loadLongformState(activeProject.value.project.id);
   }
   currentView.value = "longform";
+}
+
+async function openContentLibraryItem(target: {
+  view: "projectSettings" | "characters" | "workshop" | "longform";
+  characterCardId?: number;
+  projectChapterId?: number;
+  seriesPlanId?: number;
+  draftVersionId?: number;
+  storyboardId?: number;
+  videoTaskId?: number;
+}) {
+  if (target.view === "projectSettings") {
+    openProjectSettings();
+    return;
+  }
+  if (target.view === "characters") {
+    const card = activeProject.value?.character_cards.find((item) => item.id === target.characterCardId);
+    if (card) editCharacterCard(card);
+    openCharacters();
+    return;
+  }
+  if (target.view === "workshop") {
+    if (typeof target.projectChapterId === "number") {
+      selectedProjectChapterId.value = target.projectChapterId;
+      workshopMode.value = "drafts";
+    }
+    if (activeProject.value?.project.id) {
+      await openWorkshop(activeProject.value.project.id);
+    }
+    return;
+  }
+  preferredSeriesPlanId.value = target.seriesPlanId ?? null;
+  preferredLongformDraftVersionId.value = target.draftVersionId ?? null;
+  preferredStoryboardId.value = target.storyboardId ?? null;
+  preferredVideoTaskId.value = target.videoTaskId ?? null;
+  await openLongform();
 }
 
 async function openNovelEditor(projectId?: number) {
@@ -859,6 +932,11 @@ async function submitCharacterCard() {
     personality: characterForm.personality.trim(),
     story_role: characterForm.story_role.trim(),
     background: characterForm.background.trim(),
+    voice_provider: characterForm.voice_provider.trim(),
+    voice_speaker: characterForm.voice_speaker.trim(),
+    voice_style: characterForm.voice_style.trim(),
+    voice_speed: Number(characterForm.voice_speed) || 1,
+    voice_pitch: Number(characterForm.voice_pitch) || 0,
   };
   if (!payload.name) {
     authError.value = "人物姓名不能为空。";
@@ -981,6 +1059,7 @@ async function submitUpdateShot(payload: {
   visual_prompt: string;
   character_refs: unknown[];
   scene_refs: unknown[];
+  audio_script: Record<string, unknown>;
   duration_seconds: number;
   status: string;
 }) {
@@ -989,6 +1068,7 @@ async function submitUpdateShot(payload: {
     visual_prompt: payload.visual_prompt,
     character_refs: payload.character_refs,
     scene_refs: payload.scene_refs,
+    audio_script: payload.audio_script,
     duration_seconds: payload.duration_seconds,
     status: payload.status,
   });
@@ -1010,6 +1090,10 @@ async function submitGenerateCharacterTurnaround(payload: { character_card_id: n
   });
 }
 
+async function submitGenerateShotFirstFrame(payload: { storyboardId: number; shotId: number }) {
+  await store.generateShotFirstFrame(payload.storyboardId, payload.shotId);
+}
+
 async function submitCreateShot(payload: {
   storyboardId: number;
   shot_no?: number | null;
@@ -1017,6 +1101,7 @@ async function submitCreateShot(payload: {
   visual_prompt: string;
   character_refs: unknown[];
   scene_refs: unknown[];
+  audio_script: Record<string, unknown>;
   duration_seconds: number;
   status: string;
 }) {
@@ -1026,6 +1111,7 @@ async function submitCreateShot(payload: {
     visual_prompt: payload.visual_prompt,
     character_refs: payload.character_refs,
     scene_refs: payload.scene_refs,
+    audio_script: payload.audio_script,
     duration_seconds: payload.duration_seconds,
     status: payload.status,
   });
@@ -1328,6 +1414,25 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               @update:assistant-seed-writing="assistantSeedWriting = $event"
               @generate-suggestion="generateProjectSuggestion($event, projectSettingsForm)"
               @use-suggestion="appendOrReplaceField(projectSettingsForm, $event.kind, $event.text, $event.mode)"
+              @open-content-library="openProjectLibrary()"
+            />
+          </template>
+
+          <template v-else-if="currentView === 'projectLibrary'">
+            <ProjectContentLibraryPanel
+              v-if="isAuthenticated && hasProject"
+              :project="activeProject?.project"
+              :project-chapters="activeProject?.project_chapters || []"
+              :memories="activeProject?.memories || []"
+              :character-cards="activeProject?.character_cards || []"
+              :sources="activeProject?.sources || []"
+              :state="longformState"
+              :loading="loading"
+              @open-settings="openProjectSettings()"
+              @open-characters="openCharacters()"
+              @open-workshop="activeProject?.project.id && openWorkshop(activeProject.project.id)"
+              @open-longform="openLongform()"
+              @open-item="openContentLibraryItem"
             />
           </template>
 
@@ -1342,6 +1447,7 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
                   </div>
                   <div class="mode-switch">
                     <button class="ghost-button ghost-button--small" type="button" @click="openProjectSettings()">项目设定</button>
+                    <button class="ghost-button ghost-button--small" type="button" @click="openProjectLibrary()">内容库</button>
                     <button v-if="editingCharacterId" class="ghost-button ghost-button--small" type="button" @click="resetCharacterForm()">取消</button>
                   </div>
                 </div>
@@ -1354,6 +1460,15 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
                   <label class="field"><span>在小说里的角色</span><input v-model="characterForm.story_role" maxlength="120" /></label>
                   <label class="field"><span>性格</span><textarea v-model="characterForm.personality" rows="4" maxlength="2000" /></label>
                   <label class="field"><span>人物背景</span><textarea v-model="characterForm.background" rows="5" maxlength="4000" /></label>
+                  <div class="inline-row">
+                    <label class="field"><span>配音 Provider</span><input v-model="characterForm.voice_provider" maxlength="80" placeholder="留空使用全局默认" /></label>
+                    <label class="field"><span>Speaker / Voice</span><input v-model="characterForm.voice_speaker" maxlength="120" placeholder="例如 BV700_V2_streaming" /></label>
+                  </div>
+                  <div class="inline-row">
+                    <label class="field"><span>声音风格</span><input v-model="characterForm.voice_style" maxlength="120" placeholder="温柔、克制、少年感" /></label>
+                    <label class="field"><span>语速</span><input v-model.number="characterForm.voice_speed" type="number" min="0.25" max="4" step="0.05" /></label>
+                    <label class="field"><span>音高</span><input v-model.number="characterForm.voice_pitch" type="number" min="-1" max="1" step="0.05" /></label>
+                  </div>
                   <button class="primary-button" :disabled="loading">{{ editingCharacterId ? "保存人物卡" : "添加人物卡" }}</button>
                 </form>
               </section>
@@ -1364,6 +1479,9 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
                     <strong>{{ card.name }}</strong>
                     <span>{{ card.story_role }} / {{ card.age }} {{ card.gender }}</span>
                     <span>{{ card.personality }}</span>
+                    <span v-if="card.voice_speaker || card.voice_provider">
+                      配音：{{ card.voice_provider || "默认" }} / {{ card.voice_speaker || "全局 speaker" }}
+                    </span>
                     <em>{{ card.background }}</em>
                     <div class="hero__actions">
                       <button class="ghost-button ghost-button--small" type="button" @click="editCharacterCard(card)">编辑</button>
@@ -1430,6 +1548,10 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               :character-cards="activeProject?.character_cards || []"
               :managed-novels="managedNovels"
               :current-novel="currentNovel"
+              :preferred-series-plan-id="preferredSeriesPlanId"
+              :preferred-draft-version-id="preferredLongformDraftVersionId"
+              :preferred-storyboard-id="preferredStoryboardId"
+              :preferred-video-task-id="preferredVideoTaskId"
               @generate-plan="submitGenerateSeriesPlan"
               @submit-feedback="submitOutlineFeedback"
               @lock-plan="store.lockSeriesPlan"
@@ -1448,6 +1570,11 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               @update-shot="submitUpdateShot"
               @update-asset="submitUpdateAsset"
               @generate-character-turnaround="submitGenerateCharacterTurnaround"
+              @generate-shot-first-frame="submitGenerateShotFirstFrame"
+              @generate-audio-scripts="store.generateStoryboardAudioScripts"
+              @generate-storyboard-voice="(storyboardId) => store.generateStoryboardVoice(storyboardId, { voice_role: 'dialogue' })"
+              @prepare-video-production="(storyboardId) => store.prepareVideoProduction(storyboardId, { generate_character_turnarounds: true, generate_audio_scripts: true, generate_dialogue_audio: true, create_video_task: true })"
+              @generate-shot-voice="({ storyboardId, shotId, voice_role, character_card_id, dialogue_text, voice_profile, emotion }) => store.generateShotVoice(storyboardId, shotId, { voice_role, character_card_id, dialogue_text, voice_profile, emotion })"
               @create-shot="submitCreateShot"
               @delete-shot="submitDeleteShot"
               @reorder-shots="submitReorderShots"
@@ -1535,6 +1662,7 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
             <button class="sidebar-nav__item sidebar-nav__item--main" :class="{ 'sidebar-nav__item--active': currentView === 'studio' }" @click="goToView('studio')">我的项目</button>
             <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'projectCreate' }" @click="openProjectCreate()">新建项目</button>
             <button class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'trash' }" @click="goToView('trash')">回收站</button>
+            <button v-if="hasProject" class="sidebar-nav__item" :class="{ 'sidebar-nav__item--active': currentView === 'projectLibrary' }" @click="openProjectLibrary()">项目内容库</button>
           </nav>
           <div class="sidebar__footer">
             <template v-if="isAuthenticated">

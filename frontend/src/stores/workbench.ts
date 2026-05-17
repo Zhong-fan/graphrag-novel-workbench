@@ -35,6 +35,10 @@ import type {
   UpdateChapterOutlinePayload,
   UpdateMediaAssetPayload,
   GenerateCharacterTurnaroundPayload,
+  GenerateShotFirstFramePayload,
+  GenerateVoicePayload,
+  GenerateAudioScriptsPayload,
+  VideoProductionPreflightPayload,
   UpdateStoryboardShotPayload,
   CreateStoryboardShotPayload,
   ReorderStoryboardShotsPayload,
@@ -1161,6 +1165,97 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
+  async function generateShotFirstFrame(storyboardId: number, shotId: number) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const asset = await api.generateShotFirstFrame(token.value, activeProject.value.project.id, storyboardId, shotId);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "镜头首帧已生成。";
+      return asset;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "生成镜头首帧失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function generateStoryboardVoice(storyboardId: number, payload: GenerateVoicePayload = {}) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const assets = await api.generateStoryboardVoice(token.value, activeProject.value.project.id, storyboardId, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "分镜旁白已生成。";
+      return assets;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "生成分镜旁白失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function generateStoryboardAudioScripts(storyboardId: number, payload: GenerateAudioScriptsPayload = {}) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const storyboard = await api.generateStoryboardAudioScripts(token.value, activeProject.value.project.id, storyboardId, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "自动对白脚本已生成。";
+      return storyboard;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "生成自动对白脚本失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function generateShotVoice(storyboardId: number, shotId: number, payload: GenerateVoicePayload = {}) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const asset = await api.generateShotVoice(token.value, activeProject.value.project.id, storyboardId, shotId, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "镜头旁白已生成。";
+      return asset;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "生成镜头旁白失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function prepareVideoProduction(storyboardId: number, payload: VideoProductionPreflightPayload = {}) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const state = await api.prepareVideoProduction(token.value, activeProject.value.project.id, storyboardId, payload);
+      longformState.value = state;
+      startLongformPolling(activeProject.value.project.id);
+      success.value = "视频生产前置内容已准备，视频任务已进入队列。";
+      return state;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "准备视频生产失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
   async function updateVideoTask(taskId: number, payload: UpdateVideoTaskPayload) {
     if (!token.value || !activeProject.value) return null;
     loading.value = true;
@@ -1232,6 +1327,11 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     reorderStoryboardShots,
     updateMediaAsset,
     generateCharacterTurnaround,
+    generateShotFirstFrame,
+    generateStoryboardAudioScripts,
+    generateStoryboardVoice,
+    generateShotVoice,
+    prepareVideoProduction,
     updateVideoTask,
     updateProject,
     resolveReferenceWork,

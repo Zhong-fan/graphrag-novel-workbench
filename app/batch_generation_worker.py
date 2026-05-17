@@ -8,6 +8,7 @@ from sqlalchemy import select
 from .batch_generation_service import BatchGenerationService
 from .config import Settings
 from .db import SessionLocal
+from .json_utils import json_loads_object
 from .models import BatchGenerationJob, Storyboard, VideoTask
 from .storyboard_job_service import StoryboardJobService
 from .video_render_service import VideoRenderService
@@ -95,7 +96,9 @@ def _run_next_video_task(*, db, video_service: VideoRenderService) -> bool:
     except Exception as exc:
         task.task_status = "failed"
         task.error_message = str(exc)
-        video_service._set_progress(task, stage="failed", message=str(exc))
+        payload = json_loads_object(task.progress_json)
+        failure_stage = str(payload.get("current_step") or payload.get("stage") or "video_task").strip() or "video_task"
+        video_service._set_progress(task, stage="failed", message=str(exc), extra={"failure_stage": failure_stage})
         video_service._add_event(db, task=task, event_type="video_task_failed", message=f"视频生产失败：{exc}")
         db.commit()
     return True

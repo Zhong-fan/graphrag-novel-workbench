@@ -34,10 +34,19 @@ class Settings:
     image_base_url: str
     image_model: str
     image_size: str
+    tts_provider: str
     tts_api_key: str
     tts_base_url: str
     tts_model: str
     tts_voice: str
+    volcengine_tts_api_key: str
+    volcengine_tts_app_id: str
+    volcengine_tts_access_key: str
+    volcengine_tts_resource_id: str
+    volcengine_tts_endpoint: str
+    volcengine_tts_speaker: str
+    volcengine_tts_model: str
+    volcengine_tts_sample_rate: int
     ffmpeg_path: str
     jimeng_access_key: str
     jimeng_secret_key: str
@@ -45,6 +54,7 @@ class Settings:
     jimeng_region: str
     jimeng_service: str
     jimeng_req_key: str
+    jimeng_i2v_req_key: str
     jimeng_aspect_ratio: str
     jimeng_frames: int
     jimeng_image_req_key: str
@@ -226,10 +236,22 @@ def load_settings() -> Settings:
         image_base_url=_resolve_first(("CHENFLOW_IMAGE_BASE_URL",), dotenv_values, "") or "",
         image_model=_resolve_first(("CHENFLOW_IMAGE_MODEL",), dotenv_values, "") or "",
         image_size=_resolve_first(("CHENFLOW_IMAGE_SIZE",), dotenv_values, "1024x1024") or "1024x1024",
+        tts_provider=_resolve_first(("CHENFLOW_TTS_PROVIDER",), dotenv_values, "openai_compatible") or "openai_compatible",
         tts_api_key=_resolve_first(("CHENFLOW_TTS_API_KEY",), dotenv_values, "") or "",
         tts_base_url=_resolve_first(("CHENFLOW_TTS_BASE_URL",), dotenv_values, "") or "",
         tts_model=_resolve_first(("CHENFLOW_TTS_MODEL",), dotenv_values, "") or "",
         tts_voice=_resolve_first(("CHENFLOW_TTS_VOICE",), dotenv_values, "") or "",
+        volcengine_tts_api_key=_resolve_first(("VOLCENGINE_TTS_API_KEY",), dotenv_values, "") or "",
+        volcengine_tts_app_id=_resolve_first(("VOLCENGINE_TTS_APP_ID",), dotenv_values, "") or "",
+        volcengine_tts_access_key=_resolve_first(("VOLCENGINE_TTS_ACCESS_KEY",), dotenv_values, "") or "",
+        volcengine_tts_resource_id=_resolve_first(("VOLCENGINE_TTS_RESOURCE_ID",), dotenv_values, "seed-tts-2.0") or "seed-tts-2.0",
+        volcengine_tts_endpoint=(
+            _resolve_first(("VOLCENGINE_TTS_ENDPOINT",), dotenv_values, "https://openspeech.bytedance.com/api/v3/tts/unidirectional")
+            or "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
+        ),
+        volcengine_tts_speaker=_resolve_first(("VOLCENGINE_TTS_SPEAKER",), dotenv_values, "") or "",
+        volcengine_tts_model=_resolve_first(("VOLCENGINE_TTS_MODEL",), dotenv_values, "") or "",
+        volcengine_tts_sample_rate=_parse_positive_int(_resolve_first(("VOLCENGINE_TTS_SAMPLE_RATE",), dotenv_values), 24000),
         ffmpeg_path=_resolve_first(("CHENFLOW_FFMPEG_PATH",), dotenv_values, "ffmpeg") or "ffmpeg",
         jimeng_access_key=_resolve_first(("JIMENG_ACCESS_KEY", "VOLCENGINE_ACCESS_KEY"), dotenv_values, "") or "",
         jimeng_secret_key=_resolve_first(("JIMENG_SECRET_KEY", "VOLCENGINE_SECRET_KEY"), dotenv_values, "") or "",
@@ -237,6 +259,10 @@ def load_settings() -> Settings:
         jimeng_region=_resolve_first(("JIMENG_REGION",), dotenv_values, "cn-north-1") or "cn-north-1",
         jimeng_service=_resolve_first(("JIMENG_SERVICE",), dotenv_values, "cv") or "cv",
         jimeng_req_key=_resolve_first(("JIMENG_VIDEO_REQ_KEY",), dotenv_values, "jimeng_t2v_v30") or "jimeng_t2v_v30",
+        jimeng_i2v_req_key=(
+            _resolve_first(("JIMENG_VIDEO_I2V_REQ_KEY",), dotenv_values)
+            or ("jimeng_i2v_first_v30_1080" if "1080" in ((_resolve_first(("JIMENG_VIDEO_REQ_KEY",), dotenv_values, "jimeng_t2v_v30") or "jimeng_t2v_v30")) else "jimeng_i2v_first_v30")
+        ),
         jimeng_aspect_ratio=_resolve_first(("JIMENG_VIDEO_ASPECT_RATIO",), dotenv_values, "16:9") or "16:9",
         jimeng_frames=_parse_positive_int(_resolve_first(("JIMENG_VIDEO_FRAMES",), dotenv_values), 121),
         jimeng_image_req_key=(

@@ -62,6 +62,30 @@ class JimengVideoClient:
             raise RuntimeError(f"即梦提交任务没有返回 task_id：{self._error_summary(response)}")
         return task_id, response
 
+    def submit_first_frame_to_video(
+        self,
+        *,
+        prompt: str,
+        image_url: str,
+        frames: int,
+        aspect_ratio: str,
+        seed: int = -1,
+    ) -> tuple[str, dict[str, Any]]:
+        payload = {
+            "req_key": self.req_key,
+            "prompt": prompt,
+            "seed": seed,
+            "frames": frames,
+            "aspect_ratio": aspect_ratio,
+            "image_urls": [image_url],
+        }
+        response = self._request(action=self.submit_action, payload=payload)
+        data = response.get("data") if isinstance(response.get("data"), dict) else {}
+        task_id = data.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            raise RuntimeError(f"即梦图生视频提交任务没有返回 task_id：{self._error_summary(response)}")
+        return task_id, response
+
     def get_result(self, *, task_id: str) -> JimengVideoResult:
         response = self._request(
             action=self.result_action,

@@ -234,6 +234,11 @@ class CharacterCard(Base, TimestampMixin):
     personality: Mapped[str] = mapped_column(Text, default="", nullable=False)
     story_role: Mapped[str] = mapped_column(String(120), default="", nullable=False)
     background: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    voice_provider: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    voice_speaker: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    voice_style: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    voice_speed: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    voice_pitch: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="character_cards")
@@ -509,6 +514,7 @@ class StoryboardShot(Base):
     visual_prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
     character_refs_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     scene_refs_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    meta_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     duration_seconds: Mapped[float] = mapped_column(Float, default=4.0, nullable=False)
     status: Mapped[str] = mapped_column(String(40), default="draft", nullable=False)
 

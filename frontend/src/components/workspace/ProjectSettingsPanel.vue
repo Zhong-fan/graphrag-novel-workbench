@@ -23,6 +23,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "select-project", projectId: number): void;
   (e: "open-characters"): void;
+  (e: "open-content-library"): void;
   (e: "submit"): void;
   (e: "update:title", value: string): void;
   (e: "update:genre", value: string): void;
@@ -90,6 +91,7 @@ function formatDateTime(value: string | null | undefined) {
           <p class="panel-heading__desc">项目层只放长期有效的信息，例如题材、世界设定、写作偏好和文风。具体剧情前提留到章节里写。</p>
         </div>
         <div class="mode-switch">
+          <button class="ghost-button ghost-button--small" type="button" @click="emit('open-content-library')">内容库</button>
           <button class="ghost-button ghost-button--small" type="button" @click="emit('open-characters')">人物卡</button>
         </div>
       </div>

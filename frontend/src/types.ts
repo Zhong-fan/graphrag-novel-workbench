@@ -3,6 +3,7 @@ export type ViewKey =
   | "trash"
   | "projectCreate"
   | "projectSettings"
+  | "projectLibrary"
   | "characters"
   | "longform"
   | "workshop"
@@ -160,6 +161,11 @@ export interface CharacterCard {
   personality: string;
   story_role: string;
   background: string;
+  voice_provider: string;
+  voice_speaker: string;
+  voice_style: string;
+  voice_speed: number;
+  voice_pitch: number;
   created_at: string;
   updated_at: string;
 }
@@ -171,6 +177,11 @@ export interface CharacterCardPayload {
   personality: string;
   story_role: string;
   background: string;
+  voice_provider: string;
+  voice_speaker: string;
+  voice_style: string;
+  voice_speed: number;
+  voice_pitch: number;
 }
 
 export interface SourceItem {
@@ -392,6 +403,7 @@ export interface StoryboardShot {
   visual_prompt: string;
   character_refs: unknown[];
   scene_refs: unknown[];
+  audio_script: Record<string, unknown>;
   duration_seconds: number;
   status: string;
 }
@@ -403,6 +415,7 @@ export interface Storyboard {
   source_chapter_ids: unknown[];
   status: string;
   summary: string;
+  progress: Record<string, unknown>;
   worker_id: string;
   worker_started_at?: string | null;
   last_heartbeat_at?: string | null;
@@ -501,6 +514,7 @@ export interface UpdateStoryboardShotPayload {
   visual_prompt: string;
   character_refs: unknown[];
   scene_refs: unknown[];
+  audio_script: Record<string, unknown>;
   duration_seconds: number;
   status: string;
 }
@@ -523,6 +537,37 @@ export interface GenerateCharacterTurnaroundPayload {
   character_card_id: number;
   chapter_no?: number | null;
   prompt_note: string;
+}
+
+export interface GenerateShotFirstFramePayload {
+  shot_id: number;
+}
+
+export interface GenerateVoicePayload {
+  voice_profile?: string;
+  provider?: string;
+  voice_role?: "narrator" | "dialogue";
+  character_card_id?: number | null;
+  dialogue_text?: string;
+  speed?: number;
+  emotion?: string;
+  text_override?: string;
+}
+
+export interface GenerateAudioScriptsPayload {
+  dialogue_density?: string;
+  narration_policy?: string;
+  music_policy?: string;
+  sound_effect_policy?: string;
+}
+
+export interface VideoProductionPreflightPayload {
+  generate_character_turnarounds?: boolean;
+  generate_audio_scripts?: boolean;
+  refresh_audio_scripts?: boolean;
+  generate_dialogue_audio?: boolean;
+  create_video_task?: boolean;
+  fallback_voice_profile?: string;
 }
 
 export interface UpdateVideoTaskPayload {

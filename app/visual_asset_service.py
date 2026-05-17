@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import time
 import base64
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -11,14 +11,115 @@ from sqlalchemy.orm import Session
 from .config import Settings
 from .jimeng_image_client import JimengImageClient
 from .json_utils import json_dumps
-from .models import CharacterCard, MediaAsset, Project, TaskEvent
+from .models import CharacterCard, MediaAsset, Project, Storyboard, StoryboardShot, TaskEvent
 from .video_render_service import VideoRenderService
-from .visual_style_prompt import build_character_visual_prompt, project_visual_style_summary
+from .visual_style_prompt import build_character_visual_prompt, build_visual_generation_prompt, project_visual_style_summary
 
 
 class VisualAssetService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+
+    def generate_shot_first_frame(
+        self,
+        *,
+        db: Session,
+        project: Project,
+        storyboard: Storyboard,
+        shot: StoryboardShot,
+    ) -> MediaAsset:
+        self._require_jimeng_image_config()
+        existing_assets = db.query(MediaAsset).filter(
+            MediaAsset.project_id == project.id,
+            MediaAsset.storyboard_id == storyboard.id,
+            MediaAsset.shot_id == shot.id,
+            MediaAsset.asset_type == "shot_first_frame",
+        ).all()
+        for asset in existing_assets:
+            meta = json.loads(asset.meta_json or "{}") if asset.meta_json else {}
+            if asset.status == "completed" and meta.get("locked") is True:
+                return asset
+
+        prompt = build_visual_generation_prompt(project=project, shot=shot, include_narration=False, max_length=1800)
+        client = JimengImageClient(
+            access_key=self.settings.jimeng_access_key,
+            secret_key=self.settings.jimeng_secret_key,
+            endpoint=self.settings.jimeng_endpoint,
+            region=self.settings.jimeng_region,
+            service=self.settings.jimeng_service,
+            req_key=self.settings.jimeng_image_req_key,
+        )
+        task_id, submit_response = client.submit_text_to_image(
+            prompt=prompt,
+            width=self.settings.jimeng_image_width,
+            height=self.settings.jimeng_image_height,
+        )
+        if task_id:
+            image_payload, result_response = self._wait_for_image_result(client=client, task_id=task_id)
+        else:
+            data = submit_response.get("data") if isinstance(submit_response.get("data"), dict) else {}
+            urls = client._extract_image_urls(data)
+            images = client._extract_image_base64(data)
+            if urls:
+                image_payload = {"kind": "url", "value": urls[0]}
+            elif images:
+                image_payload = {"kind": "base64", "value": images[0]}
+            else:
+                raise RuntimeError("即梦图片接口没有返回 task_id 或图片 URL。")
+            result_response = submit_response
+
+        output_dir = self._shot_visual_output_dir(project=project, storyboard=storyboard, shot=shot)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        image_path = output_dir / f"shot-{shot.shot_no:03d}-first-frame-v001.png"
+        self._save_image_payload(payload=image_payload, path=image_path)
+
+        asset = next((item for item in existing_assets if item.asset_type == "shot_first_frame"), None)
+        if asset is None:
+            asset = MediaAsset(
+                project_id=project.id,
+                storyboard=storyboard,
+                shot=shot,
+                asset_type="shot_first_frame",
+                uri=str(image_path),
+                prompt=prompt,
+                status="completed",
+                meta_json=json_dumps({}),
+            )
+            db.add(asset)
+
+        asset.uri = str(image_path)
+        asset.prompt = prompt
+        asset.status = "completed"
+        asset.meta_json = json_dumps(
+            {
+                **json.loads(asset.meta_json or "{}"),
+                "shot_id": shot.id,
+                "shot_no": shot.shot_no,
+                "locked": False,
+                "provider": "jimeng",
+                "req_key": self.settings.jimeng_image_req_key,
+                "jimeng_task_id": task_id,
+                "submit_response": submit_response,
+                "result_response": result_response,
+                "image_source": image_payload["kind"],
+                "width": self.settings.jimeng_image_width,
+                "height": self.settings.jimeng_image_height,
+                "mime_type": "image/png",
+                "visual_style": project_visual_style_summary(project),
+            }
+        )
+        db.add(
+            TaskEvent(
+                project_id=project.id,
+                storyboard=storyboard,
+                event_type="visual_asset_shot_first_frame_completed",
+                message=f"镜头 {shot.shot_no} 首帧生成完成。",
+                payload_json=json_dumps({"asset_type": "shot_first_frame", "shot_id": shot.id, "shot_no": shot.shot_no, "uri": str(image_path)}),
+            )
+        )
+        db.commit()
+        db.refresh(asset)
+        return asset
 
     def generate_character_turnaround(
         self,
@@ -30,6 +131,18 @@ class VisualAssetService:
         prompt_note: str = "",
     ) -> MediaAsset:
         self._require_jimeng_image_config()
+        locked_existing = db.query(MediaAsset).filter(
+            MediaAsset.project_id == project.id,
+            MediaAsset.asset_type == "character_turnaround",
+        ).all()
+        for asset in locked_existing:
+            meta = json.loads(asset.meta_json or "{}") if asset.meta_json else {}
+            if (
+                asset.status == "completed"
+                and meta.get("character_card_id") == character.id
+                and meta.get("locked") is True
+            ):
+                return asset
         prompt = self._build_turnaround_prompt(project=project, character=character, prompt_note=prompt_note)
         client = JimengImageClient(
             access_key=self.settings.jimeng_access_key,
@@ -159,6 +272,12 @@ class VisualAssetService:
         chapter_dir = f"chapter-{chapter_no:03d}" if chapter_no is not None else "characters"
         character_dir = f"{character.id:04d}-{path_helper._path_slug(character.name)}"
         return self.settings.output_dir / "projects" / project_dir / "chapters" / chapter_dir / "visual_assets" / "characters" / character_dir
+
+    def _shot_visual_output_dir(self, *, project: Project, storyboard: Storyboard, shot: StoryboardShot) -> Path:
+        path_helper = VideoRenderService(self.settings)
+        project_dir = f"{project.id:04d}-{path_helper._path_slug(project.title)}"
+        storyboard_dir = f"{storyboard.id:04d}-{path_helper._path_slug(storyboard.title)}"
+        return self.settings.output_dir / "projects" / project_dir / "storyboards" / storyboard_dir / "shots" / f"shot-{shot.shot_no:03d}" / "first_frame"
 
     def _build_turnaround_prompt(self, *, project: Project, character: CharacterCard, prompt_note: str) -> str:
         details = [

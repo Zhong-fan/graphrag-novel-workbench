@@ -16,6 +16,7 @@ LONGFORM_PIPELINE_SCHEMA_MIGRATION = "20260515_0005_longform_pipeline_schema"
 LONGFORM_BATCH_QUEUE_SCHEMA_MIGRATION = "20260516_0006_longform_batch_queue_schema"
 LONGFORM_ASYNC_METADATA_SCHEMA_MIGRATION = "20260516_0007_longform_async_metadata_schema"
 PROJECT_VISUAL_STYLE_FIELDS_MIGRATION = "20260517_0008_project_visual_style_fields"
+CHARACTER_CARD_VOICE_FIELDS_MIGRATION = "20260517_0009_character_card_voice_fields"
 
 
 settings = load_settings()
@@ -96,6 +97,12 @@ def _migrate_schema() -> None:
             PROJECT_VISUAL_STYLE_FIELDS_MIGRATION,
             "Project-level visual style lock fields for image and video generation",
             _migrate_project_visual_style_fields,
+        )
+        _run_schema_migration(
+            connection,
+            CHARACTER_CARD_VOICE_FIELDS_MIGRATION,
+            "Character-card voice provider, speaker, style, speed, and pitch fields",
+            _migrate_character_card_voice_fields,
         )
 
 
@@ -290,6 +297,21 @@ def _migrate_workspace_schema(connection) -> None:
         character_columns = _column_names("character_cards")
         if "deleted_at" not in character_columns:
             connection.execute(text("ALTER TABLE character_cards ADD COLUMN deleted_at DATETIME NULL"))
+        if "voice_provider" not in character_columns:
+            connection.execute(text("ALTER TABLE character_cards ADD COLUMN voice_provider VARCHAR(80) NULL"))
+            connection.execute(text("UPDATE character_cards SET voice_provider = '' WHERE voice_provider IS NULL"))
+        if "voice_speaker" not in character_columns:
+            connection.execute(text("ALTER TABLE character_cards ADD COLUMN voice_speaker VARCHAR(120) NULL"))
+            connection.execute(text("UPDATE character_cards SET voice_speaker = '' WHERE voice_speaker IS NULL"))
+        if "voice_style" not in character_columns:
+            connection.execute(text("ALTER TABLE character_cards ADD COLUMN voice_style VARCHAR(120) NULL"))
+            connection.execute(text("UPDATE character_cards SET voice_style = '' WHERE voice_style IS NULL"))
+        if "voice_speed" not in character_columns:
+            connection.execute(text("ALTER TABLE character_cards ADD COLUMN voice_speed FLOAT NULL"))
+            connection.execute(text("UPDATE character_cards SET voice_speed = 1.0 WHERE voice_speed IS NULL"))
+        if "voice_pitch" not in character_columns:
+            connection.execute(text("ALTER TABLE character_cards ADD COLUMN voice_pitch FLOAT NULL"))
+            connection.execute(text("UPDATE character_cards SET voice_pitch = 0.0 WHERE voice_pitch IS NULL"))
 
     for table_name in (
         "character_state_updates",
@@ -399,6 +421,27 @@ def _migrate_project_visual_style_fields(connection) -> None:
     if "visual_style_notes" not in project_columns:
         connection.execute(text("ALTER TABLE projects ADD COLUMN visual_style_notes TEXT NULL"))
         connection.execute(text("UPDATE projects SET visual_style_notes = '' WHERE visual_style_notes IS NULL"))
+
+
+def _migrate_character_card_voice_fields(connection) -> None:
+    if "character_cards" not in _table_names():
+        return
+    character_columns = _column_names("character_cards")
+    if "voice_provider" not in character_columns:
+        connection.execute(text("ALTER TABLE character_cards ADD COLUMN voice_provider VARCHAR(80) NULL"))
+        connection.execute(text("UPDATE character_cards SET voice_provider = '' WHERE voice_provider IS NULL"))
+    if "voice_speaker" not in character_columns:
+        connection.execute(text("ALTER TABLE character_cards ADD COLUMN voice_speaker VARCHAR(120) NULL"))
+        connection.execute(text("UPDATE character_cards SET voice_speaker = '' WHERE voice_speaker IS NULL"))
+    if "voice_style" not in character_columns:
+        connection.execute(text("ALTER TABLE character_cards ADD COLUMN voice_style VARCHAR(120) NULL"))
+        connection.execute(text("UPDATE character_cards SET voice_style = '' WHERE voice_style IS NULL"))
+    if "voice_speed" not in character_columns:
+        connection.execute(text("ALTER TABLE character_cards ADD COLUMN voice_speed FLOAT NULL"))
+        connection.execute(text("UPDATE character_cards SET voice_speed = 1.0 WHERE voice_speed IS NULL"))
+    if "voice_pitch" not in character_columns:
+        connection.execute(text("ALTER TABLE character_cards ADD COLUMN voice_pitch FLOAT NULL"))
+        connection.execute(text("UPDATE character_cards SET voice_pitch = 0.0 WHERE voice_pitch IS NULL"))
 
 
 def _migrate_generation_run_mediumtext(connection) -> None:
@@ -631,6 +674,7 @@ def _migrate_longform_pipeline_schema(connection) -> None:
                     visual_prompt TEXT NOT NULL,
                     character_refs_json TEXT NOT NULL,
                     scene_refs_json TEXT NOT NULL,
+                    meta_json TEXT NOT NULL,
                     duration_seconds FLOAT NOT NULL DEFAULT 4,
                     status VARCHAR(40) NOT NULL DEFAULT 'draft',
                     CONSTRAINT uq_storyboard_shots_storyboard_shot_no UNIQUE (storyboard_id, shot_no)
@@ -758,6 +802,13 @@ def _migrate_longform_batch_queue_schema(connection) -> None:
             connection.execute(text("UPDATE storyboards SET error_message = '' WHERE error_message IS NULL"))
             connection.execute(text("ALTER TABLE storyboards MODIFY COLUMN error_message TEXT NOT NULL"))
 
+    if "storyboard_shots" in tables:
+        shot_columns = _column_names("storyboard_shots")
+        if "meta_json" not in shot_columns:
+            connection.execute(text("ALTER TABLE storyboard_shots ADD COLUMN meta_json TEXT NULL"))
+            connection.execute(text("UPDATE storyboard_shots SET meta_json = '{}' WHERE meta_json IS NULL"))
+            connection.execute(text("ALTER TABLE storyboard_shots MODIFY COLUMN meta_json TEXT NOT NULL"))
+
 
 def _migrate_longform_async_metadata_schema(connection) -> None:
     tables = _table_names()
@@ -792,6 +843,13 @@ def _migrate_longform_async_metadata_schema(connection) -> None:
             connection.execute(text("ALTER TABLE storyboards ADD COLUMN error_message TEXT NULL"))
             connection.execute(text("UPDATE storyboards SET error_message = '' WHERE error_message IS NULL"))
             connection.execute(text("ALTER TABLE storyboards MODIFY COLUMN error_message TEXT NOT NULL"))
+
+    if "storyboard_shots" in tables:
+        shot_columns = _column_names("storyboard_shots")
+        if "meta_json" not in shot_columns:
+            connection.execute(text("ALTER TABLE storyboard_shots ADD COLUMN meta_json TEXT NULL"))
+            connection.execute(text("UPDATE storyboard_shots SET meta_json = '{}' WHERE meta_json IS NULL"))
+            connection.execute(text("ALTER TABLE storyboard_shots MODIFY COLUMN meta_json TEXT NOT NULL"))
 
 
 def db_session() -> Session:

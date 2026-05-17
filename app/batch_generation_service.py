@@ -77,7 +77,7 @@ class BatchGenerationService:
             start_chapter_no=start_chapter_no,
             end_chapter_no=end_chapter_no,
             job_status="queued",
-            result_summary_json=json.dumps({"generated": [], "failed": []}, ensure_ascii=False),
+            result_summary_json=json.dumps({}, ensure_ascii=False),
         )
         db.add(job)
         db.flush()
@@ -98,6 +98,7 @@ class BatchGenerationService:
             message=f"已创建批量生成任务：第 {start_chapter_no}-{end_chapter_no} 章。",
             payload={"start_chapter_no": start_chapter_no, "end_chapter_no": end_chapter_no},
         )
+        self._update_job_summary(job, generated=[], failed=[])
         db.commit()
         db.refresh(job)
         return job
@@ -122,6 +123,7 @@ class BatchGenerationService:
         self._touch_worker(job, started=True)
         job.job_status = "running"
         self._add_event(db, job=job, event_type="job_started", message="批量生成任务开始执行。")
+        self._update_job_summary(job, generated=[], failed=[])
         db.commit()
 
         tasks = db.scalars(
@@ -173,6 +175,7 @@ class BatchGenerationService:
                 message=f"开始生成第 {outline.chapter_no} 章。",
                 payload={"chapter_no": outline.chapter_no, "outline_id": outline.id},
             )
+            self._update_job_summary(job, generated, failed)
             db.commit()
             try:
                 generation, draft = self._generate_one(
@@ -290,6 +293,7 @@ class BatchGenerationService:
             job.job_status = "pause_requested"
             self._touch_worker(job)
             self._add_event(db, job=job, event_type="job_pause_requested", message="将在当前章节完成后暂停任务。")
+        self._update_job_summary(job, list(self._summary_payload(job).get("generated", [])), list(self._summary_payload(job).get("failed", [])))
         db.commit()
         db.refresh(job)
         return job
@@ -306,6 +310,7 @@ class BatchGenerationService:
         job.worker_started_at = None
         job.last_heartbeat_at = None
         self._add_event(db, job=job, event_type="job_resumed", message="批量生成任务已恢复排队。")
+        self._update_job_summary(job, list(self._summary_payload(job).get("generated", [])), list(self._summary_payload(job).get("failed", [])))
         db.commit()
         db.refresh(job)
         return job
@@ -320,6 +325,7 @@ class BatchGenerationService:
         else:
             self._mark_job_canceled(job)
             self._add_event(db, job=job, event_type="job_canceled", message="批量生成任务已取消。")
+        self._update_job_summary(job, list(self._summary_payload(job).get("generated", [])), list(self._summary_payload(job).get("failed", [])))
         db.commit()
         db.refresh(job)
         return job
@@ -531,7 +537,30 @@ class BatchGenerationService:
         generated: list[dict[str, Any]],
         failed: list[dict[str, Any]],
     ) -> None:
-        job.result_summary_json = json.dumps({"generated": generated, "failed": failed}, ensure_ascii=False)
+        total = len(job.chapter_tasks)
+        completed = sum(1 for item in job.chapter_tasks if item.status == "completed")
+        running = sum(1 for item in job.chapter_tasks if item.status == "running")
+        queued = sum(1 for item in job.chapter_tasks if item.status in ("queued", "retry_queued"))
+        canceled = sum(1 for item in job.chapter_tasks if item.status == "canceled")
+        payload = {
+            "generated": generated,
+            "failed": failed,
+            "summary": {
+                "stage": job.job_status,
+                "current_step": "chapter_generate" if job.job_status in ("running", "pause_requested") else "",
+                "failure_stage": "chapter_generate" if job.job_status == "failed" else "",
+                "total_chapters": total,
+                "completed_chapters": completed,
+                "failed_chapters": len(failed),
+                "running_chapters": running,
+                "queued_chapters": queued,
+                "canceled_chapters": canceled,
+                "current_chapter_no": job.current_chapter_no,
+                "job_status": job.job_status,
+                "last_updated_at": datetime.utcnow().isoformat(),
+            },
+        }
+        job.result_summary_json = json.dumps(payload, ensure_ascii=False)
 
     def _upsert_generated_summary(
         self,
