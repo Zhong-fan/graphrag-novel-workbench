@@ -58,6 +58,12 @@ class ProjectCreateRequest(BaseModel):
     reference_work_world_traits: list[str] = []
     reference_work_narrative_constraints: list[str] = []
     reference_work_confidence_note: str = Field(default="", max_length=1000)
+    visual_style_locked: bool = True
+    visual_style_medium: str = Field(default="二维动画电影", max_length=80)
+    visual_style_artists: list[str] = []
+    visual_style_positive: list[str] = []
+    visual_style_negative: list[str] = []
+    visual_style_notes: str = Field(default="", max_length=4000)
     world_brief: str = Field(default="", max_length=4000)
     writing_rules: str = Field(default="", max_length=2000)
     style_profile: str = Field(
@@ -82,6 +88,12 @@ class ProjectOut(BaseModel):
     reference_work_world_traits: list[str] = []
     reference_work_narrative_constraints: list[str] = []
     reference_work_confidence_note: str
+    visual_style_locked: bool
+    visual_style_medium: str
+    visual_style_artists: list[str] = []
+    visual_style_positive: list[str] = []
+    visual_style_negative: list[str] = []
+    visual_style_notes: str
     world_brief: str
     writing_rules: str
     style_profile: str
@@ -719,6 +731,12 @@ class UpdateMediaAssetRequest(BaseModel):
     uri: str = Field(default="", max_length=500)
     status: str = Field(default="pending", max_length=40)
     meta: dict[str, Any] = {}
+
+
+class GenerateCharacterTurnaroundRequest(BaseModel):
+    character_card_id: int = Field(..., ge=1)
+    chapter_no: int | None = Field(default=None, ge=1, le=10000)
+    prompt_note: str = Field(default="", max_length=2000)
 
 
 class VideoTaskOut(BaseModel):

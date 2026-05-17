@@ -47,6 +47,9 @@ class Settings:
     jimeng_req_key: str
     jimeng_aspect_ratio: str
     jimeng_frames: int
+    jimeng_image_req_key: str
+    jimeng_image_width: int
+    jimeng_image_height: int
     jimeng_poll_interval_seconds: int
     jimeng_poll_timeout_seconds: int
 
@@ -236,6 +239,17 @@ def load_settings() -> Settings:
         jimeng_req_key=_resolve_first(("JIMENG_VIDEO_REQ_KEY",), dotenv_values, "jimeng_t2v_v30") or "jimeng_t2v_v30",
         jimeng_aspect_ratio=_resolve_first(("JIMENG_VIDEO_ASPECT_RATIO",), dotenv_values, "16:9") or "16:9",
         jimeng_frames=_parse_positive_int(_resolve_first(("JIMENG_VIDEO_FRAMES",), dotenv_values), 121),
+        jimeng_image_req_key=(
+            _resolve_first(("JIMENG_IMAGE_REQ_KEY",), dotenv_values)
+            or (
+                _resolve_first(("CHENFLOW_IMAGE_MODEL",), dotenv_values)
+                if (_resolve_first(("CHENFLOW_IMAGE_MODEL",), dotenv_values) or "").startswith("jimeng_")
+                else None
+            )
+            or "jimeng_t2i_v40"
+        ),
+        jimeng_image_width=_parse_positive_int(_resolve_first(("JIMENG_IMAGE_WIDTH",), dotenv_values), 1024),
+        jimeng_image_height=_parse_positive_int(_resolve_first(("JIMENG_IMAGE_HEIGHT",), dotenv_values), 1024),
         jimeng_poll_interval_seconds=_parse_positive_int(_resolve_first(("JIMENG_POLL_INTERVAL_SECONDS",), dotenv_values), 10),
         jimeng_poll_timeout_seconds=_parse_positive_int(_resolve_first(("JIMENG_POLL_TIMEOUT_SECONDS",), dotenv_values), 900),
     )

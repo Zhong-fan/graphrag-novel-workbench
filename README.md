@@ -51,6 +51,7 @@ MVP/
 
 ```text
 项目设定
+-> 视觉风格锁定
 -> 生成长篇概要
 -> 提交概要反馈
 -> 锁定概要 / 章节概要
@@ -74,6 +75,35 @@ VideoTask queued
 ```
 
 如果没有配置即梦 key，后端会回退到旧的本地合成链路：图片生成 + TTS + 字幕文件 + FFmpeg。
+
+## 视觉风格锁定
+
+项目层现在有独立的视觉风格配置，用于约束分镜、角色三视图、镜头图片和视频 prompt。它不是写死某一部作品，而是由用户在项目中填写：
+
+- 画面媒介：例如 `二维动画电影`、`手绘漫画`、`水彩插画`、`写实电影`。
+- 作者 / 工作室画风参考：例如 `新海诚画风`、`宫崎骏画风`。
+- 正向视觉关键词：例如雨天城市、天空云层、通透光线、手绘背景。
+- 禁止项：例如真人、实拍、三次元、照片级写实、文字、水印、logo。
+- 补充说明：色彩、光线、构图、角色造型和场景质感。
+
+相关字段保存在 `projects` 表：
+
+```text
+visual_style_locked
+visual_style_medium
+visual_style_artists_json
+visual_style_positive_json
+visual_style_negative_json
+visual_style_notes
+```
+
+后端统一通过 `app/visual_style_prompt.py` 生成视觉风格块，再接入：
+
+- `app/storyboard_service.py`：要求分镜 `visual_prompt` 遵守项目级视觉风格。
+- `app/video_render_service.py`：即梦文生视频和 fallback 图片生成都使用最终视觉 prompt。
+- `app/visual_asset_service.py`：角色三视图使用同一套项目级视觉风格。
+
+前端入口在 `长篇流水线 -> 视觉风格锁定`。如果当前项目参考《天气之子》，应在这里填写类似 `二维动画电影`、`新海诚画风`、雨天城市、天空、通透光线、禁止真人/实拍等约束；其他项目可以填写自己的作者画风和媒介方向。
 
 ## 环境要求
 
@@ -130,6 +160,16 @@ CHENFLOW_FFMPEG_PATH=ffmpeg
 ```
 
 `JIMENG_VIDEO_FRAMES=121` 表示 5 秒，`241` 表示 10 秒。默认 `jimeng_t2v_v30` 对应即梦 AI 视频生成 3.0 720P 文生视频。
+
+即梦图片 4.0 配置，用于角色三视图、场景参考图、镜头首帧等视觉资产：
+
+```env
+JIMENG_IMAGE_REQ_KEY=jimeng_t2i_v40
+JIMENG_IMAGE_WIDTH=1024
+JIMENG_IMAGE_HEIGHT=1024
+```
+
+图片 4.0 使用同一组 `JIMENG_ACCESS_KEY` / `JIMENG_SECRET_KEY` 火山引擎 AK/SK 签名，不走 `CHENFLOW_IMAGE_API_KEY` 的 OpenAI-compatible 调用。
 
 旧本地合成 fallback 配置：
 
@@ -220,7 +260,9 @@ batch_generation_jobs
 即梦接入相关文件：
 
 - `app/jimeng_video_client.py`
+- `app/jimeng_image_client.py`
 - `app/video_render_service.py`
+- `app/visual_asset_service.py`
 
 客户端调用火山引擎视觉 API：
 

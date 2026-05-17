@@ -41,6 +41,7 @@ from .contracts import (
     UpdateStoryboardShotRequest,
     UpdateMediaAssetRequest,
     MediaAssetOut,
+    GenerateCharacterTurnaroundRequest,
     CreateStoryboardShotRequest,
     ReorderStoryboardShotsRequest,
     UpdateVideoTaskRequest,
@@ -67,12 +68,15 @@ from .models import (
     VideoTask,
     MediaAsset,
     ProjectChapter,
+    CharacterCard,
 )
 from .draft_revision_service import DraftRevisionService
 from .media_pipeline_service import MediaPipelineService
 from .outline_revision_service import OutlineRevisionService
 from .series_planning_service import SeriesPlanningService
 from .storyboard_job_service import StoryboardJobService
+from .visual_asset_service import VisualAssetService
+from .visual_style_prompt import build_visual_generation_prompt, project_visual_style_summary
 
 
 def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
@@ -573,8 +577,10 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
             (asset.shot_id, asset.asset_type)
             for asset in db.scalars(select(MediaAsset).where(MediaAsset.storyboard_id == storyboard.id)).all()
         }
+        visual_style = project_visual_style_summary(project)
         for shot in sorted(storyboard.shots, key=lambda item: item.shot_no):
             if (shot.id, "image") not in existing_asset_keys:
+                image_prompt = build_visual_generation_prompt(project=project, shot=shot, include_narration=False)
                 db.add(
                     MediaAsset(
                         project_id=project.id,
@@ -582,9 +588,9 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
                         shot=shot,
                         asset_type="image",
                         uri="",
-                        prompt=shot.visual_prompt,
+                        prompt=image_prompt,
                         status="pending",
-                        meta_json=json_dumps({"shot_no": shot.shot_no, "purpose": "镜头图"}),
+                        meta_json=json_dumps({"shot_no": shot.shot_no, "purpose": "镜头图", "visual_style": visual_style}),
                     )
                 )
                 existing_asset_keys.add((shot.id, "image"))
@@ -783,6 +789,35 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         asset.meta_json = json_dumps(payload.meta)
         db.commit()
         db.refresh(asset)
+        return _media_asset_out(asset)
+
+    @router.post("/api/projects/{project_id}/visual-assets/character-turnaround", response_model=MediaAssetOut)
+    def generate_character_turnaround(
+        project_id: int,
+        payload: GenerateCharacterTurnaroundRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> MediaAssetOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        character = db.scalar(
+            select(CharacterCard).where(
+                CharacterCard.project_id == project.id,
+                CharacterCard.id == payload.character_card_id,
+                CharacterCard.deleted_at.is_(None),
+            )
+        )
+        if character is None:
+            raise HTTPException(status_code=404, detail="人物卡不存在。")
+        try:
+            asset = VisualAssetService(settings).generate_character_turnaround(
+                db=db,
+                project=project,
+                character=character,
+                chapter_no=payload.chapter_no,
+                prompt_note=payload.prompt_note,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         return _media_asset_out(asset)
 
 

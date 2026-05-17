@@ -45,6 +45,7 @@ import type {
   MediaAsset,
   UpdateChapterOutlinePayload,
   UpdateMediaAssetPayload,
+  GenerateCharacterTurnaroundPayload,
   UpdateStoryboardShotPayload,
   CreateStoryboardShotPayload,
   ReorderStoryboardShotsPayload,
@@ -359,6 +360,12 @@ export const api = {
   updateMediaAsset: (token: string, projectId: number, assetId: number, payload: UpdateMediaAssetPayload) =>
     request<MediaAsset>(`/api/projects/${projectId}/media-assets/${assetId}`, {
       method: "PUT",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  generateCharacterTurnaround: (token: string, projectId: number, payload: GenerateCharacterTurnaroundPayload) =>
+    request<MediaAsset>(`/api/projects/${projectId}/visual-assets/character-turnaround`, {
+      method: "POST",
       token,
       body: JSON.stringify(payload),
     }),

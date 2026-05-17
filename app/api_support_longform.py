@@ -35,6 +35,18 @@ from .models import (
 )
 
 
+def _public_asset_url(uri: str) -> str:
+    if not uri:
+        return ""
+    normalized = uri.replace("\\", "/")
+    marker = "/output/"
+    if marker in normalized:
+        return "/output/" + normalized.split(marker, 1)[1]
+    if normalized.startswith("output/"):
+        return "/" + normalized
+    return ""
+
+
 def _series_plan_version_out(version: SeriesPlanVersion) -> SeriesPlanVersionOut:
     return SeriesPlanVersionOut(
         id=version.id,
@@ -226,13 +238,17 @@ def _storyboard_out(storyboard: Storyboard) -> StoryboardOut:
 
 def _video_task_out(task: VideoTask) -> VideoTaskOut:
     events = sorted(task.events, key=lambda item: item.created_at)
+    progress = json_loads_object(task.progress_json)
+    public_url = _public_asset_url(task.output_uri)
+    if public_url:
+        progress = {**progress, "public_url": public_url}
     return VideoTaskOut(
         id=task.id,
         project_id=task.project_id,
         storyboard_id=task.storyboard_id,
         task_status=task.task_status,
         output_uri=task.output_uri,
-        progress=json_loads_object(task.progress_json),
+        progress=progress,
         error_message=task.error_message,
         events=[_task_event_out(item) for item in events[-80:]],
         created_at=task.created_at,
@@ -241,6 +257,10 @@ def _video_task_out(task: VideoTask) -> VideoTaskOut:
 
 
 def _media_asset_out(asset: MediaAsset) -> MediaAssetOut:
+    meta = json_loads_object(asset.meta_json)
+    public_url = _public_asset_url(asset.uri)
+    if public_url:
+        meta = {**meta, "public_url": public_url}
     return MediaAssetOut(
         id=asset.id,
         project_id=asset.project_id,
@@ -250,7 +270,7 @@ def _media_asset_out(asset: MediaAsset) -> MediaAssetOut:
         uri=asset.uri,
         prompt=asset.prompt,
         status=asset.status,
-        meta=json_loads_object(asset.meta_json),
+        meta=meta,
         created_at=asset.created_at,
         updated_at=asset.updated_at,
     )

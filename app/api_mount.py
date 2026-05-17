@@ -12,6 +12,8 @@ def mount_spa(app: FastAPI, settings: Settings) -> None:
     assets_dir = dist_dir / "assets"
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+    if settings.output_dir.exists():
+        app.mount("/output", StaticFiles(directory=settings.output_dir), name="output")
 
     if dist_dir.exists() and (dist_dir / "index.html").exists():
 

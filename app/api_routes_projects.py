@@ -80,6 +80,15 @@ def _apply_reference_work_payload(project: Project, payload: ProjectCreateReques
     project.reference_work_confidence_note = payload.reference_work_confidence_note.strip()
 
 
+def _apply_visual_style_payload(project: Project, payload: ProjectCreateRequest | ProjectUpdateRequest) -> None:
+    project.visual_style_locked = bool(payload.visual_style_locked)
+    project.visual_style_medium = payload.visual_style_medium.strip() or "二维动画电影"
+    project.visual_style_artists = payload.visual_style_artists
+    project.visual_style_positive = payload.visual_style_positive
+    project.visual_style_negative = payload.visual_style_negative
+    project.visual_style_notes = payload.visual_style_notes.strip()
+
+
 def register_project_routes(router: APIRouter) -> None:
     @router.get("/api/projects", response_model=list[ProjectOut])
     def list_projects(
@@ -189,6 +198,7 @@ def register_project_routes(router: APIRouter) -> None:
             style_profile=payload.style_profile,
         )
         _apply_reference_work_payload(project, payload)
+        _apply_visual_style_payload(project, payload)
         db.add(project)
         db.commit()
         db.refresh(project)
@@ -226,6 +236,7 @@ def register_project_routes(router: APIRouter) -> None:
         project.title = payload.title.strip()
         project.genre = payload.genre.strip()
         _apply_reference_work_payload(project, payload)
+        _apply_visual_style_payload(project, payload)
         project.world_brief = payload.world_brief.strip()
         project.writing_rules = payload.writing_rules.strip()
         project.style_profile = payload.style_profile

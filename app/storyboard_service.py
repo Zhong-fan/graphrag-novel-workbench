@@ -7,6 +7,7 @@ from .config import Settings
 from .json_utils import parse_json_object
 from .llm import OpenAIResponsesLLM
 from .models import NovelChapter, Project
+from .visual_style_prompt import build_visual_style_block
 
 
 class StoryboardService:
@@ -47,6 +48,8 @@ class StoryboardService:
 类型：{project.genre}
 短片标题：{title}
 
+{build_visual_style_block(project)}
+
 世界设定：
 {project.world_brief or "暂无"}
 
@@ -72,6 +75,8 @@ class StoryboardService:
 要求：
 - 生成 6 到 12 个镜头。
 - 每个镜头都能独立转成图片提示词。
+- 每个 visual_prompt 必须明确写出画面媒介、美术方向、角色外观、场景、构图、光影和色彩。
+- 必须遵守项目级视觉风格锁定；如果用户填写了作者/工作室画风参考，只借鉴可迁移的美术特征，不要复刻原作角色、剧情、专有名词或具体画面。
 - 不要改写章节既定事实。
 - 旁白简洁，适合短视频字幕。
 """.strip()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import re
 import subprocess
 import time
 import urllib.request
@@ -14,8 +15,9 @@ from sqlalchemy.orm import Session
 
 from .config import Settings
 from .jimeng_video_client import JimengVideoClient
-from .json_utils import json_dumps, json_loads_object
-from .models import MediaAsset, StoryboardShot, TaskEvent, VideoTask
+from .json_utils import json_dumps, json_loads_list, json_loads_object
+from .models import MediaAsset, NovelChapter, StoryboardShot, TaskEvent, VideoTask
+from .visual_style_prompt import build_visual_generation_prompt, project_visual_style_summary
 
 
 class VideoRenderService:
@@ -30,7 +32,7 @@ class VideoRenderService:
         self._add_event(db, task=task, event_type="video_task_running", message="视频生产开始。")
         db.commit()
 
-        output_dir = self.settings.output_dir / "video_tasks" / str(task.id)
+        output_dir = self._output_dir(db=db, task=task)
         output_dir.mkdir(parents=True, exist_ok=True)
         shots = sorted(task.storyboard.shots, key=lambda item: item.shot_no)
         if not shots:
@@ -58,7 +60,7 @@ class VideoRenderService:
         )
         segment_paths: list[Path] = []
         for shot in shots:
-            prompt = self._build_jimeng_prompt(shot)
+            prompt = self._build_jimeng_prompt(task, shot)
             self._set_progress(
                 task,
                 stage="jimeng_submit",
@@ -161,15 +163,17 @@ class VideoRenderService:
             self._set_progress(task, stage="image", message=f"生成镜头 {shot.shot_no} 图片。")
             self._add_event(db, task=task, event_type="video_task_image", message=f"生成镜头 {shot.shot_no} 图片。")
             db.commit()
-            image_path = self._generate_image(shot=shot, output_dir=output_dir)
+            image_prompt = self._build_image_prompt(task, shot)
+            image_path = self._generate_image(prompt=image_prompt, shot=shot, output_dir=output_dir)
             self._upsert_asset(
                 db,
                 task=task,
                 shot=shot,
                 asset_type="image",
                 uri=str(image_path),
-                prompt=shot.visual_prompt,
+                prompt=image_prompt,
                 status="completed",
+                meta={"visual_style": project_visual_style_summary(task.project)},
             )
 
             self._set_progress(task, stage="voice", message=f"生成镜头 {shot.shot_no} 旁白。")
@@ -250,15 +254,21 @@ class VideoRenderService:
     def _jimeng_enabled(self) -> bool:
         return bool(self.settings.jimeng_access_key or self.settings.jimeng_secret_key)
 
-    def _build_jimeng_prompt(self, shot: StoryboardShot) -> str:
-        parts = [
-            shot.visual_prompt.strip(),
-            "镜头要求：画面稳定，主体一致，动作自然，电影感，720P，避免文字水印、字幕、logo。",
-        ]
-        narration = shot.narration_text.strip()
-        if narration:
-            parts.append(f"剧情信息：{narration}")
-        return "\n".join(part for part in parts if part).strip()[:780]
+    def _build_jimeng_prompt(self, task: VideoTask, shot: StoryboardShot) -> str:
+        return build_visual_generation_prompt(
+            project=task.project,
+            shot=shot,
+            include_narration=True,
+            max_length=1200,
+        )
+
+    def _build_image_prompt(self, task: VideoTask, shot: StoryboardShot) -> str:
+        return build_visual_generation_prompt(
+            project=task.project,
+            shot=shot,
+            include_narration=False,
+            max_length=1800,
+        )
 
     def _wait_for_jimeng_result(self, *, client: JimengVideoClient, task_id: str) -> tuple[str, dict[str, Any]]:
         deadline = time.monotonic() + self.settings.jimeng_poll_timeout_seconds
@@ -287,10 +297,44 @@ class VideoRenderService:
             raise RuntimeError("下载即梦视频失败：返回空文件。")
         path.write_bytes(content)
 
-    def _generate_image(self, *, shot: StoryboardShot, output_dir: Path) -> Path:
+    def _output_dir(self, *, db: Session, task: VideoTask) -> Path:
+        project = task.project
+        storyboard = task.storyboard
+        project_dir = f"{project.id:04d}-{self._path_slug(project.title)}" if project is not None else f"project-{task.project_id:04d}"
+        chapter_dir = self._chapter_dir_name(db=db, task=task)
+        storyboard_dir = f"{storyboard.id:04d}-{self._path_slug(storyboard.title)}"
+        return (
+            self.settings.output_dir
+            / "projects"
+            / project_dir
+            / "chapters"
+            / chapter_dir
+            / "storyboards"
+            / storyboard_dir
+            / "video_tasks"
+            / f"{task.id:04d}"
+        )
+
+    def _chapter_dir_name(self, *, db: Session, task: VideoTask) -> str:
+        chapter_ids = [int(item) for item in json_loads_list(task.storyboard.source_chapter_ids_json) if str(item).isdigit()]
+        if not chapter_ids:
+            return "chapter-unassigned"
+        chapters = db.query(NovelChapter).filter(NovelChapter.id.in_(chapter_ids)).order_by(NovelChapter.chapter_no.asc()).all()
+        if len(chapters) == 1:
+            chapter = chapters[0]
+            return f"chapter-{chapter.chapter_no:03d}-{self._path_slug(chapter.title)}"
+        chapter_numbers = "-".join(str(item.chapter_no).zfill(3) for item in chapters)
+        return f"chapters-{chapter_numbers or 'mixed'}"
+
+    def _path_slug(self, value: str, *, fallback: str = "untitled") -> str:
+        text = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", value.strip())
+        text = re.sub(r"\s+", "-", text).strip(".- ")
+        return (text or fallback)[:80]
+
+    def _generate_image(self, *, prompt: str, shot: StoryboardShot, output_dir: Path) -> Path:
         payload = {
             "model": self.settings.image_model,
-            "prompt": shot.visual_prompt,
+            "prompt": prompt,
             "size": self.settings.image_size,
             "n": 1,
         }

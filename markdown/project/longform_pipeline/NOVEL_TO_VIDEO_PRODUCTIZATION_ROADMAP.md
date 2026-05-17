@@ -60,6 +60,54 @@
 
 ## 一、视觉资产层
 
+### 0. 项目级视觉风格锁定
+
+这是视觉资产层的前置能力。用户在项目层明确“这部作品的视频应该长什么样”，后续角色三视图、场景图、首帧图、镜头图和视频 prompt 都从这里继承约束。
+
+短期已采用 `projects` 表字段承载：
+
+```text
+visual_style_locked
+visual_style_medium
+visual_style_artists_json
+visual_style_positive_json
+visual_style_negative_json
+visual_style_notes
+```
+
+前端入口：
+
+```text
+长篇流水线 -> 视觉风格锁定
+```
+
+用户可编辑：
+
+- 画面媒介：例如 `二维动画电影`、`手绘漫画`、`水彩插画`、`写实电影`。
+- 作者 / 工作室画风参考：例如 `新海诚画风`、`宫崎骏画风`。
+- 正向视觉关键词：色彩、光线、场景质感、角色造型、构图语言。
+- 禁止项：例如真人、实拍、三次元、照片级写实、文字、水印、logo。
+- 补充说明：这部项目独有的视觉要求。
+
+实现原则：
+
+- 不能在代码里写死某一部参考作品或某个作者。
+- 作者画风只作为用户可编辑的项目配置参与 prompt。
+- 后端统一从项目配置构造视觉风格块，而不是让每个服务各写一套 prompt。
+- 如果用户没有填写正向关键词，短期回退到参考作品识别出的 `reference_work_style_traits` 和 `reference_work_world_traits`。
+
+已接入位置：
+
+- `StoryboardService`：生成分镜时要求 `visual_prompt` 遵守项目级视觉风格。
+- `VideoRenderService`：即梦文生视频和 fallback 图片生成都使用最终视觉 prompt。
+- `VisualAssetService`：角色三视图 prompt 使用同一套视觉风格。
+
+后续应扩展：
+
+- 把视觉风格锁定也接入场景资产、首帧图和图生视频。
+- 增加“风格测试图”按钮，先生成低成本 sample，再进入批量视频。
+- 增加项目级风格版本历史，避免改风格后旧素材失去上下文。
+
 ### 1. 角色资产
 
 目标：让同一角色在不同镜头中尽量保持外观、服装、年龄、气质一致。
@@ -287,6 +335,188 @@ bgm
 sound_effect
 final_video
 ```
+
+### 配音功能实现方案
+
+配音优先做“旁白 TTS”，再扩展到角色对白。原因是当前 `StoryboardShot.narration_text` 已经稳定存在，能直接作为每个镜头的旁白脚本。
+
+#### 1. 数据落点
+
+短期继续复用 `media_assets`：
+
+```text
+media_assets.asset_type:
+  voice
+  subtitle
+  bgm
+  sound_effect
+  final_video
+```
+
+`voice` asset 的 `meta_json` 建议写入：
+
+```json
+{
+  "video_task_id": 1,
+  "storyboard_id": 1,
+  "shot_id": 1,
+  "shot_no": 1,
+  "voice_role": "narrator",
+  "voice_profile": "female_soft|male_young|custom",
+  "provider": "openai_compatible|volcengine|edge_tts",
+  "model": "tts-model-name",
+  "duration_seconds": 4.8,
+  "sample_rate": 24000,
+  "mime_type": "audio/mpeg",
+  "locked": false,
+  "version": 1
+}
+```
+
+中期可新增表：
+
+```text
+voice_profiles
+voice_tasks
+voice_segments
+audio_compositions
+```
+
+但在 MVP 阶段不必立刻加表，先保证 `media_assets` 中的音频资产可生成、可试听、可替换。
+
+#### 2. 后端服务
+
+建议新增：
+
+```text
+app/voice_service.py
+```
+
+核心方法：
+
+```python
+class VoiceService:
+    def generate_shot_voice(db, shot, voice_profile, output_dir) -> MediaAsset
+    def generate_storyboard_voice(db, storyboard, voice_profile) -> list[MediaAsset]
+```
+
+短期可以复用 `VideoRenderService._generate_voice()` 的 OpenAI-compatible TTS 调用，但应抽出来，不再藏在本地 fallback 视频分支里。
+
+#### 3. API
+
+建议新增接口：
+
+```text
+POST /api/projects/{project_id}/storyboards/{storyboard_id}/voice-tasks
+POST /api/projects/{project_id}/storyboards/{storyboard_id}/shots/{shot_id}/voice
+POST /api/projects/{project_id}/media-assets/{asset_id}/regenerate-voice
+```
+
+请求体：
+
+```json
+{
+  "voice_profile": "female_soft",
+  "provider": "openai_compatible",
+  "speed": 1.0,
+  "emotion": "calm|sad|tense|hopeful",
+  "text_override": ""
+}
+```
+
+返回 `MediaAssetOut` 或 voice task 状态。
+
+#### 4. Worker 拆分
+
+配音不应该和视频模型任务绑定死。推荐拆成独立步骤：
+
+```text
+GenerateVoiceTask
+GenerateSubtitleTask
+ComposeShotAudioTask
+ComposeFinalVideoTask
+```
+
+最小实现可以先同步执行：
+
+```text
+点击“生成旁白”
+-> 遍历 shots
+-> 每个 shot 调 TTS
+-> 保存 shot-001.mp3
+-> 写入 media_assets voice
+-> 前端可试听
+```
+
+后续再改为队列任务。
+
+#### 5. 字幕与音频对齐
+
+短期：
+
+- 每个镜头一条字幕，时间轴为 `0 -> shot.duration_seconds`。
+- 文件格式先用 `.srt`。
+- `media_assets.asset_type=subtitle`。
+
+中期：
+
+- 根据 TTS 返回时长或 `ffprobe` 读取音频时长。
+- 如果音频长于镜头，提示用户缩短旁白或自动延长镜头时长。
+- 支持 `.ass` 样式字幕。
+
+#### 6. 最终合成
+
+FFmpeg 最小合成：
+
+```text
+输入：shot_video_segment.mp4 + shot_voice.mp3
+输出：shot_composed.mp4
+```
+
+示例命令逻辑：
+
+```text
+ffmpeg -i segment.mp4 -i voice.mp3 \
+  -map 0:v:0 -map 1:a:0 \
+  -c:v copy -c:a aac -shortest shot-composed.mp4
+```
+
+最终合成：
+
+```text
+shot-composed-001.mp4
+shot-composed-002.mp4
+...
+-> concat
+-> 加 BGM ducking
+-> 烧录字幕
+-> final.mp4
+```
+
+BGM ducking 可后置，先实现旁白混入和字幕文件生成。
+
+#### 7. 前端体验
+
+前端需要在长篇流水线或独立视频任务页中支持：
+
+- 镜头旁白文本查看和编辑。
+- 选择 voice profile。
+- 单镜头生成 / 重生成配音。
+- 整个分镜批量生成配音。
+- 音频试听。
+- 显示音频时长。
+- 显示“音频比镜头长”的警告。
+- 选择是否烧录字幕。
+- 最终视频预览。
+
+小内容用弹框处理：
+
+- 配音参数。
+- 试听。
+- 重生成确认。
+- 字幕样式。
+
+主页面保持单列生产链路，不做左右结构。
 
 ## 六、前端产品化体验
 

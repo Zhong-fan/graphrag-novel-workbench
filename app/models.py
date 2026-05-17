@@ -64,6 +64,12 @@ class Project(Base, TimestampMixin):
     reference_work_world_traits_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     reference_work_narrative_constraints_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     reference_work_confidence_note: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    visual_style_locked: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    visual_style_medium: Mapped[str] = mapped_column(String(80), default="二维动画电影", nullable=False)
+    visual_style_artists_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    visual_style_positive_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    visual_style_negative_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    visual_style_notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
     premise: Mapped[str] = mapped_column(Text, default="", nullable=False)
     world_brief: Mapped[str] = mapped_column(Text, default="", nullable=False)
     writing_rules: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -150,6 +156,30 @@ class Project(Base, TimestampMixin):
     @reference_work_narrative_constraints.setter
     def reference_work_narrative_constraints(self, value: list[str]) -> None:
         self.reference_work_narrative_constraints_json = json.dumps(_normalize_text_list(value), ensure_ascii=False)
+
+    @property
+    def visual_style_artists(self) -> list[str]:
+        return _json_text_list(self.visual_style_artists_json)
+
+    @visual_style_artists.setter
+    def visual_style_artists(self, value: list[str]) -> None:
+        self.visual_style_artists_json = json.dumps(_normalize_text_list(value), ensure_ascii=False)
+
+    @property
+    def visual_style_positive(self) -> list[str]:
+        return _json_text_list(self.visual_style_positive_json)
+
+    @visual_style_positive.setter
+    def visual_style_positive(self, value: list[str]) -> None:
+        self.visual_style_positive_json = json.dumps(_normalize_text_list(value), ensure_ascii=False)
+
+    @property
+    def visual_style_negative(self) -> list[str]:
+        return _json_text_list(self.visual_style_negative_json)
+
+    @visual_style_negative.setter
+    def visual_style_negative(self, value: list[str]) -> None:
+        self.visual_style_negative_json = json.dumps(_normalize_text_list(value), ensure_ascii=False)
 
 
 def _json_text_list(value: str) -> list[str]:

@@ -15,6 +15,7 @@ GENERATION_RUN_MEDIUMTEXT_MIGRATION = "20260512_0004_generation_run_mediumtext"
 LONGFORM_PIPELINE_SCHEMA_MIGRATION = "20260515_0005_longform_pipeline_schema"
 LONGFORM_BATCH_QUEUE_SCHEMA_MIGRATION = "20260516_0006_longform_batch_queue_schema"
 LONGFORM_ASYNC_METADATA_SCHEMA_MIGRATION = "20260516_0007_longform_async_metadata_schema"
+PROJECT_VISUAL_STYLE_FIELDS_MIGRATION = "20260517_0008_project_visual_style_fields"
 
 
 settings = load_settings()
@@ -89,6 +90,12 @@ def _migrate_schema() -> None:
             LONGFORM_ASYNC_METADATA_SCHEMA_MIGRATION,
             "Longform async worker metadata for batch and storyboard jobs",
             _migrate_longform_async_metadata_schema,
+        )
+        _run_schema_migration(
+            connection,
+            PROJECT_VISUAL_STYLE_FIELDS_MIGRATION,
+            "Project-level visual style lock fields for image and video generation",
+            _migrate_project_visual_style_fields,
         )
 
 
@@ -360,6 +367,38 @@ def _migrate_project_reference_work_fields(connection) -> None:
         connection.execute(text("UPDATE projects SET reference_work_confidence_note = '' WHERE reference_work_confidence_note IS NULL"))
     if "indexing_status" in _column_names("projects"):
         connection.execute(text("UPDATE projects SET indexing_status = 'stale' WHERE indexing_status IS NULL OR indexing_status = ''"))
+
+
+def _migrate_project_visual_style_fields(connection) -> None:
+    if "projects" not in _table_names():
+        return
+    project_columns = _column_names("projects")
+    if "visual_style_locked" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN visual_style_locked BOOLEAN NULL"))
+        connection.execute(text("UPDATE projects SET visual_style_locked = TRUE WHERE visual_style_locked IS NULL"))
+    if "visual_style_medium" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN visual_style_medium VARCHAR(80) NULL"))
+        connection.execute(text("UPDATE projects SET visual_style_medium = '二维动画电影' WHERE visual_style_medium IS NULL OR visual_style_medium = ''"))
+    if "visual_style_artists_json" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN visual_style_artists_json TEXT NULL"))
+        connection.execute(text("UPDATE projects SET visual_style_artists_json = '[]' WHERE visual_style_artists_json IS NULL"))
+    if "visual_style_positive_json" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN visual_style_positive_json TEXT NULL"))
+        connection.execute(
+            text("UPDATE projects SET visual_style_positive_json = reference_work_style_traits_json WHERE visual_style_positive_json IS NULL")
+        )
+    if "visual_style_negative_json" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN visual_style_negative_json TEXT NULL"))
+        connection.execute(
+            text(
+                "UPDATE projects SET visual_style_negative_json = "
+                "'[\"真人\", \"实拍\", \"三次元\", \"照片级写实\", \"文字\", \"水印\", \"logo\"]' "
+                "WHERE visual_style_negative_json IS NULL"
+            )
+        )
+    if "visual_style_notes" not in project_columns:
+        connection.execute(text("ALTER TABLE projects ADD COLUMN visual_style_notes TEXT NULL"))
+        connection.execute(text("UPDATE projects SET visual_style_notes = '' WHERE visual_style_notes IS NULL"))
 
 
 def _migrate_generation_run_mediumtext(connection) -> None:

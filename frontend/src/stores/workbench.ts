@@ -34,6 +34,7 @@ import type {
   ReviseDraftPayload,
   UpdateChapterOutlinePayload,
   UpdateMediaAssetPayload,
+  GenerateCharacterTurnaroundPayload,
   UpdateStoryboardShotPayload,
   CreateStoryboardShotPayload,
   ReorderStoryboardShotsPayload,
@@ -1142,6 +1143,24 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
+  async function generateCharacterTurnaround(payload: GenerateCharacterTurnaroundPayload) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const asset = await api.generateCharacterTurnaround(token.value, activeProject.value.project.id, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "角色三视图已生成。";
+      return asset;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "生成角色三视图失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
   async function updateVideoTask(taskId: number, payload: UpdateVideoTaskPayload) {
     if (!token.value || !activeProject.value) return null;
     loading.value = true;
@@ -1212,6 +1231,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     deleteStoryboardShot,
     reorderStoryboardShots,
     updateMediaAsset,
+    generateCharacterTurnaround,
     updateVideoTask,
     updateProject,
     resolveReferenceWork,

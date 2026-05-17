@@ -190,6 +190,12 @@ const emptyProject = (): ProjectPayload => ({
   reference_work_world_traits: [],
   reference_work_narrative_constraints: [],
   reference_work_confidence_note: "",
+  visual_style_locked: true,
+  visual_style_medium: "二维动画电影",
+  visual_style_artists: [],
+  visual_style_positive: [],
+  visual_style_negative: ["真人", "实拍", "三次元", "照片级写实", "文字", "水印", "logo"],
+  visual_style_notes: "",
   world_brief: "",
   writing_rules: "",
   style_profile: "lyrical_restrained",
@@ -448,6 +454,12 @@ function syncProjectSettingsForm() {
   projectSettingsForm.reference_work_world_traits = [...project.reference_work_world_traits];
   projectSettingsForm.reference_work_narrative_constraints = [...project.reference_work_narrative_constraints];
   projectSettingsForm.reference_work_confidence_note = project.reference_work_confidence_note;
+  projectSettingsForm.visual_style_locked = project.visual_style_locked;
+  projectSettingsForm.visual_style_medium = project.visual_style_medium;
+  projectSettingsForm.visual_style_artists = [...project.visual_style_artists];
+  projectSettingsForm.visual_style_positive = [...project.visual_style_positive];
+  projectSettingsForm.visual_style_negative = [...project.visual_style_negative];
+  projectSettingsForm.visual_style_notes = project.visual_style_notes;
   projectSettingsForm.world_brief = project.world_brief;
   projectSettingsForm.writing_rules = project.writing_rules;
   projectSettingsForm.style_profile = project.style_profile;
@@ -532,6 +544,8 @@ async function resolveReferenceWork() {
   projectForm.reference_work_world_traits = [...result.world_traits];
   projectForm.reference_work_narrative_constraints = [...result.narrative_constraints];
   projectForm.reference_work_confidence_note = result.confidence_note;
+  projectForm.visual_style_positive = [...result.style_traits, ...result.world_traits].slice(0, 10);
+  if (!projectForm.visual_style_medium.trim()) projectForm.visual_style_medium = "二维动画电影";
   projectForm.reference_work_confirmed = false;
 }
 
@@ -555,6 +569,8 @@ async function reResolveProjectSettingsReferenceWork() {
   projectSettingsForm.reference_work_world_traits = [...result.world_traits];
   projectSettingsForm.reference_work_narrative_constraints = [...result.narrative_constraints];
   projectSettingsForm.reference_work_confidence_note = result.confidence_note;
+  projectSettingsForm.visual_style_positive = [...result.style_traits, ...result.world_traits].slice(0, 10);
+  if (!projectSettingsForm.visual_style_medium.trim()) projectSettingsForm.visual_style_medium = "二维动画电影";
 }
 
 function confirmReferenceWork() {
@@ -575,6 +591,8 @@ function clearReferenceWorkResolution() {
   projectForm.reference_work_world_traits = [];
   projectForm.reference_work_narrative_constraints = [];
   projectForm.reference_work_confidence_note = "";
+  projectForm.visual_style_artists = [];
+  projectForm.visual_style_positive = [];
   projectForm.reference_work_confirmed = false;
 }
 
@@ -737,6 +755,12 @@ async function submitCreateProject() {
     reference_work_world_traits: projectForm.reference_work_confirmed ? [...projectForm.reference_work_world_traits] : [],
     reference_work_narrative_constraints: projectForm.reference_work_confirmed ? [...projectForm.reference_work_narrative_constraints] : [],
     reference_work_confidence_note: projectForm.reference_work_confirmed ? projectForm.reference_work_confidence_note : "",
+    visual_style_locked: projectForm.visual_style_locked,
+    visual_style_medium: projectForm.visual_style_medium,
+    visual_style_artists: [...projectForm.visual_style_artists],
+    visual_style_positive: [...projectForm.visual_style_positive],
+    visual_style_negative: [...projectForm.visual_style_negative],
+    visual_style_notes: projectForm.visual_style_notes,
     world_brief: projectForm.world_brief,
     writing_rules: projectForm.writing_rules,
     style_profile: projectForm.style_profile,
@@ -751,6 +775,40 @@ async function submitCreateProject() {
 
 async function submitUpdateProject() {
   await store.updateProject(projectSettingsForm);
+  if (!error.value) syncProjectSettingsForm();
+}
+
+async function submitUpdateVisualStyle(payload: {
+  locked: boolean;
+  medium: string;
+  artists: string[];
+  positive: string[];
+  negative: string[];
+  notes: string;
+}) {
+  const project = activeProject.value?.project;
+  if (!project) return;
+  await store.updateProject({
+    title: project.title,
+    genre: project.genre,
+    reference_work: project.reference_work,
+    reference_work_creator: project.reference_work_creator,
+    reference_work_medium: project.reference_work_medium,
+    reference_work_synopsis: project.reference_work_synopsis,
+    reference_work_style_traits: [...project.reference_work_style_traits],
+    reference_work_world_traits: [...project.reference_work_world_traits],
+    reference_work_narrative_constraints: [...project.reference_work_narrative_constraints],
+    reference_work_confidence_note: project.reference_work_confidence_note,
+    visual_style_locked: payload.locked,
+    visual_style_medium: payload.medium,
+    visual_style_artists: payload.artists,
+    visual_style_positive: payload.positive,
+    visual_style_negative: payload.negative,
+    visual_style_notes: payload.notes,
+    world_brief: project.world_brief,
+    writing_rules: project.writing_rules,
+    style_profile: project.style_profile,
+  });
   if (!error.value) syncProjectSettingsForm();
 }
 
@@ -941,6 +999,14 @@ async function submitUpdateAsset(payload: { assetId: number; uri: string; status
     uri: payload.uri,
     status: payload.status,
     meta: payload.meta,
+  });
+}
+
+async function submitGenerateCharacterTurnaround(payload: { character_card_id: number; chapter_no?: number | null; prompt_note: string }) {
+  await store.generateCharacterTurnaround({
+    character_card_id: payload.character_card_id,
+    chapter_no: payload.chapter_no ?? null,
+    prompt_note: payload.prompt_note,
   });
 }
 
@@ -1357,9 +1423,11 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
           <template v-else-if="currentView === 'longform'">
             <LongformPipelinePanel
               v-if="isAuthenticated && hasProject"
+              :project="activeProject?.project"
               :project-title="activeProject?.project.title"
               :loading="loading"
               :state="longformState"
+              :character-cards="activeProject?.character_cards || []"
               :managed-novels="managedNovels"
               :current-novel="currentNovel"
               @generate-plan="submitGenerateSeriesPlan"
@@ -1379,10 +1447,12 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
               @update-outline="submitUpdateOutline"
               @update-shot="submitUpdateShot"
               @update-asset="submitUpdateAsset"
+              @generate-character-turnaround="submitGenerateCharacterTurnaround"
               @create-shot="submitCreateShot"
               @delete-shot="submitDeleteShot"
               @reorder-shots="submitReorderShots"
               @update-video-task="submitUpdateVideoTask"
+              @update-visual-style="submitUpdateVisualStyle"
             />
           </template>
 

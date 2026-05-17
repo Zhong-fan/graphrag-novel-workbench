@@ -190,6 +190,40 @@
   margin-top: 16px;
 }
 
+.asset-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(20, 24, 30, 0.54);
+}
+
+.asset-modal__body {
+  width: min(1040px, 100%);
+  max-height: min(840px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 22px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 24px 80px rgba(17, 24, 39, 0.28);
+}
+
+.asset-preview {
+  display: block;
+  width: 100%;
+  max-height: calc(100vh - 190px);
+  margin-top: 16px;
+  border-radius: 12px;
+  background: #111827;
+  object-fit: contain;
+}
+
+.asset-preview--image {
+  background: #f7f8fb;
+}
+
 @media (max-width: 760px) {
   .shell--workspace {
     width: min(100vw - 16px, 100%);

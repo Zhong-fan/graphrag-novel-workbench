@@ -50,6 +50,12 @@ export interface Project {
   reference_work_world_traits: string[];
   reference_work_narrative_constraints: string[];
   reference_work_confidence_note: string;
+  visual_style_locked: boolean;
+  visual_style_medium: string;
+  visual_style_artists: string[];
+  visual_style_positive: string[];
+  visual_style_negative: string[];
+  visual_style_notes: string;
   world_brief: string;
   writing_rules: string;
   style_profile: string;
@@ -70,6 +76,12 @@ export interface ProjectPayload {
   reference_work_world_traits: string[];
   reference_work_narrative_constraints: string[];
   reference_work_confidence_note: string;
+  visual_style_locked: boolean;
+  visual_style_medium: string;
+  visual_style_artists: string[];
+  visual_style_positive: string[];
+  visual_style_negative: string[];
+  visual_style_notes: string;
   world_brief: string;
   writing_rules: string;
   style_profile: string;
@@ -505,6 +517,12 @@ export interface UpdateMediaAssetPayload {
   uri: string;
   status: string;
   meta: Record<string, unknown>;
+}
+
+export interface GenerateCharacterTurnaroundPayload {
+  character_card_id: number;
+  chapter_no?: number | null;
+  prompt_note: string;
 }
 
 export interface UpdateVideoTaskPayload {
