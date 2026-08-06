@@ -2,13 +2,15 @@ import json
 from textwrap import dedent
 
 from .config import Settings
-from .llm import APIHTTPError, APINetworkError, OpenAIResponsesLLM
+from .llm import APIHTTPError, APINetworkError, OpenAICompatibleTextLLM
+from .capabilities import CapabilityRole
+from .text_capability import text_model_for_role
 
 
 class ProjectBriefingService:
     def __init__(self, *, settings: Settings) -> None:
         self.settings = settings
-        self.llm = OpenAIResponsesLLM(
+        self.llm = OpenAICompatibleTextLLM(
             api_key=settings.openai_api_key,
             base_url=settings.openai_base_url,
             use_system_proxy=settings.openai_use_system_proxy,
@@ -132,7 +134,7 @@ class ProjectBriefingService:
     def _generate_json(self, *, system_prompt: str, user_prompt: str) -> dict:
         try:
             response = self.llm.generate(
-                model=self.settings.utility_model,
+                model=text_model_for_role(self.settings, CapabilityRole.UTILITY_TEXT),
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 json_mode=True,

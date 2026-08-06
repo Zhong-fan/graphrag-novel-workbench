@@ -479,6 +479,7 @@ class ContextPackOut(BaseModel):
     status: str
     reference_mode: str
     user_notes: str
+    user_decisions: dict[str, str] = {}
     source_fingerprint: str
     project_snapshot: dict[str, Any] = {}
     character_snapshot: list[dict[str, Any]] = []
@@ -1005,6 +1006,12 @@ class VideoTaskOut(BaseModel):
     events: list[TaskEventOut] = []
     created_at: datetime
     updated_at: datetime
+
+
+
+class CreateVideoTaskRequest(BaseModel):
+    budget_confirmed: bool = False
+    preview: bool = False
 
 
 class UpdateVideoTaskRequest(BaseModel):

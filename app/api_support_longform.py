@@ -563,6 +563,8 @@ def _storyboard_progress(storyboard: Storyboard, events: list[TaskEvent]) -> dic
 def _video_task_out(task: VideoTask) -> VideoTaskOut:
     events = sorted(task.events, key=lambda item: item.created_at)
     progress = ensure_phase1_progress_contract(json_loads_object(task.progress_json))
+    quality_result = progress.get("video_quality_result") if isinstance(progress.get("video_quality_result"), dict) else {}
+    progress["quality_status"] = str(quality_result.get("status") or "unknown")
     public_url = _public_asset_url(task.output_uri)
     if public_url:
         progress = {**progress, "public_url": public_url}

@@ -127,26 +127,49 @@ AUTH_SECRET=replace-this-with-a-long-random-secret
 AUTH_EXP_HOURS=168
 ```
 
-即梦视频配置：
+Ark Seedance 视频配置：
 
 ```env
-JIMENG_ACCESS_KEY=your-volcengine-access-key
-JIMENG_SECRET_KEY=your-volcengine-secret-key
-JIMENG_VIDEO_REQ_KEY=jimeng_t2v_v30_1080p
-JIMENG_VIDEO_I2V_REQ_KEY=jimeng_i2v_first_v30_1080
-JIMENG_VIDEO_ASPECT_RATIO=16:9
-JIMENG_VIDEO_FRAMES=121
+ARK_API_KEY=your-volcengine-ark-api-key
+ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+ARK_VIDEO_MODEL=doubao-seedance-2-0-mini
+ARK_VIDEO_RATIO=16:9
+ARK_VIDEO_DURATION_SECONDS=5
+ARK_VIDEO_RESOLUTION=1080p
+ARK_VIDEO_PREVIEW_RESOLUTION=720p
+ARK_VIDEO_RETURN_LAST_FRAME=true
 JIMENG_POLL_INTERVAL_SECONDS=10
 JIMENG_POLL_TIMEOUT_SECONDS=900
 CHENFLOW_FFMPEG_PATH=ffmpeg
 ```
 
-即梦图片配置：
+成本门禁与媒体发布：
 
 ```env
+# 视频生成估算成本超过该阈值（USD）时，需要预算确认才能提交；0 表示不启用。
+CHENFLOW_VIDEO_COST_CONFIRMATION_THRESHOLD_USD=0.0
+# 提供给视频 provider 的本地素材公开访问地址（Docker 内请填容器可达的地址）。
+CHENFLOW_MEDIA_PUBLIC_BASE_URL=
+CHENFLOW_MEDIA_PUBLICATION_TTL_SECONDS=1800
+```
+
+旧即梦图片配置：
+
+```env
+JIMENG_ACCESS_KEY=your-volcengine-access-key
+JIMENG_SECRET_KEY=your-volcengine-secret-key
 JIMENG_IMAGE_REQ_KEY=jimeng_t2i_v40
 JIMENG_IMAGE_WIDTH=1024
 JIMENG_IMAGE_HEIGHT=1024
+```
+
+Doubao Seedream 图片配置（可选，需要 ARK_API_KEY）：
+
+```env
+# 留空走即梦（默认）；设为 ark_seedream 使用 Doubao Seedream 图像接口。
+CHENFLOW_IMAGE_PROVIDER=
+ARK_IMAGE_MODEL=doubao-seedream-5-0-lite-260128
+ARK_IMAGE_SIZE=1024x1024
 ```
 
 本地 fallback 需要额外配置图片生成和 TTS：
@@ -161,6 +184,12 @@ CHENFLOW_TTS_BASE_URL=
 CHENFLOW_TTS_MODEL=
 CHENFLOW_TTS_VOICE=
 ```
+
+## 生成证据、异常收件箱与引导
+
+- 每次真实或受阻的生成（分镜、首帧、三视图、视频段、成本门禁）都会追加写入 `generation_attempts`，包含输入资产版本、提示词契约与版本、provider/model、参数、usage、成本估算与质量结果；长文本与 base64 自动脱敏截断。
+- 需要创作者决策的素材级异常（预算确认、重复质量失败、身份歧义等）进入异常收件箱，每条含推荐动作、理由与最多三个选项。
+- `GET /api/projects/{project_id}/next-action` 返回当前生产的确定性状态与单一推荐下一步，并解析默认 provider/模型/提示词版本，正常流程无需手动选择。
 
 ## 本地启动
 
@@ -296,6 +325,9 @@ POST /api/projects/{project_id}/storyboards
 POST /api/projects/{project_id}/storyboards/{storyboard_id}/shots/{shot_id}/first-frame
 POST /api/projects/{project_id}/storyboards/{storyboard_id}/video-production/preflight
 POST /api/projects/{project_id}/storyboards/{storyboard_id}/video-tasks
+GET  /api/projects/{project_id}/next-action
+GET  /api/projects/{project_id}/exception-inbox
+POST /api/projects/{project_id}/exception-inbox/{item_id}/resolve
 ```
 
 后端启动后可查看 OpenAPI：

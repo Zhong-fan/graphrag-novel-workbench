@@ -5,7 +5,9 @@ from typing import Any
 
 from .config import Settings
 from .json_utils import ensure_list, parse_json_object
-from .llm import OpenAIResponsesLLM
+from .llm import OpenAICompatibleTextLLM
+from .capabilities import CapabilityRole
+from .text_capability import text_model_for_role
 from .models import Project
 from .reference_policy_service import ReferencePolicyService
 from .story_boundary_service import StoryBoundaryService
@@ -17,7 +19,7 @@ class SeriesPlanningService:
         if settings.llm_mode != "openai" or not settings.openai_api_key:
             raise RuntimeError("当前项目只支持真实模型模式。")
         self.settings = settings
-        self.llm = OpenAIResponsesLLM(
+        self.llm = OpenAICompatibleTextLLM(
             settings.openai_api_key,
             settings.openai_base_url,
             use_system_proxy=settings.openai_use_system_proxy,
@@ -156,7 +158,7 @@ class SeriesPlanningService:
 - 如果某章处在故事边界硬约束区间内，`must_not_happen` 必须显式体现对应禁区。
 """.strip()
         response = self.llm.generate(
-            model=self.settings.writer_model,
+            model=text_model_for_role(self.settings, CapabilityRole.CREATIVE_TEXT),
             system_prompt=system_prompt,
             user_prompt=prompt,
             json_mode=True,

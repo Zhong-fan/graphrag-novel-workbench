@@ -5,7 +5,9 @@ from typing import Any
 
 from .config import Settings
 from .json_utils import ensure_list, json_dumps, json_loads_object, parse_json_object
-from .llm import OpenAIResponsesLLM
+from .llm import OpenAICompatibleTextLLM
+from .capabilities import CapabilityRole
+from .text_capability import text_model_for_role
 from .models import NovelChapter, Project, Storyboard, StoryboardShot
 
 
@@ -14,7 +16,7 @@ class AudioScriptService:
         if settings.llm_mode != "openai" or not settings.openai_api_key:
             raise RuntimeError("当前项目只支持真实模型模式。")
         self.settings = settings
-        self.llm = OpenAIResponsesLLM(
+        self.llm = OpenAICompatibleTextLLM(
             settings.openai_api_key,
             settings.openai_base_url,
             use_system_proxy=settings.openai_use_system_proxy,
@@ -162,7 +164,7 @@ class AudioScriptService:
 - sound_effects 只写镜头中可听见的环境音、动作音和空间音。
 """.strip()
         response = self.llm.generate(
-            model=self.settings.utility_model,
+            model=text_model_for_role(self.settings, CapabilityRole.UTILITY_TEXT),
             system_prompt=system_prompt,
             user_prompt=prompt,
             json_mode=True,

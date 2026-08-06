@@ -38,7 +38,16 @@ class APINetworkError(RuntimeError):
         super().__init__(message)
 
 
-class OpenAIResponsesLLM:
+class OpenAICompatibleTextLLM:
+    """Protocol-focused text transport for OpenAI-compatible Responses/Chat APIs.
+
+    The wire protocol (``/responses`` with Chat Completions fallback) is what
+    the transport implements; the configured provider is a replaceable
+    deployment default (e.g. DeepSeek or a gateway), never a product
+    invariant. DeepSeek compatibility is preserved by keeping the
+    OpenAI-compatible mechanics intact.
+    """
+
     def __init__(
         self,
         api_key: str,
@@ -503,7 +512,7 @@ class OpenAIResponsesLLM:
             return result
         if final_payload is not None:
             return final_payload
-        raise RuntimeError("OpenAI stream returned no text output.")
+        raise RuntimeError("Text API stream returned no text output.")
 
     def _retry_sleep_seconds(
         self,
@@ -583,7 +592,7 @@ class OpenAIResponsesLLM:
             )
         if status_code in {502, 503, 504}:
             return f"Model gateway is temporarily unavailable or upstream timed out: {message}"
-        return f"OpenAI API error: {status_code} {message}"
+        return f"Text API error: {status_code} {message}"
 
     def _format_single_url_network_failure(
         self,
@@ -593,9 +602,13 @@ class OpenAIResponsesLLM:
     ) -> str:
         if attempts:
             return f"OpenAI API connection error via {url}: {' | '.join(attempts)}"
-        return f"OpenAI API connection error via {url}: {last_error}"
+        return f"Text API connection error via {url}: {last_error}"
 
     def _format_network_failure(self, path: str, attempts: list[str]) -> str:
         if attempts:
             return f"OpenAI API connection error for {path}: {' | '.join(attempts)}"
-        return f"OpenAI API connection error for {path}."
+        return f"Text API connection error for {path}."
+
+# Deprecated alias kept for backward compatibility.
+# Use OpenAICompatibleTextLLM for new code.
+OpenAIResponsesLLM = OpenAICompatibleTextLLM

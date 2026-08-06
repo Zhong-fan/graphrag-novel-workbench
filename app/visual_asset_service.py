@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import time
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -10,8 +9,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .capabilities import ImageGenerationRequest, ImageGenerationResult
+from .adoption_revert_service import AdoptionRevertService
+from .character_identity_service import CharacterIdentityService
 from .config import Settings
-from .jimeng_image_client import JimengImageClient
+from .generation_evidence_service import GenerationEvidence, record_generation_evidence
+from .image_capability import ImageCapability, build_image_capability
 from .json_utils import json_dumps, json_loads_list, json_loads_object
 from .media_asset_recycle import media_asset_file_path
 from .models import CharacterCard, CharacterReferenceProfile, MediaAsset, Project, ReferenceImageAsset, Storyboard, StoryboardShot, TaskEvent
@@ -179,6 +182,70 @@ class VisualAssetService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.character_reference_profiles = CharacterReferenceProfileService()
+        self._adoption_revert = AdoptionRevertService(settings)
+        self._capability: ImageCapability | None = None
+
+    def _record_attempt(
+        self,
+        db: Session,
+        *,
+        stage: str,
+        status: str,
+        result: ImageGenerationResult | None = None,
+        project: Project | None = None,
+        storyboard: Storyboard | None = None,
+        shot: StoryboardShot | None = None,
+        character: CharacterCard | None = None,
+        prompt: str = "",
+        input_asset_versions: dict[str, Any] | None = None,
+        adopted_asset_id: int | None = None,
+        quality_outcome: str = "",
+        error: Exception | None = None,
+    ) -> None:
+        # 证据记录是尽力而为的遥测：记录失败绝不能掩盖生成错误或破坏事务，
+        # 因此这里吞掉记录过程中的异常，主路径（成功/失败）照常进行。
+        try:
+            try:
+                declaration = self._image_capability().declaration()
+                provider = result.provider if result is not None else declaration.provider
+                model = result.model if result is not None else declaration.model
+            except Exception:
+                provider, model = "", ""
+            record_generation_evidence(
+                db,
+                evidence=GenerationEvidence(
+                    stage=stage,
+                    status=status,
+                    provider=provider,
+                    model=model,
+                    project_id=project.id if project is not None else None,
+                    storyboard_id=storyboard.id if storyboard is not None else None,
+                    shot_id=shot.id if shot is not None else None,
+                    adopted_asset_id=adopted_asset_id,
+                    rendered_prompt=prompt,
+                    parsed_output=(
+                        {
+                            "submit_summary": result.submit_summary,
+                            "result_summary": result.result_summary,
+                        }
+                        if result is not None
+                        else None
+                    ),
+                    parameters=result.parameters if result is not None else None,
+                    input_asset_versions=input_asset_versions,
+                    provider_ref=result.provider_ref if result is not None else "",
+                    quality_outcome=quality_outcome,
+                    error_category=type(error).__name__ if error is not None else "",
+                    error_message=str(error) if error is not None else "",
+                ),
+            )
+        except Exception:
+            pass
+
+    def _image_capability(self) -> ImageCapability:
+        if self._capability is None:
+            self._capability = build_image_capability(self.settings)
+        return self._capability
 
     def generate_shot_first_frame(
         self,
@@ -258,7 +325,6 @@ class VisualAssetService:
             db.refresh(asset)
             return asset
 
-        self._require_jimeng_image_config()
         locked_references = self.locked_turnaround_references(db=db, project=project, shot=shot)
         prompt = build_visual_generation_prompt(project=project, shot=shot, include_narration=False, max_length=1800)
         if locked_references:
@@ -273,33 +339,26 @@ class VisualAssetService:
                     ],
                 ]
             )
-        client = JimengImageClient(
-            access_key=self.settings.jimeng_access_key,
-            secret_key=self.settings.jimeng_secret_key,
-            endpoint=self.settings.jimeng_endpoint,
-            region=self.settings.jimeng_region,
-            service=self.settings.jimeng_service,
-            req_key=self.settings.jimeng_image_req_key,
-        )
-        task_id, submit_response = client.submit_text_to_image(
-            prompt=prompt,
-            width=self.settings.jimeng_image_width,
-            height=self.settings.jimeng_image_height,
-            reference_images=[str(item["uri"]) for item in locked_references],
-        )
-        if task_id:
-            image_payload, result_response = self._wait_for_image_result(client=client, task_id=task_id)
-        else:
-            data = submit_response.get("data") if isinstance(submit_response.get("data"), dict) else {}
-            urls = client._extract_image_urls(data)
-            images = client._extract_image_base64(data)
-            if urls:
-                image_payload = {"kind": "url", "value": urls[0]}
-            elif images:
-                image_payload = {"kind": "base64", "value": images[0]}
-            else:
-                raise RuntimeError("即梦图片接口没有返回 task_id 或图片 URL。")
-            result_response = submit_response
+        try:
+            result = self._image_capability().generate(
+                ImageGenerationRequest(
+                    prompt=prompt,
+                    reference_images=tuple(str(item["uri"]) for item in locked_references),
+                )
+            )
+        except Exception as exc:
+            self._record_attempt(
+                db,
+                stage="image_first_frame",
+                status="failed",
+                project=project,
+                storyboard=storyboard,
+                shot=shot,
+                prompt=prompt,
+                input_asset_versions={"locked_references": locked_references},
+                error=exc,
+            )
+            raise
 
         asset = next((item for item in existing_assets if item.asset_type == "shot_first_frame"), None)
         if asset is None:
@@ -316,26 +375,46 @@ class VisualAssetService:
             db.add(asset)
             db.flush()
 
+        # Auto-adoption reversibility: snapshot the previous file and metadata
+        # before overwriting a completed first frame. A snapshot failure aborts
+        # the write instead of silently losing the previous version.
+        self._adoption_revert.snapshot_before_overwrite(
+            db=db, asset=asset, reason="shot_first_frame_regeneration"
+        )
+
         image_path = media_asset_file_path(asset, settings=self.settings, file_name=f"shot-{shot.shot_no:03d}-first-frame-v001.png")
         image_path.parent.mkdir(parents=True, exist_ok=True)
-        self._save_image_payload(payload=image_payload, path=image_path)
+        self._save_image_payload(payload={"kind": result.kind, "value": result.value}, path=image_path)
         provider_debug_path = self._provider_debug_path(image_path)
         self._write_provider_debug_sidecar(
             path=provider_debug_path,
             payload={
-                "provider": "jimeng",
+                "provider": result.provider,
                 "asset_type": "shot_first_frame",
                 "shot_id": shot.id,
                 "shot_no": shot.shot_no,
-                "task_id": task_id,
-                "submit_response": self._sanitize_provider_payload(submit_response),
-                "result_response": self._sanitize_provider_payload(result_response),
+                "task_id": result.provider_ref,
+                "submit_summary": result.submit_summary,
+                "result_summary": result.result_summary,
             },
         )
 
         asset.uri = str(image_path)
         asset.prompt = prompt
         asset.status = "completed"
+        self._record_attempt(
+            db,
+            stage="image_first_frame",
+            status="succeeded",
+            result=result,
+            project=project,
+            storyboard=storyboard,
+            shot=shot,
+            prompt=prompt,
+            input_asset_versions={"locked_references": locked_references},
+            adopted_asset_id=asset.id,
+            quality_outcome="accepted",
+        )
         existing_meta = self._compact_asset_meta(json_loads_object(asset.meta_json))
         asset.meta_json = json_dumps(
             {
@@ -343,15 +422,16 @@ class VisualAssetService:
                 "shot_id": shot.id,
                 "shot_no": shot.shot_no,
                 "locked": False,
-                "provider": "jimeng",
-                "req_key": self.settings.jimeng_image_req_key,
-                "jimeng_task_id": task_id,
+                "provider": result.provider,
+                "model": result.model,
+                "req_key": (result.parameters or {}).get("req_key") or "",
+                "jimeng_task_id": result.provider_ref,
                 "provider_debug_uri": str(provider_debug_path),
-                "submit_summary": self._summarize_jimeng_image_response(submit_response),
-                "result_summary": self._summarize_jimeng_image_response(result_response),
-                "image_source": image_payload["kind"],
-                "width": self.settings.jimeng_image_width,
-                "height": self.settings.jimeng_image_height,
+                "submit_summary": result.submit_summary,
+                "result_summary": result.result_summary,
+                "image_source": result.kind,
+                "width": (result.parameters or {}).get("width") or 1024,
+                "height": (result.parameters or {}).get("height") or 1024,
                 "mime_type": "image/png",
                 "visual_style": project_visual_style_summary(project),
                 "locked_turnaround_references": locked_references,
@@ -480,6 +560,18 @@ class VisualAssetService:
         meta["turnaround_status"] = "turnaround_locked" if locked else "candidate_ready"
         asset.meta_json = json_dumps(meta)
         self.character_reference_profiles.apply_turnaround_lock(db, project, asset, locked)
+        if locked and asset.status == "completed":
+            character = db.scalar(
+                select(CharacterCard).where(
+                    CharacterCard.id == character_id,
+                    CharacterCard.project_id == project.id,
+                    CharacterCard.deleted_at.is_(None),
+                )
+            )
+            if character is not None:
+                CharacterIdentityService(self.settings).approve_turnaround(
+                    db=db, project=project, character=character, asset=asset
+                )
 
     def _shot_character_ids(self, shot: StoryboardShot) -> list[int]:
         ids: list[int] = []
@@ -538,38 +630,29 @@ class VisualAssetService:
         prompt_note: str = "",
         context_pack_inputs: dict[str, Any] | None = None,
     ) -> MediaAsset:
-        self._require_jimeng_image_config()
         next_version = self._next_turnaround_version(db, project, character.id)
         prompt = self._build_turnaround_prompt(project=project, character=character, prompt_note=prompt_note)
         reference_assets = self._approved_character_reference_assets(db, project=project, character=character)
         reference_images = [asset.remote_url for asset in reference_assets if asset.remote_url]
-        client = JimengImageClient(
-            access_key=self.settings.jimeng_access_key,
-            secret_key=self.settings.jimeng_secret_key,
-            endpoint=self.settings.jimeng_endpoint,
-            region=self.settings.jimeng_region,
-            service=self.settings.jimeng_service,
-            req_key=self.settings.jimeng_image_req_key,
-        )
-        task_id, submit_response = client.submit_text_to_image(
-            prompt=prompt,
-            width=self.settings.jimeng_image_width,
-            height=self.settings.jimeng_image_height,
-            reference_images=reference_images,
-        )
-        if task_id:
-            image_payload, result_response = self._wait_for_image_result(client=client, task_id=task_id)
-        else:
-            data = submit_response.get("data") if isinstance(submit_response.get("data"), dict) else {}
-            urls = client._extract_image_urls(data)
-            images = client._extract_image_base64(data)
-            if urls:
-                image_payload = {"kind": "url", "value": urls[0]}
-            elif images:
-                image_payload = {"kind": "base64", "value": images[0]}
-            else:
-                raise RuntimeError("即梦图片接口没有返回 task_id 或图片 URL。")
-            result_response = submit_response
+        try:
+            result = self._image_capability().generate(
+                ImageGenerationRequest(
+                    prompt=prompt,
+                    reference_images=tuple(reference_images),
+                )
+            )
+        except Exception as exc:
+            self._record_attempt(
+                db,
+                stage="image_turnaround",
+                status="failed",
+                project=project,
+                character=character,
+                prompt=prompt,
+                input_asset_versions={"reference_asset_ids": [asset.id for asset in reference_assets]},
+                error=exc,
+            )
+            raise
 
         asset = MediaAsset(
             project_id=project.id,
@@ -586,22 +669,34 @@ class VisualAssetService:
 
         image_path = media_asset_file_path(asset, settings=self.settings, file_name=f"turnaround-v{next_version:03d}.png")
         image_path.parent.mkdir(parents=True, exist_ok=True)
-        self._save_image_payload(payload=image_payload, path=image_path)
+        self._save_image_payload(payload={"kind": result.kind, "value": result.value}, path=image_path)
         provider_debug_path = self._provider_debug_path(image_path)
         self._write_provider_debug_sidecar(
             path=provider_debug_path,
             payload={
-                "provider": "jimeng",
+                "provider": result.provider,
                 "asset_type": "character_turnaround",
                 "character_card_id": character.id,
                 "character_name": character.name,
-                "task_id": task_id,
-                "submit_response": self._sanitize_provider_payload(submit_response),
-                "result_response": self._sanitize_provider_payload(result_response),
+                "task_id": result.provider_ref,
+                "submit_summary": result.submit_summary,
+                "result_summary": result.result_summary,
             },
         )
         asset.uri = str(image_path)
         asset.status = "completed"
+        self._record_attempt(
+            db,
+            stage="image_turnaround",
+            status="succeeded",
+            result=result,
+            project=project,
+            character=character,
+            prompt=prompt,
+            input_asset_versions={"reference_asset_ids": [asset.id for asset in reference_assets]},
+            adopted_asset_id=asset.id,
+            quality_outcome="candidate_created",
+        )
         asset.meta_json = json_dumps(
             {
                 "character_card_id": character.id,
@@ -613,15 +708,16 @@ class VisualAssetService:
                 "views": ["front", "side", "back"],
                 "visual_reference_asset_ids": [asset.id for asset in reference_assets],
                 "visual_reference_image_count": len(reference_images),
-                "provider": "jimeng",
-                "req_key": self.settings.jimeng_image_req_key,
-                "jimeng_task_id": task_id,
+                "provider": result.provider,
+                "model": result.model,
+                "req_key": (result.parameters or {}).get("req_key") or "",
+                "jimeng_task_id": result.provider_ref,
                 "provider_debug_uri": str(provider_debug_path),
-                "submit_summary": self._summarize_jimeng_image_response(submit_response),
-                "result_summary": self._summarize_jimeng_image_response(result_response),
-                "image_source": image_payload["kind"],
-                "width": self.settings.jimeng_image_width,
-                "height": self.settings.jimeng_image_height,
+                "submit_summary": result.submit_summary,
+                "result_summary": result.result_summary,
+                "image_source": result.kind,
+                "width": (result.parameters or {}).get("width") or 1024,
+                "height": (result.parameters or {}).get("height") or 1024,
                 "mime_type": "image/png",
                 "visual_style": project_visual_style_summary(project),
                 "context_pack_id": context_pack_inputs.get("context_pack_id") if isinstance(context_pack_inputs, dict) else None,
@@ -657,35 +753,6 @@ class VisualAssetService:
             )
         ).all()
 
-    def _require_jimeng_image_config(self) -> None:
-        missing = []
-        if not self.settings.jimeng_access_key:
-            missing.append("JIMENG_ACCESS_KEY")
-        if not self.settings.jimeng_secret_key:
-            missing.append("JIMENG_SECRET_KEY")
-        if not self.settings.jimeng_image_req_key:
-            missing.append("JIMENG_IMAGE_REQ_KEY")
-        if missing:
-            raise RuntimeError("即梦图片生成配置缺失：" + "、".join(missing))
-
-    def _wait_for_image_result(self, *, client: JimengImageClient, task_id: str) -> tuple[dict[str, str], dict[str, Any]]:
-        deadline = time.monotonic() + self.settings.jimeng_poll_timeout_seconds
-        last_response: dict[str, Any] = {}
-        while time.monotonic() < deadline:
-            result = client.get_image_result(task_id=task_id)
-            last_response = result.raw
-            if result.status == "done":
-                if result.image_urls:
-                    return {"kind": "url", "value": result.image_urls[0]}, result.raw
-                if result.image_base64:
-                    return {"kind": "base64", "value": result.image_base64[0]}, result.raw
-                raise RuntimeError(f"即梦图片任务已完成但没有返回图片 URL 或 base64：{task_id}")
-            if result.status in {"not_found", "expired"}:
-                raise RuntimeError(f"即梦图片任务状态异常：{result.status}，task_id={task_id}")
-            if result.status not in {"in_queue", "generating"}:
-                raise RuntimeError(f"即梦图片任务返回未知状态：{result.status}，task_id={task_id}")
-            time.sleep(self.settings.jimeng_poll_interval_seconds)
-        raise RuntimeError(f"即梦图片任务等待超时：task_id={task_id}, last_response={last_response}")
 
     def _download_file(self, *, url: str, path: Path) -> None:
         try:
@@ -716,40 +783,6 @@ class VisualAssetService:
         drop_keys = {"submit_response", "result_response", "submit_summary", "result_summary", "provider_debug_uri"}
         return {key: value for key, value in meta.items() if key not in drop_keys}
 
-    def _summarize_jimeng_image_response(self, response: dict[str, Any]) -> dict[str, Any]:
-        data = response.get("data") if isinstance(response.get("data"), dict) else {}
-        return {
-            "code": response.get("code"),
-            "message": response.get("message") or response.get("msg") or "",
-            "status": data.get("status") or "",
-            "task_id": data.get("task_id") or "",
-            "image_url_count": len(JimengImageClient._extract_image_urls(data)),
-            "has_image_base64": bool(JimengImageClient._extract_image_base64(data)),
-        }
-
-    def _sanitize_provider_payload(self, value: Any) -> Any:
-        if isinstance(value, dict):
-            cleaned: dict[str, Any] = {}
-            for key, item in value.items():
-                if key == "binary_data_base64":
-                    if isinstance(item, list):
-                        cleaned[key] = {"omitted": True, "items": len(item)}
-                    elif isinstance(item, str):
-                        cleaned[key] = {"omitted": True, "chars": len(item)}
-                    else:
-                        cleaned[key] = {"omitted": True}
-                    continue
-                cleaned[key] = self._sanitize_provider_payload(item)
-            return cleaned
-        if isinstance(value, list):
-            if len(value) > 20:
-                preview = [self._sanitize_provider_payload(item) for item in value[:20]]
-                preview.append(f"... ({len(value) - 20} more items)")
-                return preview
-            return [self._sanitize_provider_payload(item) for item in value]
-        if isinstance(value, str) and len(value) > 1200:
-            return value[:1200] + f"... [truncated {len(value) - 1200} chars]"
-        return value
 
     def _visual_output_dir(self, *, project: Project, chapter_no: int | None, character: CharacterCard) -> Path:
         path_helper = VideoRenderService(self.settings)

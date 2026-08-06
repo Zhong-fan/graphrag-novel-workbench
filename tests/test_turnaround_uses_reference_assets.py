@@ -9,6 +9,7 @@ from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.capabilities import CapabilityDeclaration, CapabilityRole, ImageGenerationResult
 from app.db import Base
 from app.json_utils import json_dumps, json_loads_object
 from app.models import CharacterCard, Project, ReferenceImageAsset, User
@@ -16,28 +17,34 @@ from app.reference_asset_service import _remote_url_hash
 from app.visual_asset_service import VisualAssetService
 
 
-class CapturingJimengImageClient:
-    calls: list[dict] = []
+class CapturingImageCapability:
+    calls: list = []
 
-    def __init__(self, **kwargs) -> None:
-        self.kwargs = kwargs
+    def declaration(self) -> CapabilityDeclaration:
+        return CapabilityDeclaration(
+            role=CapabilityRole.IMAGE,
+            provider="jimeng",
+            model="req",
+            supports_reference_images=True,
+        )
 
-    def submit_text_to_image(self, **kwargs):
-        self.calls.append(kwargs)
-        return "task-1", {"status": "submitted"}
-
-    @staticmethod
-    def _extract_image_urls(data):
-        return []
-
-    @staticmethod
-    def _extract_image_base64(data):
-        return []
+    def generate(self, request):
+        self.calls.append(request)
+        return ImageGenerationResult(
+            provider="jimeng",
+            model="req",
+            kind="url",
+            value="https://example.com/generated.png",
+            provider_ref="task-1",
+            submit_summary={},
+            result_summary={},
+            parameters={"req_key": "req", "width": 1024, "height": 1024},
+        )
 
 
 class TurnaroundReferenceAssetTests(unittest.TestCase):
     def setUp(self) -> None:
-        CapturingJimengImageClient.calls = []
+        CapturingImageCapability.calls = []
         engine = create_engine("sqlite:///:memory:", future=True)
         Base.metadata.create_all(bind=engine)
         self.SessionLocal = sessionmaker(bind=engine, future=True)
@@ -54,6 +61,7 @@ class TurnaroundReferenceAssetTests(unittest.TestCase):
         )
 
     def test_character_turnaround_uses_approved_reference_images_for_character(self) -> None:
+        capability = CapturingImageCapability()
         service = VisualAssetService(self.settings)
         with self.SessionLocal() as session, tempfile.TemporaryDirectory() as tmpdir:
             user = User(email="ref-turn@example.com", display_name="视觉用户", password_hash=b"0" * 32, password_salt=b"1" * 16)
@@ -76,13 +84,7 @@ class TurnaroundReferenceAssetTests(unittest.TestCase):
             session.add(ref)
             session.commit()
 
-            with patch("app.visual_asset_service.JimengImageClient", CapturingJimengImageClient), patch.object(
-                service, "_require_jimeng_image_config", return_value=None
-            ), patch.object(
-                service,
-                "_wait_for_image_result",
-                return_value=({"kind": "url", "value": "https://example.com/generated.png"}, {"status": "done"}),
-            ), patch.object(
+            with patch("app.visual_asset_service.build_image_capability", return_value=capability), patch.object(
                 service, "_save_image_payload", return_value=None
             ), patch.object(
                 service, "_write_provider_debug_sidecar", return_value=None
@@ -93,7 +95,7 @@ class TurnaroundReferenceAssetTests(unittest.TestCase):
             ):
                 asset = service.generate_character_turnaround(db=session, project=project, character=character)
 
-            self.assertEqual(CapturingJimengImageClient.calls[0]["reference_images"], [ref.remote_url])
+            self.assertEqual(capability.calls[0].reference_images, (ref.remote_url,))
             meta = json_loads_object(asset.meta_json)
             self.assertEqual(meta["visual_reference_asset_ids"], [ref.id])
 

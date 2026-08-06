@@ -4,6 +4,7 @@ import type {
   CaptchaChallenge,
   CharacterCard,
   CharacterCardPayload,
+  GenerationAttemptList,
   GenerationItem,
   GenerationProgress,
   MemoryItem,
@@ -540,6 +541,14 @@ export const api = {
       method: "DELETE",
       token,
     }),
+  listGenerationAttempts: (token: string, projectId: number, params: { stage?: string; status?: string; limit?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.stage) query.set("stage", params.stage);
+    if (params.status) query.set("status", params.status);
+    if (params.limit) query.set("limit", String(params.limit));
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request<GenerationAttemptList>(`/api/projects/${projectId}/generation-attempts${suffix}`, { method: "GET", token });
+  },
   deleteStoryboard: (token: string, projectId: number, storyboardId: number) =>
     request<{ status: string }>(`/api/projects/${projectId}/storyboards/${storyboardId}`, {
       method: "DELETE",

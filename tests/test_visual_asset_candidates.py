@@ -9,26 +9,33 @@ from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.capabilities import CapabilityDeclaration, CapabilityRole, ImageGenerationResult
 from app.db import Base
 from app.json_utils import json_dumps, json_loads_object
 from app.models import CharacterCard, CharacterReferenceProfile, MediaAsset, Project, User
 from app.visual_asset_service import VisualAssetService
 
 
-class FakeJimengImageClient:
-    def __init__(self, **kwargs) -> None:
-        self.kwargs = kwargs
+class FakeImageCapability:
+    def declaration(self) -> CapabilityDeclaration:
+        return CapabilityDeclaration(
+            role=CapabilityRole.IMAGE,
+            provider="jimeng",
+            model="req",
+            supports_reference_images=True,
+        )
 
-    def submit_text_to_image(self, **kwargs):
-        return "task-1", {"status": "submitted"}
-
-    @staticmethod
-    def _extract_image_urls(data):
-        return []
-
-    @staticmethod
-    def _extract_image_base64(data):
-        return []
+    def generate(self, request):
+        return ImageGenerationResult(
+            provider="jimeng",
+            model="req",
+            kind="url",
+            value="https://example.com/generated.png",
+            provider_ref="task-1",
+            submit_summary={},
+            result_summary={},
+            parameters={"req_key": "req", "width": 1024, "height": 1024},
+        )
 
 
 class VisualAssetCandidateTests(unittest.TestCase):
@@ -56,15 +63,7 @@ class VisualAssetCandidateTests(unittest.TestCase):
             existing = self._asset(session, project, character, version=1, locked=False)
 
             saved_paths: list[Path] = []
-            with patch("app.visual_asset_service.JimengImageClient", FakeJimengImageClient), patch.object(
-                service,
-                "_require_jimeng_image_config",
-                return_value=None,
-            ), patch.object(
-                service,
-                "_wait_for_image_result",
-                return_value=({"kind": "url", "value": "https://example.com/generated.png"}, {"status": "done"}),
-            ), patch.object(
+            with patch("app.visual_asset_service.build_image_capability", return_value=FakeImageCapability()), patch.object(
                 service,
                 "_save_image_payload",
                 side_effect=lambda payload, path: saved_paths.append(path),
@@ -108,15 +107,7 @@ class VisualAssetCandidateTests(unittest.TestCase):
             service.character_reference_profiles.apply_turnaround_lock(session, project, locked, True)
             session.commit()
 
-            with patch("app.visual_asset_service.JimengImageClient", FakeJimengImageClient), patch.object(
-                service,
-                "_require_jimeng_image_config",
-                return_value=None,
-            ), patch.object(
-                service,
-                "_wait_for_image_result",
-                return_value=({"kind": "url", "value": "https://example.com/generated.png"}, {"status": "done"}),
-            ), patch.object(
+            with patch("app.visual_asset_service.build_image_capability", return_value=FakeImageCapability()), patch.object(
                 service,
                 "_save_image_payload",
                 return_value=None,

@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api_routes_longform import _video_quality_gate_failures
+from app.video_preflight_service import video_quality_gate_failures
 from app.api_routes_longform import register_longform_routes
 from app.auth import get_current_user
 from app.config import load_settings
@@ -204,7 +204,7 @@ class ImageFirstVideoGateTests(unittest.TestCase):
             session.add_all([first_frame, tail, shot])
             session.commit()
 
-            failures = _video_quality_gate_failures(session, settings=load_settings(), project=storyboard.project, storyboard=storyboard)
+            failures = video_quality_gate_failures(session, settings=load_settings(), project=storyboard.project, storyboard=storyboard)
 
         self.assertEqual(failures, [])
 
@@ -250,7 +250,7 @@ class ImageFirstVideoGateTests(unittest.TestCase):
             session.add_all([tail, shot])
             session.commit()
 
-            with patch("app.visual_asset_service.JimengImageClient") as image_client:
+            with patch("app.visual_asset_service.build_image_capability") as capability_factory:
                 asset = VisualAssetService(load_settings()).generate_shot_first_frame(
                     db=session,
                     project=storyboard.project,
@@ -258,7 +258,7 @@ class ImageFirstVideoGateTests(unittest.TestCase):
                     shot=shot,
                 )
 
-            image_client.assert_not_called()
+            capability_factory.assert_not_called()
             self.assertEqual(asset.asset_type, "shot_first_frame")
             self.assertEqual(asset.uri, str(tail_path))
             self.assertEqual(asset.status, "completed")

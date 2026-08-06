@@ -36,6 +36,9 @@ class Settings:
     image_base_url: str
     image_model: str
     image_size: str
+    image_provider: str
+    ark_image_model: str
+    ark_image_size: str
     tts_provider: str
     tts_api_key: str
     tts_base_url: str
@@ -49,16 +52,24 @@ class Settings:
     volcengine_tts_speaker: str
     volcengine_tts_model: str
     volcengine_tts_sample_rate: int
+    volcengine_tts_preset_speakers: str
     ffmpeg_path: str
+    ark_api_key: str
+    ark_base_url: str
+    ark_video_model: str
+    ark_video_ratio: str
+    ark_video_duration_seconds: int
+    ark_video_resolution: str
+    ark_video_return_last_frame: bool
+    media_public_base_url: str
+    media_publication_ttl_seconds: int
+    video_cost_confirmation_threshold_usd: float
+    ark_video_preview_resolution: str
     jimeng_access_key: str
     jimeng_secret_key: str
     jimeng_endpoint: str
     jimeng_region: str
     jimeng_service: str
-    jimeng_req_key: str
-    jimeng_i2v_req_key: str
-    jimeng_aspect_ratio: str
-    jimeng_frames: int
     jimeng_image_req_key: str
     jimeng_image_width: int
     jimeng_image_height: int
@@ -111,6 +122,18 @@ def _parse_positive_int(value: str | None, default: int) -> int:
         raise RuntimeError(f"Expected a positive integer, got: {value}") from exc
     if parsed <= 0:
         raise RuntimeError(f"Expected a positive integer, got: {value}")
+    return parsed
+
+
+def _parse_non_negative_float(value: str | None, default: float) -> float:
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = float(value.strip())
+    except ValueError as exc:
+        raise RuntimeError(f"Expected a non-negative number, got: {value}") from exc
+    if parsed < 0:
+        raise RuntimeError(f"Expected a non-negative number, got: {value}")
     return parsed
 
 
@@ -188,6 +211,11 @@ def load_settings() -> Settings:
         openai_base_url,
     )
 
+    default_media_public_base_url = (
+        f"http://{_resolve_first(('CHENFLOW_APP_HOST', 'APP_HOST'), dotenv_values, '127.0.0.1') or '127.0.0.1'}:"
+        f"{_parse_positive_int(_resolve_first(('CHENFLOW_APP_PORT', 'APP_PORT'), dotenv_values), 8500)}"
+    )
+
     return Settings(
         root_dir=root_dir,
         env_path=env_path,
@@ -240,6 +268,12 @@ def load_settings() -> Settings:
         image_base_url=_resolve_first(("CHENFLOW_IMAGE_BASE_URL",), dotenv_values, "") or "",
         image_model=_resolve_first(("CHENFLOW_IMAGE_MODEL",), dotenv_values, "") or "",
         image_size=_resolve_first(("CHENFLOW_IMAGE_SIZE",), dotenv_values, "1024x1024") or "1024x1024",
+        image_provider=_resolve_first(("CHENFLOW_IMAGE_PROVIDER",), dotenv_values, "") or "",
+        ark_image_model=(
+            _resolve_first(("ARK_IMAGE_MODEL",), dotenv_values, "doubao-seedream-5-0-lite-260128")
+            or "doubao-seedream-5-0-lite-260128"
+        ),
+        ark_image_size=_resolve_first(("ARK_IMAGE_SIZE",), dotenv_values, "1024x1024") or "1024x1024",
         tts_provider=_resolve_first(("CHENFLOW_TTS_PROVIDER",), dotenv_values, "openai_compatible") or "openai_compatible",
         tts_api_key=_resolve_first(("CHENFLOW_TTS_API_KEY",), dotenv_values, "") or "",
         tts_base_url=_resolve_first(("CHENFLOW_TTS_BASE_URL",), dotenv_values, "") or "",
@@ -256,23 +290,35 @@ def load_settings() -> Settings:
         volcengine_tts_speaker=_resolve_first(("VOLCENGINE_TTS_SPEAKER",), dotenv_values, "") or "",
         volcengine_tts_model=_resolve_first(("VOLCENGINE_TTS_MODEL",), dotenv_values, "") or "",
         volcengine_tts_sample_rate=_parse_positive_int(_resolve_first(("VOLCENGINE_TTS_SAMPLE_RATE",), dotenv_values), 24000),
+        volcengine_tts_preset_speakers=_resolve_first(("VOLCENGINE_TTS_PRESET_SPEAKERS",), dotenv_values, "") or "",
         ffmpeg_path=_resolve_first(("CHENFLOW_FFMPEG_PATH",), dotenv_values, "ffmpeg") or "ffmpeg",
+        ark_api_key=_resolve_first(("ARK_API_KEY", "VOLCENGINE_ARK_API_KEY"), dotenv_values, "") or "",
+        ark_base_url=_resolve_first(("ARK_BASE_URL",), dotenv_values, "https://ark.cn-beijing.volces.com/api/v3")
+        or "https://ark.cn-beijing.volces.com/api/v3",
+        ark_video_model=_resolve_first(("ARK_VIDEO_MODEL",), dotenv_values, "doubao-seedance-2-0-mini")
+        or "doubao-seedance-2-0-mini",
+        ark_video_ratio=_resolve_first(("ARK_VIDEO_RATIO",), dotenv_values, "16:9") or "16:9",
+        ark_video_duration_seconds=_parse_positive_int(_resolve_first(("ARK_VIDEO_DURATION_SECONDS",), dotenv_values), 5),
+        ark_video_resolution=_resolve_first(("ARK_VIDEO_RESOLUTION",), dotenv_values, "1080p") or "1080p",
+        ark_video_return_last_frame=_parse_bool(_resolve_first(("ARK_VIDEO_RETURN_LAST_FRAME",), dotenv_values), default=True),
+        media_public_base_url=(
+            _resolve_first(("CHENFLOW_MEDIA_PUBLIC_BASE_URL",), dotenv_values)
+            or default_media_public_base_url
+        ),
+        media_publication_ttl_seconds=_parse_positive_int(
+            _resolve_first(("CHENFLOW_MEDIA_PUBLICATION_TTL_SECONDS",), dotenv_values), 1800
+        ),
+        video_cost_confirmation_threshold_usd=_parse_non_negative_float(
+            _resolve_first(("CHENFLOW_VIDEO_COST_CONFIRMATION_THRESHOLD_USD",), dotenv_values), 0.0
+        ),
+        ark_video_preview_resolution=(
+            _resolve_first(("ARK_VIDEO_PREVIEW_RESOLUTION",), dotenv_values, "720p") or "720p"
+        ),
         jimeng_access_key=_resolve_first(("JIMENG_ACCESS_KEY", "VOLCENGINE_ACCESS_KEY"), dotenv_values, "") or "",
         jimeng_secret_key=_resolve_first(("JIMENG_SECRET_KEY", "VOLCENGINE_SECRET_KEY"), dotenv_values, "") or "",
         jimeng_endpoint=_resolve_first(("JIMENG_ENDPOINT",), dotenv_values, "https://visual.volcengineapi.com") or "https://visual.volcengineapi.com",
         jimeng_region=_resolve_first(("JIMENG_REGION",), dotenv_values, "cn-north-1") or "cn-north-1",
         jimeng_service=_resolve_first(("JIMENG_SERVICE",), dotenv_values, "cv") or "cv",
-        jimeng_req_key=_resolve_first(("JIMENG_VIDEO_REQ_KEY",), dotenv_values, "jimeng_t2v_v30_1080p") or "jimeng_t2v_v30_1080p",
-        jimeng_i2v_req_key=(
-            _resolve_first(("JIMENG_VIDEO_I2V_REQ_KEY",), dotenv_values)
-            or (
-                "jimeng_i2v_first_v30_1080"
-                if "1080" in ((_resolve_first(("JIMENG_VIDEO_REQ_KEY",), dotenv_values, "jimeng_t2v_v30_1080p") or "jimeng_t2v_v30_1080p"))
-                else "jimeng_i2v_first_v30"
-            )
-        ),
-        jimeng_aspect_ratio=_resolve_first(("JIMENG_VIDEO_ASPECT_RATIO",), dotenv_values, "16:9") or "16:9",
-        jimeng_frames=_parse_positive_int(_resolve_first(("JIMENG_VIDEO_FRAMES",), dotenv_values), 121),
         jimeng_image_req_key=(
             _resolve_first(("JIMENG_IMAGE_REQ_KEY",), dotenv_values)
             or (

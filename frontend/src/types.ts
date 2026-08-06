@@ -14,7 +14,8 @@ export type ViewKey =
   | "novelReader"
   | "generationTrace"
   | "novelEditor"
-  | "auth";
+  | "auth"
+  | "planReader";
 
 export interface BootstrapResponse {
   service_name: string;
@@ -345,6 +346,32 @@ export interface GenerationTraceStep {
   model?: string;
   parameters?: Record<string, unknown>;
   inherited_inputs?: Array<{ kind: string; label: string; value: string }>;
+}
+
+export interface GenerationAttempt {
+  id: number;
+  stage: string;
+  status: string;
+  provider?: string | null;
+  model?: string | null;
+  prompt_contract_id?: string | null;
+  prompt_version?: string | null;
+  shot_id?: number | null;
+  adopted_asset_id?: number | null;
+  quality_outcome?: string | null;
+  cost_estimate_usd?: number | null;
+  provider_ref?: string | null;
+  error_category?: string | null;
+  error_message?: string | null;
+  validation_results: Record<string, unknown>;
+  parameters: Record<string, unknown>;
+  usage: Record<string, unknown>;
+  input_asset_versions: Record<string, unknown>;
+  created_at?: string | null;
+}
+
+export interface GenerationAttemptList {
+  items: GenerationAttempt[];
 }
 
 export interface ReviewFinding {

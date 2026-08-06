@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 from .config import Settings
 from .context_pack_service import ContextPackService
 from .json_utils import ensure_list, json_dumps, json_loads_object
-from .models import Novel, NovelChapter, Project, Storyboard, StoryboardShot, TaskEvent
+from .models import GenerationAttempt, Novel, NovelChapter, Project, Storyboard, StoryboardShot, TaskEvent
+from .exception_inbox_service import create_inbox_item
+from .generation_evidence_service import record_generation_evidence
 from .storyboard_service import StoryboardService
 from .storyboard_source_service import StoryboardSourceService
 
@@ -136,15 +138,19 @@ class StoryboardJobService:
 
         try:
             context_pack_inputs = self.context_pack_service.resolved_inputs(self.context_pack_service.require_confirmed(db, project))
+            service = StoryboardService(
+                self.settings,
+                evidence_sink=lambda evidence: record_generation_evidence(db, evidence=evidence),
+            )
             if source_mode == "novel_chapters":
-                generated = StoryboardService(self.settings).generate_storyboard(
+                generated = service.generate_storyboard(
                     project=project,
                     chapters=chapters,
                     title=storyboard.title,
                     context_pack_inputs=context_pack_inputs,
                 )
             else:
-                generated = StoryboardService(self.settings).generate_image_first_storyboard(
+                generated = service.generate_image_first_storyboard(
                     project=project,
                     title=storyboard.title,
                     reference_video_brief=str(source_payload.get("reference_video_brief") or storyboard.summary),
@@ -192,6 +198,37 @@ class StoryboardJobService:
                 event_type="storyboard_failed",
                 message=f"分镜生成失败：{exc}",
             )
+            # 收件箱路由是尽力而为的遥测：失败时绝不能掩盖分镜失败本身，
+            # 因此记录失败时吞掉，failed 状态与事件照常提交。
+            try:
+                latest_attempt = db.scalar(
+                    select(GenerationAttempt)
+                    .where(
+                        GenerationAttempt.project_id == project.id,
+                        GenerationAttempt.storyboard_id == storyboard.id,
+                        GenerationAttempt.status == "failed",
+                    )
+                    .order_by(GenerationAttempt.id.desc())
+                )
+                create_inbox_item(
+                    db,
+                    project=project,
+                    item_type="repeated_quality_failure",
+                    title=f"分镜生成重复失败：{storyboard.title}",
+                    reason=str(exc),
+                    recommended_action="修复分镜提示词或更换生成模型后重试。",
+                    options=[
+                        {"label": "重试生成", "impact": "使用当前配置再次尝试，失败会再次进入收件箱。"},
+                        {"label": "修改提示词后重试", "impact": "创作者先调整输入，再重新发起分镜任务。"},
+                    ],
+                    evidence={
+                        "storyboard_id": storyboard.id,
+                        "generation_attempt_id": latest_attempt.id if latest_attempt is not None else None,
+                    },
+                    severity="medium",
+                )
+            except Exception:
+                pass
         db.commit()
         db.refresh(storyboard)
         return storyboard

@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import json
-import re
-import urllib.request
-import uuid
 import base64
+import re
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .capabilities import SpeechSynthesisRequest
 from .config import Settings
+from .voice_capability import build_speech_synthesis_capability
+from .voice_design_service import VoiceDesignService
 from .json_utils import json_dumps, json_loads_object
 from .media_asset_recycle import media_asset_file_path
 from .models import CharacterCard, MediaAsset, Project, Storyboard, StoryboardShot
@@ -20,6 +20,7 @@ from .models import CharacterCard, MediaAsset, Project, Storyboard, StoryboardSh
 class VoiceService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._voice_designs = VoiceDesignService(settings)
 
     def require_config(self) -> None:
         provider = self._provider("")
@@ -142,8 +143,12 @@ class VoiceService:
 
         asset_type = "dialogue" if normalized_role == "dialogue" else "voice"
         effective_provider = self._provider(provider if provider.strip() else (character.voice_provider if character else ""))
+        designed_voice_ref = None
+        if character is not None and character.voice_design_id is not None:
+            designed_voice_ref = self._voice_designs.approved_voice_ref(db=db, character=character)
         effective_voice_profile = (
-            voice_profile.strip()
+            designed_voice_ref
+            or voice_profile.strip()
             or (character.voice_speaker.strip() if character and character.voice_speaker.strip() else "")
             or self._default_voice_profile(effective_provider)
         )
@@ -219,118 +224,31 @@ class VoiceService:
         return asset
 
     def _write_tts_audio(self, *, path: Path, text: str, voice_profile: str, provider: str, speed: float, emotion: str) -> None:
-        if self._provider(provider) == "volcengine_doubao":
-            self._write_volcengine_doubao_audio(path=path, text=text, voice_profile=voice_profile, speed=speed, emotion=emotion)
-            return
-        self._write_openai_compatible_audio(path=path, text=text, voice_profile=voice_profile, speed=speed, emotion=emotion)
-
-    def _write_openai_compatible_audio(self, *, path: Path, text: str, voice_profile: str, speed: float, emotion: str) -> None:
-        payload: dict[str, Any] = {
-            "model": self.settings.tts_model,
-            "voice": voice_profile.strip() or self.settings.tts_voice,
-            "input": text,
-            "response_format": "mp3",
-        }
-        if speed and abs(speed - 1.0) > 0.001:
-            payload["speed"] = speed
-        if emotion.strip():
-            payload["instructions"] = f"Use a {emotion.strip()} narrator delivery."
-
-        request = urllib.request.Request(
-            f"{self.settings.tts_base_url.rstrip('/')}/audio/speech",
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.settings.tts_api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
+        result = self._speech_capability(provider).synthesize(
+            SpeechSynthesisRequest(
+                text=text,
+                voice_profile=voice_profile,
+                speed=speed,
+                emotion=emotion,
+                output_format="mp3",
+            )
         )
-        try:
-            with urllib.request.urlopen(request, timeout=180) as response:
-                content = response.read()
-        except Exception as exc:
-            raise RuntimeError(f"TTS 接口调用失败：{exc}") from exc
-        if not content:
-            raise RuntimeError("TTS 接口返回空音频。")
-        path.write_bytes(content)
-
-    def _write_volcengine_doubao_audio(self, *, path: Path, text: str, voice_profile: str, speed: float, emotion: str) -> None:
-        speaker = voice_profile.strip() or self.settings.volcengine_tts_speaker
-        request_id = str(uuid.uuid4())
-        payload = {
-            "user": {"uid": "chenflow"},
-            "req_params": {
-                "text": text,
-                "speaker": speaker,
-                "audio_params": {
-                    "format": "mp3",
-                    "sample_rate": self.settings.volcengine_tts_sample_rate,
-                    "enable_timestamp": False,
-                },
-                "additions": self._volcengine_additions(speed=speed, emotion=emotion),
-            },
-        }
-        headers = {
-            "Content-Type": "application/json",
-            "X-Api-App-Id": self.settings.volcengine_tts_app_id,
-            "X-Api-Access-Key": self.settings.volcengine_tts_access_key or self.settings.volcengine_tts_api_key,
-            "X-Api-Resource-Id": self.settings.volcengine_tts_resource_id,
-            "X-Api-Request-Id": request_id,
-        }
-        if self.settings.volcengine_tts_model:
-            headers["X-Api-Model"] = self.settings.volcengine_tts_model
-        request = urllib.request.Request(
-            self.settings.volcengine_tts_endpoint,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=180) as response:
-                content = response.read()
-        except Exception as exc:
-            raise RuntimeError(f"豆包语音接口调用失败：{exc}") from exc
-        audio_bytes = self._extract_volcengine_audio(content)
+        audio_bytes = base64.b64decode(result.audio_base64)
         if not audio_bytes:
-            raise RuntimeError("豆包语音接口返回空音频。")
+            raise RuntimeError("????????????")
         path.write_bytes(audio_bytes)
 
-    def _extract_volcengine_audio(self, content: bytes) -> bytes:
-        chunks: list[bytes] = []
-        last_error = ""
-        for raw_line in content.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line.decode("utf-8"))
-            except Exception as exc:
-                last_error = str(exc)
-                continue
-            code = payload.get("code")
-            if code not in (None, 0, 20000000):
-                raise RuntimeError(f"豆包语音接口返回错误：{payload}")
-            data = payload.get("data")
-            if isinstance(data, str) and data:
-                chunks.append(base64.b64decode(data))
-        if chunks:
-            return b"".join(chunks)
-        try:
-            payload = json.loads(content.decode("utf-8"))
-        except Exception as exc:
-            raise RuntimeError(f"豆包语音接口返回无法解析：{last_error or exc}") from exc
-        data = payload.get("data")
-        if isinstance(data, str) and data:
-            return base64.b64decode(data)
-        raise RuntimeError(f"豆包语音接口没有返回音频 data：{payload}")
+    def _speech_capability(self, provider: str):
+        """Build the speech-synthesis adapter for the effective provider.
 
-    def _volcengine_additions(self, *, speed: float, emotion: str) -> dict[str, str]:
-        additions: dict[str, str] = {}
-        if speed and abs(speed - 1.0) > 0.001:
-            additions["speed_ratio"] = f"{speed:.2f}"
-        if emotion.strip():
-            additions["emotion"] = emotion.strip()
-        return additions
+        Adapters are cheap value objects, so no cache is kept: per-character
+        ``voice_provider`` overrides must be honored on every call.
+        """
+        return build_speech_synthesis_capability(self.settings, provider_hint=provider)
+
+
+
+
 
     def _dialogue_items(self, script: Any) -> list[dict[str, Any]]:
         if not isinstance(script, dict):

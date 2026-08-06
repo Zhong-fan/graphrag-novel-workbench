@@ -1,21 +1,34 @@
 from __future__ import annotations
 
-from textwrap import dedent
-from typing import Any
+from typing import Any, Callable
 
 from .config import Settings
 from .json_utils import parse_json_object
-from .llm import OpenAIResponsesLLM
+from .generation_evidence_service import GenerationEvidence
+from .llm import OpenAICompatibleTextLLM
+from .capabilities import CapabilityRole
+from .text_capability import text_model_for_role
 from .models import NovelChapter, Project
-from .visual_style_prompt import build_visual_style_block
+from .prompt_registry import (
+    STORYBOARD_IMAGE_FIRST_CONTRACT,
+    STORYBOARD_SHOTS_CONTRACT,
+    PromptContract,
+    build_repair_prompt,
+)
 
 
 class StoryboardService:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        evidence_sink: Callable[[GenerationEvidence], None] | None = None,
+    ) -> None:
         if settings.llm_mode != "openai" or not settings.openai_api_key:
             raise RuntimeError("当前项目只支持真实模型模式。")
         self.settings = settings
-        self.llm = OpenAIResponsesLLM(
+        self.evidence_sink = evidence_sink
+        self.llm = OpenAICompatibleTextLLM(
             settings.openai_api_key,
             settings.openai_base_url,
             use_system_proxy=settings.openai_use_system_proxy,
@@ -34,122 +47,15 @@ class StoryboardService:
         title: str,
         context_pack_inputs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        video_feed = context_pack_inputs.get("video_feed", {}) if isinstance(context_pack_inputs, dict) else {}
-        project_snapshot = context_pack_inputs.get("project_snapshot", {}) if isinstance(context_pack_inputs, dict) else {}
-        hard_constraints = context_pack_inputs.get("hard_constraints", []) if isinstance(context_pack_inputs, dict) else []
-        user_decisions = video_feed.get("user_decisions", {}) if isinstance(video_feed, dict) else {}
-        reference_constraints = video_feed.get("reference_constraints", {}) if isinstance(video_feed, dict) else {}
-        character_visual_anchors = video_feed.get("character_visual_anchors", []) if isinstance(video_feed, dict) else []
-        character_directory = [
-            {"character_card_id": card.id, "name": card.name, "story_role": card.story_role}
-            for card in project.character_cards
-            if card.deleted_at is None
-        ]
-        chapter_text = "\n\n".join(
-            f"第 {chapter.chapter_no} 章《{chapter.title}》\n摘要：{chapter.summary}\n正文节选：{chapter.content[:5000]}"
-            for chapter in chapters
+        return self._generate_with_contract(
+            STORYBOARD_SHOTS_CONTRACT,
+            build_kwargs={
+                "project": project,
+                "chapters": chapters,
+                "title": title,
+                "context_pack_inputs": context_pack_inputs,
+            },
         )
-        system_prompt = dedent(
-            """
-            你是小说视频化分镜导演和动画美术指导。请把已定稿章节转成图像驱动、轻运镜、视觉叙事优先的短片分镜。
-            重点不是流水线凑镜头，而是为每个镜头找到独特的情绪、构图、光影和角色状态。
-            输出必须是严格 JSON，不要输出 Markdown。
-            """
-        ).strip()
-        prompt = f"""
-项目：{project_snapshot.get("title") or project.title}
-类型：{project_snapshot.get("genre") or project.genre}
-短片标题：{title}
-
-{build_visual_style_block(project)}
-
-世界设定：
-{project_snapshot.get("world_brief") or project.world_brief or "暂无"}
-
-已确认角色视觉锚点：
-{character_visual_anchors}
-
-角色 ID 目录：
-{character_directory}
-
-已确认参考作品约束：
-{reference_constraints}
-
-用户已确认的版本选择：
-{user_decisions}
-
-已定稿章节：
-{chapter_text}
-
-请输出：
-{{
-  "title": "...",
-  "summary": "短片概述",
-  "shots": [
-    {{
-      "shot_no": 1,
-      "narration_text": "旁白/字幕文本",
-      "visual_prompt": "可直接用于图像/视频模型的画面提示词，包含角色、场景、景别、机位、构图、光线、色彩、空气质感、情绪",
-      "character_refs": [{{"character_card_id": 1, "name": "角色名", "role": "角色在镜头中的作用"}}],
-      "scene_refs": [{{"name": "场景名", "role": "场景用途"}}],
-      "continuity": {{
-        "shot_type": "new|continuation|camera_move|transition",
-        "depends_on_shot_no": null,
-        "first_frame_source": "generated|previous_last_frame",
-        "requires_i2v": true,
-        "end_frame_usage": "none|feeds_next",
-        "camera_motion": "无|推进|横移|摇镜|拉远",
-        "character_state_delta": "角色状态变化",
-        "continuity_constraints": ["必须保持的角色、服装、场景和构图连续性"]
-      }},
-      "audio_script": {{
-        "dialogues": [
-          {{
-            "character_name": "说话角色名",
-            "line": "从小说正文和当前镜头意图自动生成的角色对白",
-            "emotion": "novel_dialog|soft|sad|angry|hopeful|hesitant",
-            "voice_profile": "",
-            "start_hint": 0.2,
-            "duration_hint": 2.8
-          }}
-        ],
-        "narration": "可选旁白，能不用就留空",
-        "subtitle_text": "可用于字幕的压缩文本",
-        "music_cue": "音乐氛围提示，例如雨夜、钢琴、轻弦乐、压抑但温柔",
-        "sound_effects": ["雨声", "脚步声"]
-      }},
-      "duration_seconds": 4
-    }}
-  ]
-}}
-
-要求：
-- 生成 6 到 12 个镜头。
-- 每个镜头都能独立转成图片提示词。
-- 每个 visual_prompt 必须明确写出画面媒介、美术方向、角色外观、场景、构图、景别、机位、光影、色彩和空气质感。
-- 每个镜头必须从当前章节的具体情节、物件、环境或人物关系中抽取视觉锚点，不要生成“人物站在背景前”的通用镜头。
-- 镜头之间要有节奏变化：远景、近景、特写、过肩、低机位、俯视、窗内外反差、前景遮挡等要合理分布，不要重复同一构图。
-- visual_prompt 要像给图像/视频模型的最终提示词，直接可用，不要写“表现出”“体现出”这类抽象说明。
-- 必须遵守项目级视觉风格锁定；如果用户填写了作者/工作室画风参考，只借鉴可迁移的美术特征，不要复刻原作角色、剧情、专有名词或具体画面。
-- 不要改写章节既定事实。
-- character_refs 必须返回对象数组，character_card_id 必须来自“角色 ID 目录”；无法确定时保留 name 并省略 ID。
-- 每个镜头必须返回 continuity；continuation 和 camera_move 镜头要设置 first_frame_source 为 previous_last_frame，并写明 depends_on_shot_no。
-- 必须遵守以下硬约束：{hard_constraints}
-- 配音和对白是可选项；没有自然对白时，`audio_script.dialogues` 可以为空，不要为了配音硬塞台词。
-- 如果原文没有适合对白，可以用极短旁白或字幕补足信息；视觉叙事优先。
-- `audio_script.dialogues` 只包含当前镜头内合理会说出口的话，不要把大段叙述硬改成台词。
-- `music_cue` 和 `sound_effects` 只写提示，不生成歌词、旋律名或受版权保护的曲名。
-""".strip()
-        response = self.llm.generate(
-            model=self.settings.utility_model,
-            system_prompt=system_prompt,
-            user_prompt=prompt,
-            json_mode=True,
-        )
-        payload = parse_json_object(response.text)
-        if not isinstance(payload.get("shots"), list):
-            raise RuntimeError("分镜模型没有返回 shots。")
-        return payload
 
     def generate_image_first_storyboard(
         self,
@@ -160,82 +66,149 @@ class StoryboardService:
         reference_image_notes: list[str],
         context_pack_inputs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        video_feed = context_pack_inputs.get("video_feed", {}) if isinstance(context_pack_inputs, dict) else {}
-        project_snapshot = context_pack_inputs.get("project_snapshot", {}) if isinstance(context_pack_inputs, dict) else {}
-        reference_constraints = video_feed.get("reference_constraints", {}) if isinstance(video_feed, dict) else {}
-        character_directory = [
-            {"character_card_id": card.id, "name": card.name, "story_role": card.story_role}
-            for card in project.character_cards
-            if card.deleted_at is None
-        ]
-        system_prompt = dedent(
-            """
-            你是图片先行的视频分镜导演。请先规划关键图，再规划图生视频镜头。
-            输出必须是严格 JSON，不要输出 Markdown。
-            """
-        ).strip()
-        prompt = f"""
-项目：{project_snapshot.get("title") or project.title}
-类型：{project_snapshot.get("genre") or project.genre}
-短片标题：{title}
+        return self._generate_with_contract(
+            STORYBOARD_IMAGE_FIRST_CONTRACT,
+            build_kwargs={
+                "project": project,
+                "title": title,
+                "reference_video_brief": reference_video_brief,
+                "reference_image_notes": reference_image_notes,
+                "context_pack_inputs": context_pack_inputs,
+            },
+        )
 
-{build_visual_style_block(project)}
+    def _generate_with_contract(
+        self,
+        contract: PromptContract,
+        *,
+        build_kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        # 契约边界：每个失败阶段只做一次定向修复，之后失败抛错并落失败证据。
+        project = build_kwargs.get("project")
+        project_id = getattr(project, "id", None)
+        system_prompt, prompt = contract.builder(**build_kwargs)
+        payload, raw_text = self._request_payload(contract, system_prompt, prompt, project_id=project_id)
+        result = contract.validator(payload)
+        if result.ok:
+            self._record_evidence(
+                contract=contract,
+                project_id=project_id,
+                status="succeeded",
+                rendered_prompt=prompt,
+                raw_output=raw_text,
+                parsed_output=payload,
+                validation_results={"initial_ok": True},
+                quality_outcome="adopted",
+            )
+            return payload
+        repair_system, repair_prompt = build_repair_prompt(contract=contract, payload=payload, result=result)
+        repaired, repaired_raw = self._request_payload(contract, repair_system, repair_prompt, project_id=project_id)
+        repaired_result = contract.validator(repaired)
+        if repaired_result.ok:
+            self._record_evidence(
+                contract=contract,
+                project_id=project_id,
+                status="succeeded",
+                rendered_prompt=repair_prompt,
+                raw_output=repaired_raw,
+                parsed_output=repaired,
+                validation_results={"initial_ok": False, "repair_attempted": True, "final_ok": True},
+                quality_outcome="adopted",
+            )
+            return repaired
+        self._record_evidence(
+            contract=contract,
+            project_id=project_id,
+            status="failed",
+            rendered_prompt=repair_prompt,
+            raw_output=repaired_raw,
+            parsed_output=repaired,
+            validation_results={
+                "initial_ok": False,
+                "repair_attempted": True,
+                "final_ok": False,
+                "error_text": repaired_result.error_text,
+            },
+            error_category="validation_failed",
+            error_message=f"{contract.prompt_id} 校验失败：{repaired_result.error_text}",
+        )
+        raise RuntimeError(f"{contract.prompt_id} 校验失败：{repaired_result.error_text}")
 
-参考作品约束：
-{reference_constraints}
+    def _record_evidence(
+        self,
+        *,
+        contract: PromptContract,
+        project_id: int | None,
+        status: str,
+        rendered_prompt: str,
+        raw_output: str,
+        parsed_output: dict[str, Any],
+        validation_results: dict[str, Any],
+        quality_outcome: str = "",
+        error_category: str = "",
+        error_message: str = "",
+    ) -> None:
+        if self.evidence_sink is None:
+            return
+        self.evidence_sink(
+            GenerationEvidence(
+                stage=contract.prompt_id,
+                status=status,
+                provider="openai",
+                model=text_model_for_role(self.settings, CapabilityRole.UTILITY_TEXT),
+                project_id=project_id,
+                prompt_contract_id=contract.prompt_id,
+                prompt_version=contract.version,
+                rendered_prompt=rendered_prompt,
+                raw_output=raw_output,
+                parsed_output=parsed_output,
+                validation_results=validation_results,
+                quality_outcome=quality_outcome,
+                error_category=error_category,
+                error_message=error_message,
+            )
+        )
 
-已确认参考图说明：
-{reference_image_notes}
-
-角色 ID 目录：
-{character_directory}
-
-用户目标片段：
-{reference_video_brief}
-
-请输出：
-{{
-  "title": "...",
-  "summary": "短片概述",
-  "shots": [
-    {{
-      "shot_no": 1,
-      "narration_text": "旁白/字幕文本",
-      "visual_prompt": "先用于生成关键首帧图片的最终画面提示词，包含画面媒介、美术方向、角色、场景、构图、景别、机位、光影、色彩和空气质感",
-      "character_refs": [{{"character_card_id": 1, "name": "角色名", "role": "角色在镜头中的作用"}}],
-      "scene_refs": [{{"name": "场景名", "role": "场景用途"}}],
-      "continuity": {{
-        "shot_type": "new|continuation|camera_move|transition",
-        "depends_on_shot_no": null,
-        "first_frame_source": "generated",
-        "requires_i2v": true,
-        "end_frame_usage": "none|feeds_next",
-        "camera_motion": "无|推进|横移|摇镜|拉远",
-        "character_state_delta": "角色状态变化",
-        "continuity_constraints": ["必须保持的角色、服装、场景和构图连续性"]
-      }},
-      "audio_script": {{}},
-      "duration_seconds": 4
-    }}
-  ]
-}}
-
-要求：
-- 生成 3 到 8 个镜头。
-- 每个镜头都必须先生成关键首帧，再用图生视频推进。
-- 每个镜头的 continuity.requires_i2v 必须为 true。
-- 每个镜头的 continuity.first_frame_source 必须为 generated，除非是 continuation 或 camera_move 且明确依赖上一镜头。
-- 只继承参考作品的可迁移特征，例如媒介、光影、构图节奏、天气、色彩关系和情绪质感。
-- 不要复刻参考作品的具体角色设计、专有名词、具体剧情或具体镜头。
-- character_refs 必须返回对象数组，character_card_id 必须来自“角色 ID 目录”；无法确定时保留 name 并省略 ID。
-""".strip()
+    def _request_payload(
+        self,
+        contract: PromptContract,
+        system_prompt: str,
+        prompt: str,
+        *,
+        project_id: int | None,
+    ) -> tuple[dict[str, Any], str]:
         response = self.llm.generate(
-            model=self.settings.utility_model,
+            model=text_model_for_role(self.settings, CapabilityRole.UTILITY_TEXT),
             system_prompt=system_prompt,
             user_prompt=prompt,
             json_mode=True,
         )
-        payload = parse_json_object(response.text)
-        if not isinstance(payload.get("shots"), list):
-            raise RuntimeError("分镜模型没有返回 shots。")
-        return payload
+        try:
+            payload = parse_json_object(response.text)
+        except RuntimeError:
+            self._record_evidence(
+                contract=contract,
+                project_id=project_id,
+                status="failed",
+                rendered_prompt=prompt,
+                raw_output=response.text,
+                parsed_output={},
+                validation_results={"initial_ok": False, "parse_ok": False},
+                error_category="invalid_json_response",
+                error_message=f"{contract.prompt_id} 模型没有返回可解析的 JSON。",
+            )
+            raise
+        if not isinstance(payload, dict):
+            self._record_evidence(
+                contract=contract,
+                project_id=project_id,
+                status="failed",
+                rendered_prompt=prompt,
+                raw_output=response.text,
+                parsed_output={},
+                validation_results={"initial_ok": False, "parse_ok": False},
+                error_category="invalid_json_response",
+                error_message=f"{contract.prompt_id} 模型没有返回 JSON 对象。",
+            )
+            raise RuntimeError(f"{contract.prompt_id} 模型没有返回 JSON 对象。")
+        return payload, response.text

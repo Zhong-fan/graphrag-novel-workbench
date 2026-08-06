@@ -16,7 +16,12 @@ const {
   trashItems,
   activeProject,
   longformState,
+  contextPack,
+  generationAttempts,
+  generationAttemptsLoading,
+  generationAttemptsError,
   loading,
+  longformRequestState,
   error,
   success,
   isAuthenticated,
@@ -307,9 +312,14 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
         :projects="projects"
         :active-project="activeProject"
         :longform-state="longformState"
+        :context-pack="contextPack"
+        :generation-attempts="generationAttempts"
+        :generation-attempts-loading="generationAttemptsLoading"
+        :generation-attempts-error="generationAttemptsError"
         :trash-items="trashItems"
         :trash-summary="trashSummary"
         :loading="loading"
+        :longform-request="longformRequestState"
         :form="projectForm"
         @go="goToView"
         @login="openAuthPanel('login', 'studio')"
@@ -330,10 +340,17 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
         @generate-shot-first-frame="store.generateShotFirstFrame"
         @generate-storyboard-voice="store.generateStoryboardVoice"
         @prepare-video-production="store.prepareVideoProduction"
+        @load-generation-attempts="store.loadGenerationAttempts"
+        @build-context-pack="store.buildContextPack"
+        @rebuild-context-pack="store.rebuildContextPack"
+        @confirm-context-pack="store.confirmContextPack"
+        @update-context-pack-decisions="store.updateContextPackDecisions"
+        @update-context-pack-todo="store.updateContextPackTodo"
         @generate-series-plan="store.generateSeriesPlan"
         @run-batch-generation="store.runBatchGeneration"
         @revise-draft-version="store.reviseDraftVersion"
         @canonicalize-draft-version="store.canonicalizeDraftVersion"
+        @lock-series-plan="store.lockSeriesPlan"
         @update-storyboard-shot="store.updateStoryboardShot"
         @create-storyboard-shot="store.createStoryboardShot"
         @delete-storyboard-shot="store.deleteStoryboardShot"

@@ -4,7 +4,9 @@ import json
 from dataclasses import dataclass
 
 from .config import Settings
-from .llm import OpenAIResponsesLLM
+from .llm import OpenAICompatibleTextLLM
+from .capabilities import CapabilityRole
+from .text_capability import text_model_for_role
 from .prompts import evolution_system_prompt, evolution_user_prompt
 
 
@@ -58,7 +60,7 @@ class EvolutionService:
         if settings.llm_mode != "openai" or not settings.openai_api_key:
             raise RuntimeError("当前项目只支持真实模型模式。")
         self.settings = settings
-        self.llm = OpenAIResponsesLLM(
+        self.llm = OpenAICompatibleTextLLM(
             settings.openai_api_key,
             settings.openai_base_url,
             use_system_proxy=settings.openai_use_system_proxy,
@@ -173,7 +175,7 @@ class EvolutionService:
         )
 
         response = self.llm.generate(
-            model=self.settings.utility_model,
+            model=text_model_for_role(self.settings, CapabilityRole.UTILITY_TEXT),
             system_prompt=system_prompt,
             user_prompt=prompt,
             json_mode=True,

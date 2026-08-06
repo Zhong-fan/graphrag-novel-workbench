@@ -107,7 +107,7 @@ class VideoQualityPlanResultTests(unittest.TestCase):
             self.assertEqual(quality_plan["shots"][0]["shot_no"], 1)
             self.assertEqual(quality_plan["shots"][0]["purpose"], "A light appears on a rainy street.")
 
-    def test_video_quality_result_marks_completed_output_as_passed(self) -> None:
+    def test_video_quality_result_separates_render_from_acceptance(self) -> None:
         from app.json_utils import json_dumps
         from app.video_quality_service import VideoQualityService
 
@@ -126,9 +126,18 @@ class VideoQualityPlanResultTests(unittest.TestCase):
 
             result = VideoQualityService().build_result(task=task, status="completed", message="Video generation completed.")
 
-            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["status"], "requires_review")
+            self.assertEqual(result["render_status"], "completed")
+            self.assertFalse(result["quality_accepted"])
             self.assertTrue(result["checked_against_plan"])
-            self.assertEqual(result["short_film_structure"], "passed")
+            self.assertEqual(result["short_film_structure"], "requires_review")
+
+            accepted = VideoQualityService().build_result(
+                task=task, status="completed", message="accepted", quality_accepted=True
+            )
+            self.assertEqual(accepted["status"], "passed")
+            self.assertTrue(accepted["quality_accepted"])
+            self.assertEqual(accepted["short_film_structure"], "passed")
 
     def test_video_render_service_records_quality_result(self) -> None:
         from app.video_quality_service import VideoQualityService
@@ -154,7 +163,9 @@ class VideoQualityPlanResultTests(unittest.TestCase):
             )
 
             progress = json_loads_object(task.progress_json)
-            self.assertEqual(progress["video_quality_result"]["status"], "passed")
+            self.assertEqual(progress["video_quality_result"]["status"], "requires_review")
+            self.assertFalse(progress["video_quality_result"]["quality_accepted"])
+            self.assertEqual(progress["video_quality_result"]["render_status"], "completed")
             self.assertTrue(progress["video_quality_result"]["checked_against_plan"])
 
     def test_longform_state_render_trace_exposes_render_prompt_sources(self) -> None:
@@ -169,8 +180,8 @@ class VideoQualityPlanResultTests(unittest.TestCase):
                 output_uri="",
                 progress_json=json_dumps(
                     {
-                        "current_step": "jimeng_submit",
-                        "provider": "jimeng",
+                        "current_step": "ark_seedance_submit",
+                        "provider": "ark_seedance",
                         "video_quality_plan": VideoQualityService().build_quality_plan(storyboard),
                         "shots": [{"shot_id": storyboard.shots[0].id, "shot_no": 1, "used_first_frame": True, "image_status": "running"}],
                     }
@@ -188,7 +199,7 @@ class VideoQualityPlanResultTests(unittest.TestCase):
                     uri="output/video_tasks/1/segment-001.mp4",
                     prompt="final render video prompt",
                     status="running",
-                    meta_json=json_dumps({"provider": "jimeng"}),
+                    meta_json=json_dumps({"provider": "ark_seedance"}),
                 )
             )
             session.commit()
@@ -232,24 +243,24 @@ class VideoQualityPlanResultTests(unittest.TestCase):
             session.flush()
 
             service = VideoRenderService(load_settings())
-            prompt = service._build_jimeng_prompt(task, shot, first_frame_asset=first_frame)
+            prompt = service._build_ark_seedance_prompt(task, shot, first_frame_asset=first_frame)
             service._persist_render_context(
                 task,
-                provider="jimeng",
+                provider="ark_seedance",
                 shot=shot,
                 prompt=prompt,
                 first_frame_asset=first_frame,
             )
             service._set_progress(
                 task,
-                stage="jimeng_submit",
-                message="提交即梦镜头 1 视频任务。",
-                extra={"provider": "jimeng", "shot_no": shot.shot_no, "used_first_frame": True},
+                stage="ark_seedance_submit",
+                message="提交 Ark Seedance 镜头 1 视频任务。",
+                extra={"provider": "ark_seedance", "shot_no": shot.shot_no, "used_first_frame": True},
             )
             session.flush()
 
             progress = json_loads_object(task.progress_json)
-            self.assertEqual(progress["provider"], "jimeng")
+            self.assertEqual(progress["provider"], "ark_seedance")
             self.assertTrue(progress["used_first_frame"])
             self.assertEqual(progress["shot_no"], shot.shot_no)
             self.assertEqual(progress["render_prompt"], prompt)

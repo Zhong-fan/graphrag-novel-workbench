@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from "vue";
+import SeriesPlanReader from "./SeriesPlanReader.vue";
 import type {
   BatchGenerationPayload,
   CanonicalizeDraftPayload,
+  ContextPack,
+  ContextPackBuildPayload,
   CreateStoryboardShotPayload,
+  GenerationAttempt,
   GenerationTraceStep,
   GenerateCharacterTurnaroundPayload,
   GenerateSeriesPlanPayload,
@@ -38,10 +42,15 @@ const props = defineProps<{
   projects: Project[];
   activeProject: ProjectDetailResponse | null;
   longformState: LongformState;
+  contextPack: ContextPack | null;
+  generationAttempts: GenerationAttempt[];
+  generationAttemptsLoading: boolean;
+  generationAttemptsError: string;
   trashItems: TrashItem[];
   trashSummary: Record<TrashItem["item_type"], number>;
   workspaceSearch: string;
   loading: boolean;
+  longformRequest: { active: boolean; stage: string; message: string; target?: Record<string, unknown> };
   form: ProjectCreateDraft;
 }>();
 
@@ -49,11 +58,17 @@ const emit = defineEmits<{
   (e: "login"): void;
   (e: "register"): void;
   (e: "logout"): void;
-  (e: "go", view: "studio" | "projectCreate" | "assetLibrary" | "trash"): void;
+  (e: "go", view: "studio" | "projectCreate" | "assetLibrary" | "trash" | "planReader"): void;
   (e: "open-project-create", mode: CreationMode): void;
   (e: "load-imported-project-draft", payload: ProjectImportDraftPayload): void;
   (e: "load-ai-project-draft", payload: ProjectAIBriefDraftPayload): void;
   (e: "open-project", projectId: number): void;
+  (e: "load-generation-attempts", projectId: number, options?: { force?: boolean }): void;
+  (e: "build-context-pack", payload: ContextPackBuildPayload): void;
+  (e: "rebuild-context-pack", payload: ContextPackBuildPayload): void;
+  (e: "confirm-context-pack"): void;
+  (e: "update-context-pack-decisions", decisions: Record<string, string>): void;
+  (e: "update-context-pack-todo", taskId: string, status: string): void;
   (e: "delete-project", projectId: number): void;
   (e: "restore-trash", item: TrashItem): void;
   (e: "update-media-asset", assetId: number, meta: Record<string, unknown>): void;
@@ -69,6 +84,7 @@ const emit = defineEmits<{
   (e: "run-batch-generation", payload: BatchGenerationPayload): void;
   (e: "revise-draft-version", draftVersionId: number, payload: ReviseDraftPayload): void;
   (e: "canonicalize-draft-version", draftVersionId: number, payload: CanonicalizeDraftPayload): void;
+  (e: "lock-series-plan", seriesPlanId: number): void;
   (e: "update-storyboard-shot", storyboardId: number, shotId: number, payload: UpdateStoryboardShotPayload): void;
   (e: "create-storyboard-shot", storyboardId: number, payload: CreateStoryboardShotPayload): void;
   (e: "delete-storyboard-shot", storyboardId: number, shotId: number): void;
@@ -84,6 +100,7 @@ const emit = defineEmits<{
 
 const activeModule = ref<WorkbenchModule>("projects");
 const activeStoryboardId = ref<number | null>(null);
+const evidencePanel = ref<HTMLDetailsElement | null>(null);
 const settingsDraft = reactive({ title: "", genre: "", world_brief: "", writing_rules: "" });
 const creationAssist = reactive({ script_text: "", protagonist: "", core_conflict: "", audience: "", tone: "" });
 const longformDraft = reactive({
@@ -95,6 +112,7 @@ const longformDraft = reactive({
   author_name: "",
   tagline: "",
 });
+const contextDraft = reactive<{ reference_mode: ContextPack["reference_mode"]; user_notes: string }>({ reference_mode: "hybrid_reference", user_notes: "" });
 const editingShotId = ref<number | null>(null);
 const shotDraft = reactive<UpdateStoryboardShotPayload>({
   narration_text: "",
@@ -137,8 +155,14 @@ const selectedStoryboardAssets = computed(() =>
   selectedStoryboard.value ? mediaAssets.value.filter((asset) => asset.storyboard_id === selectedStoryboard.value?.id) : mediaAssets.value,
 );
 const latestSeriesPlan = computed(() => props.longformState.series_plans[0] ?? null);
+function onReaderLock(planId: number) {
+  emit("lock-series-plan", planId);
+}
 const latestDraftVersion = computed(() => props.longformState.draft_versions[0] ?? null);
 const latestBatchJob = computed(() => props.longformState.batch_jobs[0] ?? null);
+const longformRequestActive = computed(() => Boolean(props.longformRequest?.active));
+const longformRequestStage = computed(() => props.longformRequest?.stage ?? "idle");
+const longformRequestMessage = computed(() => props.longformRequest?.message ?? "");
 const recentEvents = computed(() => {
   const events: TaskEvent[] = [];
   for (const storyboard of storyboards.value) events.push(...storyboard.events);
@@ -299,7 +323,80 @@ function statusTone(status: string | undefined) {
   if (["running", "queued", "warning"].includes(status || "")) return "warn";
   return "neutral";
 }
-function formatDateTime(value: string | undefined) {
+function attemptStageLabel(stage: string | undefined) {
+  const labels: Record<string, string> = {
+    storyboard: "分镜",
+    image_first_frame: "首帧",
+    image_turnaround: "三视图",
+    video_segment: "视频片段",
+    cost_gate: "成本门禁",
+  };
+  return labels[stage || ""] || stage || "未记录";
+}
+function attemptErrorLabel(attempt: GenerationAttempt) {
+  return attempt.error_category ? `失败类别：${attempt.error_category}` : "失败原因";
+}
+function attemptEvidenceSummary(attempt: GenerationAttempt) {
+  return {
+    parameters: attempt.parameters,
+    usage: attempt.usage,
+    validation_results: attempt.validation_results,
+    input_asset_versions: attempt.input_asset_versions,
+    provider_ref: attempt.provider_ref,
+    prompt_contract_id: attempt.prompt_contract_id,
+    prompt_version: attempt.prompt_version,
+    shot_id: attempt.shot_id,
+    adopted_asset_id: attempt.adopted_asset_id,
+  };
+}
+function hasAttemptEvidence(attempt: GenerationAttempt) {
+  return Object.keys(attempt.validation_results ?? {}).length > 0 || Object.keys(attempt.input_asset_versions ?? {}).length > 0;
+}
+function onEvidenceToggle(event: Event) {
+  const details = event.currentTarget;
+  if (!(details instanceof HTMLDetailsElement) || !details.open) return;
+  if (!selectedProject.value) return;
+  emit("load-generation-attempts", selectedProject.value.id);
+}
+function retryEvidenceLoad(force = false) {
+  if (!selectedProject.value) return;
+  emit("load-generation-attempts", selectedProject.value.id, force ? { force: true } : undefined);
+}
+function contextStatusLabel(status: string | undefined) {
+  const labels: Record<string, string> = { draft: "校对稿", confirmed: "已确认", stale: "已过期" };
+  return labels[status || ""] || "未生成";
+}
+function contextStatusTone(status: string | undefined) {
+  if (status === "confirmed") return "good";
+  if (status === "stale") return "bad";
+  return "warn";
+}
+function referenceModeLabel(mode: string | undefined) {
+  const labels: Record<string, string> = { style_reference: "风格参考", content_reference: "内容参考", hybrid_reference: "混合参考" };
+  return labels[mode || ""] || mode || "未设置";
+}
+function conflictTone(severity: string) {
+  return severity === "blocking" ? "bad" : "warn";
+}
+function submitContextBuild(confirmAfterBuild: boolean) {
+  const payload: ContextPackBuildPayload = {
+    reference_mode: contextDraft.reference_mode,
+    user_notes: contextDraft.user_notes.trim(),
+    confirm_after_build: confirmAfterBuild,
+    user_decisions: props.contextPack?.user_decisions,
+  };
+  if (props.contextPack) emit("rebuild-context-pack", payload);
+  else emit("build-context-pack", payload);
+}
+function pickDecision(question: ContextPack["choice_questions"][number], option: string) {
+  const decisions = { ...(props.contextPack?.user_decisions ?? {}), [question.question_id]: option };
+  emit("update-context-pack-decisions", decisions);
+}
+function toggleTodo(task: ContextPack["todo_tasks"][number]) {
+  const next = task.status === "done" ? "todo" : "done";
+  emit("update-context-pack-todo", task.task_id || task.title, next);
+}
+function formatDateTime(value: string | null | undefined) {
   if (!value) return "未记录";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "未记录" : date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
@@ -436,10 +533,26 @@ watch(storyboards, (items) => {
 watch(selectedStoryboard, () => {
   editingShotId.value = null;
 });
+// 切换项目时关闭证据面板，让下次展开触发新项目的懒加载，避免展示旧项目的缓存证据。
+watch(() => selectedProject.value?.id, () => {
+  if (evidencePanel.value) evidencePanel.value.open = false;
+});
+// 上下文包为空（未生成或切换项目）时清空补充要求，避免残留上一个项目的输入。
+watch(() => props.contextPack, (pack) => {
+  contextDraft.user_notes = pack?.user_notes ?? "";
+}, { immediate: true });
 </script>
 
 <template>
   <div class="toon-shell">
+    <SeriesPlanReader
+      v-if="currentView === 'planReader'"
+      class="plan-reader-layer"
+      :plan="latestSeriesPlan"
+      :project-title="selectedProject?.title ?? ''"
+      @back="emit('go', 'studio')"
+      @lock="onReaderLock"
+    />
     <aside class="toon-rail" aria-label="ToonFlow style navigation">
       <button class="toon-rail__brand" type="button" aria-label="ChenFlow 项目" :aria-current="activeModule === 'projects' ? 'page' : undefined" @click="selectModule('projects')">CF</button>
       <button v-for="item in railItems.slice(0, 4)" :key="item.module" type="button" :class="{ active: activeModule === item.module }" :aria-current="activeModule === item.module ? 'page' : undefined" :aria-label="item.label" :title="item.label" @click="selectModule(item.module)">
@@ -519,7 +632,41 @@ watch(selectedStoryboard, () => {
 
           <div v-if="!selectedProject" class="toon-empty toon-empty--canvas"><strong>先打开一个项目</strong><p>选择项目后，真实生产数据会铺在这张画布上。</p></div>
 
-          <div v-else-if="activeModule === 'script'" class="toon-flow toon-flow--script">
+          <div v-else-if="activeModule === 'script'" class="toon-script-board">
+            <details class="toon-context-panel">
+              <summary class="toon-context-summary">
+                <span class="toon-context-summary__title">创作上下文包 · 生成前校对</span>
+                <b :class="`tone-${contextStatusTone(contextPack?.status)}`">{{ contextStatusLabel(contextPack?.status) }}</b>
+                <span v-if="contextPack" class="toon-context-summary__meta">v{{ contextPack.version_no }} · {{ referenceModeLabel(contextPack.reference_mode) }}</span>
+                <span v-else class="toon-context-summary__meta">生成正文、分镜和视频前需先完成校对确认</span>
+                <i class="toon-context-chevron">›</i>
+              </summary>
+              <div class="toon-context-body">
+              
+              
+              <template v-if="!contextPack">
+                <p>生成正文、分镜和视频前，系统会先整理一份可审阅的创作上下文包（故事约束、人物卡、参考作品与冲突清单）。完成校对并确认后，后续生成才会解锁。</p>
+                <label><span>参考模式</span><select v-model="contextDraft.reference_mode"><option value="style_reference">风格参考</option><option value="content_reference">内容参考</option><option value="hybrid_reference">混合参考</option></select></label>
+                <label><span>校对补充要求</span><textarea v-model="contextDraft.user_notes" rows="3" placeholder="补充改编禁区、节奏要求或需要遵守的设定。" /></label>
+                <div class="toon-context-actions"><button type="button" :disabled="loading" @click="submitContextBuild(false)">生成校对稿</button><button type="button" class="toon-button--dark" :disabled="loading" @click="submitContextBuild(true)">生成并确认</button></div>
+              </template>
+              <template v-else-if="contextPack.status !== 'confirmed'">
+                <p v-if="contextPack.status === 'stale'" class="toon-task-error"><strong>上下文已过期</strong>项目设定、人物卡或参考作品变化后需要重新生成校对稿。</p>
+                <p>v{{ contextPack.version_no }} · {{ referenceModeLabel(contextPack.reference_mode) }}<template v-if="contextPack.user_notes"> · {{ shortText(contextPack.user_notes, '', 60) }}</template></p>
+                <div v-if="contextPack.conflict_report.length" class="toon-context-block"><span>冲突清单</span><article v-for="conflict in contextPack.conflict_report" :key="conflict.code"><b :class="`tone-${conflictTone(conflict.severity)}`">{{ conflict.severity === "blocking" ? "阻断" : "提示" }}</b><strong>{{ conflict.title }}</strong><p>{{ conflict.detail }}</p></article></div>
+                <div v-if="contextPack.user_guidance.length" class="toon-context-block"><span>校对建议</span><article v-for="(item, index) in contextPack.user_guidance" :key="`${item.title}-${index}`"><strong>{{ item.title }}</strong><p>{{ item.detail }}</p><small>{{ item.suggested_action }}</small></article></div>
+                <div v-if="contextPack.choice_questions.length" class="toon-context-block"><span>需要你决策</span><article v-for="question in contextPack.choice_questions" :key="question.question_id"><strong>{{ question.question }}</strong><div class="toon-choice-options"><button v-for="option in question.options" :key="option" type="button" :class="{ active: (contextPack.user_decisions ?? {})[question.question_id] === option }" @click="pickDecision(question, option)">{{ option }}</button></div><small v-if="question.recommendation">建议：{{ question.recommendation }}</small></article></div>
+                <div v-if="contextPack.todo_tasks.length" class="toon-context-block"><span>校对待办</span><article v-for="task in contextPack.todo_tasks" :key="task.task_id || task.title"><b :class="`tone-${task.status === 'done' ? 'good' : 'warn'}`">{{ task.status === "done" ? "已完成" : "待处理" }}</b><strong>{{ task.title }}</strong><p>{{ task.detail }}</p><button type="button" :disabled="loading" @click="toggleTodo(task)">{{ task.status === "done" ? "标记为待处理" : "标记完成" }}</button></article></div>
+                <div class="toon-context-actions"><button type="button" :disabled="loading" @click="submitContextBuild(false)">重建校对稿</button><button type="button" class="toon-button--dark" :disabled="loading" @click="emit('confirm-context-pack')">确认创作上下文包</button></div>
+              </template>
+              <template v-else>
+                <p>v{{ contextPack.version_no }} · {{ referenceModeLabel(contextPack.reference_mode) }} · 确认于 {{ formatDateTime(contextPack.confirmed_at) }}</p>
+                <p v-if="contextPack.conflict_report.length || contextPack.user_guidance.length">冲突清单 {{ contextPack.conflict_report.length }} 项 · 校对建议 {{ contextPack.user_guidance.length }} 条</p>
+                <div class="toon-context-actions"><button type="button" :disabled="loading" @click="submitContextBuild(true)">重建并确认</button></div>
+              </template>
+              </div>
+            </details>
+            <div class="toon-flow toon-flow--script">
             <article class="toon-flow-node toon-flow-node--source"><header><span>01 · 故事源</span><b :class="`tone-${selectedProject?.world_brief ? 'good' : 'warn'}`">{{ selectedProject?.world_brief ? "已录入" : "待补充" }}</b></header><h3>{{ selectedProject?.title }}</h3><p>{{ shortText(selectedProject?.world_brief, "尚未录入故事资料。") }}</p><footer>{{ selectedProject?.reference_work || "原创项目" }}</footer></article>
             <span class="toon-connector">→</span>
             <article class="toon-flow-node"><header><span>02 · 创作约束</span><b :class="`tone-${selectedProject?.writing_rules ? 'good' : 'warn'}`">{{ selectedProject?.writing_rules ? "已设置" : "待补充" }}</b></header><h3>改编策略</h3><p>{{ shortText(selectedProject?.writing_rules, "尚未设置改编要求。") }}</p><footer>{{ characterCards.length }} 人物卡 · {{ props.activeProject?.sources.length || 0 }} 资料</footer></article>
@@ -527,18 +674,23 @@ watch(selectedStoryboard, () => {
             <article class="toon-flow-node"><header><span>03 · 长篇产物</span><b :class="`tone-${longformState.draft_versions.length ? 'good' : 'neutral'}`">{{ longformState.draft_versions.length ? "有草稿" : "未开始" }}</b></header><h3>{{ longformState.series_plans[0]?.title || "系列规划与正文" }}</h3><p>{{ longformState.series_plans[0]?.theme || "概要、章节规划和正文版本会在这里汇总。" }}</p><footer>{{ longformState.series_plans.length }} 份规划 · {{ longformState.draft_versions.length }} 个草稿</footer></article>
             <span class="toon-connector">→</span>
             <article class="toon-flow-node"><header><span>04 · 分镜出口</span><b :class="`tone-${storyboards.length ? 'good' : 'neutral'}`">{{ storyboards.length ? "已连接" : "未开始" }}</b></header><h3>{{ selectedStoryboard?.title || "等待分镜" }}</h3><p>{{ selectedStoryboard?.summary || "完成故事与正文准备后，从这里进入镜头生产。" }}</p><footer>{{ selectedStoryboard?.shots.length || 0 }} 镜头</footer></article>
-            <section class="toon-longform-panel">
+            </div>
+            <section class="toon-longform-panel"><p v-if="longformRequestActive" class="toon-longform-status">{{ longformRequestMessage }}</p>
               <article>
                 <header><span>LONGFORM PLAN</span><strong>长篇规划</strong></header>
                 <label><span>目标章节数</span><input v-model.number="longformDraft.target_chapter_count" type="number" min="1" max="200" /></label>
                 <label><span>规划补充要求</span><textarea v-model="longformDraft.user_brief" rows="4" placeholder="补充节奏、主线、人物弧光或禁区。" /></label>
-                <button type="button" :disabled="loading" @click="submitSeriesPlan">{{ latestSeriesPlan ? "重新生成规划" : "生成长篇规划" }}</button>
+                <button type="button" :disabled="loading" @click="submitSeriesPlan">{{ longformRequestStage === "longform_plan" ? "生成中…" : latestSeriesPlan ? "重新生成规划" : "生成长篇规划" }}</button>
+                <button v-if="latestSeriesPlan" type="button" class="toon-button--dark" @click="emit('go', 'planReader')">查看规划详情</button>
+                <button v-if="latestSeriesPlan && latestSeriesPlan.status !== 'locked'" type="button" class="toon-button--lock" :disabled="loading" @click="emit('lock-series-plan', latestSeriesPlan.id)">锁定长篇概要</button>
+                <b v-else-if="latestSeriesPlan" class="tone-good toon-lock-state">概要已锁定</b>
               </article>
               <article>
                 <header><span>CHAPTER DRAFT</span><strong>正文生成</strong></header>
                 <p>{{ latestSeriesPlan ? `${latestSeriesPlan.title} · ${latestSeriesPlan.target_chapter_count} 章` : "先生成或选择一个长篇规划。" }}</p>
+                <p v-if="latestSeriesPlan && latestSeriesPlan.status !== 'locked'" class="toon-lock-hint">请先锁定长篇概要，再批量生成正文。</p>
                 <div><label><span>起始章</span><input v-model.number="longformDraft.start_chapter_no" type="number" min="1" /></label><label><span>结束章</span><input v-model.number="longformDraft.end_chapter_no" type="number" min="1" /></label></div>
-                <button type="button" :disabled="loading || !latestSeriesPlan" @click="submitBatchGeneration">生成正文任务</button>
+                <button type="button" :disabled="loading || !latestSeriesPlan || latestSeriesPlan.status !== 'locked'" @click="submitBatchGeneration">{{ longformRequestStage === "longform_batch" ? "生成中…" : "生成正文任务" }}</button>
                 <small v-if="latestBatchJob">最近任务：{{ statusLabel(latestBatchJob.job_status) }} · {{ latestBatchJob.start_chapter_no }}-{{ latestBatchJob.end_chapter_no }} 章</small>
               </article>
               <article>
@@ -592,7 +744,7 @@ watch(selectedStoryboard, () => {
           <section><span>来源与预检</span><dl><div><dt>来源模式</dt><dd>{{ sourceMode }}</dd></div><div><dt>预检状态</dt><dd :class="`tone-text-${statusTone(String(preflight?.readiness || ''))}`">{{ preflight ? statusLabel(String(preflight.readiness)) : "尚未执行" }}</dd></div><div><dt>阻断 / 风险</dt><dd>{{ preflightFailures.length }} / {{ preflightWarnings.length }}</dd></div></dl><div v-if="preflightFailures.length || preflightWarnings.length" class="toon-issue-list"><button v-for="issue in [...preflightFailures, ...preflightWarnings].slice(0, 5)" :key="issue" type="button" @click="focusIssueShot(issue)"><b :class="`tone-${preflightFailures.includes(issue) ? 'bad' : 'warn'}`">{{ preflightFailures.includes(issue) ? "阻断" : "风险" }}</b><span>{{ issue }}</span><small v-if="issueShotNo(issue)">定位镜头</small></button></div><button v-if="selectedStoryboard" type="button" class="toon-agent__primary" :disabled="loading" @click="emit('prepare-video-production', selectedStoryboard.id, { generate_character_turnarounds: true, generate_audio_scripts: true, generate_dialogue_audio: false, create_video_task: false })">执行生产预检</button></section>
           <section v-if="reviewFindings.length"><span>质量复查</span><article v-for="finding in reviewFindings.slice(0, 4)" :key="String(finding.finding_id)"><b :class="`tone-${finding.severity === 'blocking' ? 'bad' : 'warn'}`">{{ finding.severity === "blocking" ? "阻断" : "建议" }}</b><strong>{{ finding.title }}</strong><p>{{ finding.detail }}</p><button type="button" @click="focusIssueShot(finding.finding_id || finding.title)">{{ reworkLevelLabel(finding.recommended_rework_level) }}</button></article></section>
           <section><span>运行记录</span><article v-for="event in recentEvents" :key="event.id"><time>{{ formatDateTime(event.created_at) }}</time><strong>{{ event.message }}</strong></article><p v-if="!recentEvents.length">当前项目还没有生产运行记录。</p></section>
-          <section v-if="selectedStoryboardTasks.length"><span>视频任务</span><article v-for="task in selectedStoryboardTasks" :key="task.id" class="toon-task-card"><header><strong>任务 #{{ task.id }}</strong><b :class="`tone-${statusTone(task.task_status)}`">{{ statusLabel(task.task_status) }}</b></header><div class="toon-task-progress" role="progressbar" :aria-label="`视频任务 #${task.id} 进度`" :aria-valuenow="taskProgressPercent(task)" aria-valuemin="0" aria-valuemax="100"><i :style="{ width: `${taskProgressPercent(task)}%` }"></i></div><p>{{ taskProgressText(task) }}</p><p v-if="taskFailureText(task)" class="toon-task-error"><strong>失败原因</strong>{{ taskFailureText(task) }}</p><footer><a v-if="task.output_uri" :href="task.output_uri" target="_blank" rel="noreferrer">查看输出</a><button v-if="['failed', 'blocked'].includes(task.task_status) && selectedStoryboard" type="button" :disabled="loading || hasActiveVideoTask(selectedStoryboardTasks)" @click="emit('create-video-task', selectedStoryboard.id)">重新创建任务</button><button type="button" :disabled="loading || task.task_status === 'running'" @click="confirmDeleteVideoTask(task.id)">删除任务</button></footer></article></section>
+          <section v-if="selectedProject"><span>历史证据</span><details ref="evidencePanel" class="toon-evidence" @toggle="onEvidenceToggle"><summary>打开项目级生成证据（只读）</summary><div v-if="generationAttemptsLoading" class="toon-evidence-note">正在读取生成证据…</div><div v-else-if="generationAttemptsError" class="toon-evidence-note toon-evidence-note--error"><strong>读取失败</strong><p>{{ generationAttemptsError }}</p><button type="button" @click="retryEvidenceLoad()">重试</button></div><p v-else-if="!generationAttempts.length" class="toon-evidence-note">该项目还没有生成证据记录。</p><template v-else><article v-for="attempt in generationAttempts" :key="attempt.id" class="toon-evidence-card"><header><strong>{{ attemptStageLabel(attempt.stage) }} #{{ attempt.id }}</strong><b :class="`tone-${statusTone(attempt.status)}`">{{ statusLabel(attempt.status) }}</b></header><p v-if="attempt.provider || attempt.model">{{ [attempt.provider, attempt.model].filter(Boolean).join(" / ") }} · {{ formatDateTime(attempt.created_at) }}</p><p v-if="attempt.quality_outcome || attempt.cost_estimate_usd != null"><span v-if="attempt.quality_outcome">质量判定：{{ attempt.quality_outcome }}</span><span v-if="attempt.quality_outcome && attempt.cost_estimate_usd != null"> · </span><span v-if="attempt.cost_estimate_usd != null">预估成本：${{ attempt.cost_estimate_usd }}</span></p><p v-if="attempt.error_message" class="toon-task-error"><strong>{{ attemptErrorLabel(attempt) }}</strong>{{ attempt.error_message }}</p><details><summary>参数与用量</summary><pre>{{ compactJson({ parameters: attempt.parameters, usage: attempt.usage }) }}</pre></details><details v-if="hasAttemptEvidence(attempt)"><summary>校验与输入版本</summary><pre>{{ compactJson(attemptEvidenceSummary(attempt)) }}</pre></details></article><button type="button" @click="retryEvidenceLoad(true)">刷新</button></template></details></section><section v-if="selectedStoryboardTasks.length"><span>视频任务</span><article v-for="task in selectedStoryboardTasks" :key="task.id" class="toon-task-card"><header><strong>任务 #{{ task.id }}</strong><b :class="`tone-${statusTone(task.task_status)}`">{{ statusLabel(task.task_status) }}</b></header><div class="toon-task-progress" role="progressbar" :aria-label="`视频任务 #${task.id} 进度`" :aria-valuenow="taskProgressPercent(task)" aria-valuemin="0" aria-valuemax="100"><i :style="{ width: `${taskProgressPercent(task)}%` }"></i></div><p>{{ taskProgressText(task) }}</p><p v-if="taskFailureText(task)" class="toon-task-error"><strong>失败原因</strong>{{ taskFailureText(task) }}</p><footer><a v-if="task.output_uri" :href="task.output_uri" target="_blank" rel="noreferrer">查看输出</a><button v-if="['failed', 'blocked'].includes(task.task_status) && selectedStoryboard" type="button" :disabled="loading || hasActiveVideoTask(selectedStoryboardTasks)" @click="emit('create-video-task', selectedStoryboard.id)">重新创建任务</button><button type="button" :disabled="loading || task.task_status === 'running'" @click="confirmDeleteVideoTask(task.id)">删除任务</button></footer></article></section>
         </aside>
       </section>
     </main>
@@ -664,10 +816,10 @@ dt { color: var(--toon-ink-muted); font-size: .7rem; } dd { margin: 0; font-weig
 .toon-empty--canvas { margin: 80px auto; width: min(520px, calc(100% - 48px)); }
 .toon-flow, .toon-production-board { min-width: 1100px; display: flex; gap: 18px; align-items: center; padding: 52px 32px; }
 .toon-flow-node { width: 250px; min-height: 230px; display: grid; gap: 15px; align-content: start; padding: 16px; border: 1px solid var(--toon-line); border-radius: 12px; background: rgba(255,255,255,.72); box-shadow: 0 14px 30px rgba(213,91,141,.1); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
-.toon-flow-node--source { margin-top: -80px; }.toon-flow-node:nth-of-type(2) { margin-top: 80px; }.toon-flow-node:nth-of-type(3) { margin-top: -30px; }
+
 .toon-flow-node h3, .toon-flow-node p { margin: 0; }.toon-flow-node p { color: var(--toon-ink-soft); font-size: .84rem; line-height: 1.65; }.toon-flow-node footer { margin-top: auto; color: var(--toon-ink-muted); font-size: .75rem; }
 .toon-flow-node header span, .toon-storyboard-table header span, .toon-frame-panel header span { color: var(--toon-ink-soft); font-size: .72rem; font-weight: 800; letter-spacing: .06em; }
-.toon-flow--script { align-items: flex-start; flex-wrap: wrap; }.toon-longform-panel { flex: 1 0 100%; display: grid; grid-template-columns: repeat(4, minmax(210px, 1fr)); gap: 12px; }.toon-longform-panel article { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--toon-line); border-radius: 11px; background: rgba(255,255,255,.68); box-shadow: 0 12px 26px rgba(213,91,141,.08); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }.toon-longform-panel header { display: grid; gap: 3px; }.toon-longform-panel header span, .toon-longform-panel label span, .toon-longform-panel small { color: var(--toon-ink-soft); font-size: .7rem; }.toon-longform-panel label { display: grid; gap: 5px; }.toon-longform-panel input, .toon-longform-panel textarea { width: 100%; border: 1px solid var(--toon-line); border-radius: 7px; background: rgba(255,250,253,.76); padding: 8px; color: var(--toon-ink); }.toon-longform-panel textarea { resize: vertical; line-height: 1.5; }.toon-longform-panel p { min-height: 3.2em; margin: 0; color: var(--toon-ink-soft); font-size: .76rem; line-height: 1.55; }.toon-longform-panel > article > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }.toon-longform-panel button { background: var(--toon-rose-soft); color: var(--toon-rose-deep); font-weight: 800; }
+.toon-flow--script { align-items: stretch; flex-wrap: nowrap; }.toon-flow--script .toon-connector { align-self: center; flex: 0 0 auto; }.toon-flow--script .toon-flow-node { flex: 1 1 0; min-width: 0; width: auto; }.toon-longform-panel { display: grid; grid-template-columns: repeat(4, minmax(210px, 1fr)); gap: 12px; } .toon-script-board { display: grid; gap: 40px; min-width: 1100px; } .toon-context-panel { border: 1px solid var(--toon-line); border-radius: 12px; background: rgba(255,255,255,.72); box-shadow: 0 14px 30px rgba(213,91,141,.1); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); } .toon-context-panel > summary { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; min-height: 46px; padding: 10px 16px; cursor: pointer; list-style: none; user-select: none; } .toon-context-panel > summary::-webkit-details-marker { display: none; } .toon-context-panel[open] > summary { border-bottom: 1px solid rgba(110,52,78,.08); } .toon-context-summary__title { color: var(--toon-ink); font-weight: 800; font-size: .86rem; letter-spacing: .02em; } .toon-context-summary__meta { color: var(--toon-ink-soft); font-size: .72rem; } .toon-context-chevron { margin-left: auto; color: var(--toon-rose-deep); font-size: 1.05rem; line-height: 1; transition: transform .18s ease; } .toon-context-panel[open] .toon-context-chevron { transform: rotate(90deg); } .toon-context-body { display: grid; gap: 10px; padding: 16px; } .toon-context-summary__meta, .toon-context-panel label span, .toon-context-block > span { color: var(--toon-ink-soft); font-size: .7rem; font-weight: 800; letter-spacing: .06em; } .toon-context-panel label { display: grid; gap: 5px; } .toon-context-panel textarea { min-height: 64px; resize: vertical; } .toon-context-panel p { margin: 0; color: var(--toon-ink-soft); font-size: .78rem; line-height: 1.6; } .toon-context-actions { display: flex; gap: 8px; flex-wrap: wrap; } .toon-context-block { display: grid; gap: 8px; padding: 10px; border-radius: 10px; background: rgba(255,247,251,.66); } .toon-context-block article { display: grid; gap: 5px; padding: 9px; border: 1px solid rgba(255,255,255,.82); border-radius: 8px; background: rgba(255,255,255,.6); } .toon-context-block article > p { font-size: .74rem; } .toon-context-block article small { color: var(--toon-rose-deep); font-size: .7rem; line-height: 1.5; } .toon-context-block article button { min-height: 32px; width: fit-content; font-size: .7rem; } .toon-choice-options { display: flex; gap: 6px; flex-wrap: wrap; } .toon-choice-options button { min-height: 34px; width: auto; font-size: .72rem; } .toon-choice-options button.active { border-color: var(--toon-rose); background: var(--toon-rose-soft); color: var(--toon-rose-deep); font-weight: 800; }.toon-longform-panel article { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--toon-line); border-radius: 11px; background: rgba(255,255,255,.68); box-shadow: 0 12px 26px rgba(213,91,141,.08); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }.toon-longform-panel header { display: grid; gap: 3px; }.toon-longform-panel header span, .toon-longform-panel label span, .toon-longform-panel small { color: var(--toon-ink-soft); font-size: .7rem; }.toon-longform-panel label { display: grid; gap: 5px; }.toon-longform-panel input, .toon-longform-panel textarea { width: 100%; border: 1px solid var(--toon-line); border-radius: 7px; background: rgba(255,250,253,.76); padding: 8px; color: var(--toon-ink); }.toon-longform-panel textarea { resize: vertical; line-height: 1.5; }.toon-longform-panel p { min-height: 3.2em; margin: 0; color: var(--toon-ink-soft); font-size: .76rem; line-height: 1.55; }.toon-longform-panel > article > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }.toon-longform-panel button { background: var(--toon-rose-soft); color: var(--toon-rose-deep); font-weight: 800; }.toon-button--lock { border-color: var(--toon-rose); background: transparent; color: var(--toon-rose-deep); }.toon-button--lock:hover { background: var(--toon-rose-soft); }.toon-longform-panel .toon-lock-hint { min-height: auto; color: #8a5b00; font-size: .7rem; font-weight: 800; }.toon-lock-state { justify-self: start; }
 .toon-connector { color: color-mix(in oklab, var(--toon-rose) 58%, var(--toon-ink-soft)); font-size: 1.5rem; }
 [class^="tone-"], [class*=" tone-"] { display: inline-flex; width: fit-content; border-radius: 4px; padding: 3px 6px; font-size: .68rem; font-weight: 800; }
 .tone-good { background: #d9f5e3; color: #087434; }.tone-warn { background: #fff0c9; color: #8a5b00; }.tone-bad { background: #ffe0df; color: #a11d17; }.tone-neutral { background: var(--toon-rose-soft); color: var(--toon-ink-soft); }
@@ -685,7 +837,7 @@ dt { color: var(--toon-ink-muted); font-size: .7rem; } dd { margin: 0; font-weig
 .toon-settings { width: min(720px, calc(100% - 48px)); margin: 28px; padding: 22px; border: 1px solid var(--toon-line); border-radius: 12px; background: rgba(255,255,255,.72); box-shadow: 0 14px 30px rgba(213,91,141,.1); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }.toon-settings h3 { margin: 4px 0 0; }
 .toon-agent { display: grid; gap: 0; align-content: start; }.toon-agent > header { position: sticky; top: 0; z-index: 2; padding: 14px; border-bottom: 1px solid rgba(110,52,78,.1); background: rgba(255,255,255,.8); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }.toon-agent > header > div { display: flex; gap: 8px; align-items: center; }.toon-agent > header small { color: var(--toon-ink-muted); }
 .toon-agent section { display: grid; gap: 10px; padding: 14px; border-bottom: 1px solid rgba(110,52,78,.08); }.toon-agent section > span { color: var(--toon-ink-soft); font-size: .72rem; font-weight: 800; letter-spacing: .08em; }.toon-agent article { display: grid; gap: 6px; padding: 10px; border: 1px solid rgba(255,255,255,.82); border-radius: 8px; background: rgba(255,255,255,.5); }.toon-agent article p, .toon-agent section > p { margin: 0; color: var(--toon-ink-soft); font-size: .76rem; line-height: 1.55; }.toon-agent article time { color: var(--toon-ink-muted); font-size: .68rem; }.toon-agent article a { color: var(--toon-rose-deep); font-size: .76rem; font-weight: 800; }.toon-agent article button { min-height: 32px; width: fit-content; font-size: .72rem; }
-.toon-trace-card details { display: grid; gap: 6px; }.toon-trace-card summary { color: var(--toon-rose-deep); cursor: pointer; font-size: .72rem; font-weight: 800; }.toon-trace-card pre { max-height: 180px; overflow: auto; margin: 0; padding: 8px; border-radius: 6px; background: rgba(255,246,251,.8); color: var(--toon-ink-soft); font-size: .68rem; line-height: 1.5; white-space: pre-wrap; }.toon-trace-inputs { display: grid; gap: 5px; }.toon-trace-inputs span { display: grid; gap: 2px; padding: 6px; border-radius: 6px; background: rgba(255,239,246,.62); color: var(--toon-ink-soft); font-size: .68rem; }.toon-trace-inputs b { color: var(--toon-ink); }.toon-render-sources { display: grid; gap: 5px; margin-top: 6px; }.toon-render-sources button { width: 100%; height: auto; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; align-items: start; padding: 7px; text-align: left; }.toon-render-sources span { color: var(--toon-ink-soft); line-height: 1.45; }
+.toon-trace-card details { display: grid; gap: 6px; }.toon-trace-card summary { color: var(--toon-rose-deep); cursor: pointer; font-size: .72rem; font-weight: 800; }.toon-trace-card pre { max-height: 180px; overflow: auto; margin: 0; padding: 8px; border-radius: 6px; background: rgba(255,246,251,.8); color: var(--toon-ink-soft); font-size: .68rem; line-height: 1.5; white-space: pre-wrap; }.toon-trace-inputs { display: grid; gap: 5px; }.toon-trace-inputs span { display: grid; gap: 2px; padding: 6px; border-radius: 6px; background: rgba(255,239,246,.62); color: var(--toon-ink-soft); font-size: .68rem; }.toon-trace-inputs b { color: var(--toon-ink); }.toon-render-sources { display: grid; gap: 5px; margin-top: 6px; }.toon-render-sources button { width: 100%; height: auto; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; align-items: start; padding: 7px; text-align: left; } .toon-render-sources span { color: var(--toon-ink-soft); line-height: 1.45; } .toon-evidence { display: grid; gap: 6px; }.toon-evidence > summary { color: var(--toon-rose-deep); cursor: pointer; font-size: .72rem; font-weight: 800; } .toon-evidence-card { display: grid; gap: 6px; padding: 10px; border: 1px solid rgba(255,255,255,.82); border-radius: 8px; background: rgba(255,255,255,.5); } .toon-evidence-card > header { display: flex; gap: 8px; align-items: center; justify-content: space-between; } .toon-evidence-card > header strong { font-size: .76rem; } .toon-evidence-card p { margin: 0; color: var(--toon-ink-soft); font-size: .7rem; line-height: 1.5; } .toon-evidence-card details { display: grid; gap: 6px; } .toon-evidence-card summary { color: var(--toon-rose-deep); cursor: pointer; font-size: .7rem; font-weight: 800; } .toon-evidence-card pre { max-height: 180px; overflow: auto; margin: 0; padding: 8px; border-radius: 6px; background: rgba(255,246,251,.8); color: var(--toon-ink-soft); font-size: .68rem; line-height: 1.5; white-space: pre-wrap; } .toon-evidence-note { margin: 0; color: var(--toon-ink-soft); font-size: .72rem; line-height: 1.55; } .toon-evidence-note--error { display: grid; gap: 6px; padding: 8px; border-radius: 6px; background: rgba(255,224,223,.62); color: #8f211c !important; } .toon-evidence-note--error button { min-height: 32px; width: fit-content; font-size: .7rem; }
 .toon-issue-list { display: grid; gap: 5px; }.toon-issue-list button { min-height: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; align-items: start; padding: 7px; text-align: left; }.toon-issue-list button span { color: var(--toon-ink-soft); font-size: .7rem; line-height: 1.45; }.toon-issue-list button small { color: var(--toon-rose-deep); font-size: .64rem; font-weight: 800; }
 .toon-task-card header, .toon-task-card footer { display: flex; gap: 6px; align-items: center; justify-content: space-between; flex-wrap: wrap; }.toon-task-progress { height: 5px; overflow: hidden; border-radius: 999px; background: rgba(213,91,141,.12); }.toon-task-progress i { display: block; height: 100%; border-radius: inherit; background: var(--toon-rose); transition: width .24s ease-out; }.toon-task-error { display: grid; gap: 3px; padding: 8px; border-radius: 6px; background: rgba(255,224,223,.62); color: #8f211c !important; }.toon-task-error strong { font-size: .68rem; }.toon-task-card footer { justify-content: start; }
 .toon-agent__primary { width: 100% !important; background: var(--toon-rose-soft); color: var(--toon-rose-deep); font-weight: 800; }
@@ -693,4 +845,8 @@ dt { color: var(--toon-ink-muted); font-size: .7rem; } dd { margin: 0; font-weig
 @media (max-width: 900px) { .toon-shell { grid-template-columns: minmax(0, 1fr); }.toon-rail { position: sticky; top: 8px; z-index: 8; height: auto; grid-template-columns: repeat(7, minmax(64px, 1fr)); grid-template-rows: auto; overflow-x: auto; padding: 8px; }.toon-rail i { display: none; }.toon-rail button { width: auto; min-width: 64px; min-height: 50px; display: grid; place-content: center; gap: 2px; font-size: 1.05rem; }.toon-rail__brand { min-width: 52px !important; }.toon-rail__label { display: block; }.toon-stage { min-height: auto; }.toon-topbar nav { display: none; }.toon-workbench { grid-template-columns: minmax(0, 1fr); overflow: visible; }.toon-inspector, .toon-agent { max-height: none; }.toon-inspector { grid-template-columns: repeat(2, minmax(0, 1fr)); }.toon-project-select, .toon-storyboard-list { grid-column: 1 / -1; }.toon-canvas { min-height: 620px; }.toon-flow, .toon-production-board { min-width: 980px; }.toon-asset-card footer button, .toon-frame-grid button, .toon-inline-actions button, .toon-character-strip button, .toon-agent article button { min-height: 44px; } }
 @media (max-width: 760px) { .toon-shell { gap: 8px; }.toon-stage { padding: 12px; }.toon-topbar, .toon-create, .toon-section-head { display: grid; grid-template-columns: minmax(0, 1fr); }.toon-user { grid-column: auto; }.toon-project-toolbar { align-items: stretch; flex-direction: column; }.toon-inspector { grid-template-columns: minmax(0, 1fr); }.toon-project-select, .toon-storyboard-list { grid-column: auto; }.toon-canvas { min-height: 560px; scroll-snap-type: x proximity; }.toon-flow > *, .toon-production-board > * { scroll-snap-align: start; }.toon-create { padding: 18px; gap: 24px; } }
 @media (max-width: 460px) { .toon-rail { grid-template-columns: repeat(7, 62px); }.toon-topbar { gap: 12px; }.toon-heading h1 { font-size: 1.15rem; }.toon-user { width: 100%; overflow-x: auto; }.toon-user button { min-height: 44px; }.toon-canvas-toolbar { align-items: flex-start; }.toon-canvas-toolbar > div:last-child { flex-shrink: 0; }.toon-project-grid { grid-template-columns: minmax(0, 1fr); }.toon-create form { padding: 14px; } }
+
+.toon-longform-status { grid-column: 1 / -1; margin: 0; padding: 8px 10px; border-radius: 8px; background: rgba(213,91,141,.08); color: var(--toon-rose-deep); font-size: .74rem; font-weight: 700; animation: toon-pulse 1.2s ease-in-out infinite alternate; }
+@keyframes toon-pulse { from { opacity: .55; } to { opacity: 1; } }
+.plan-reader-layer { position: fixed; inset: 0; z-index: 60; overflow-y: auto; background: #fdf3f8; }
 </style>

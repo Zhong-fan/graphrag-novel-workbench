@@ -30,6 +30,12 @@ CHARACTER_REFERENCE_PROFILE_SCHEMA_MIGRATION = "20260520_0017_character_referenc
 REFERENCE_IMAGE_ASSET_URL_HASH_MIGRATION = "20260520_0018_reference_image_asset_url_hash"
 REFERENCE_IMAGE_ASSET_META_MIGRATION = "20260523_0019_reference_image_asset_meta"
 MEDIA_ASSET_DELETED_AT_MIGRATION = "20260603_0020_media_asset_deleted_at"
+MEDIA_PUBLICATION_SCHEMA_MIGRATION = "20260806_0021_media_publication_schema"
+CHARACTER_IDENTITY_VERSIONS_SCHEMA_MIGRATION = "20260806_0022_character_identity_versions_schema"
+GENERATION_EVIDENCE_SCHEMA_MIGRATION = "20260806_0023_generation_evidence_schema"
+EXCEPTION_INBOX_SCHEMA_MIGRATION = "20260806_0024_exception_inbox_schema"
+VOICE_DESIGN_SCHEMA_MIGRATION = "20260806_0025_voice_design_schema"
+ASSET_VERSION_SCHEMA_MIGRATION = "20260806_0026_asset_version_schema"
 
 
 settings = load_settings()
@@ -183,6 +189,42 @@ def _migrate_schema() -> None:
             MEDIA_ASSET_DELETED_AT_MIGRATION,
             "Soft-delete media assets for recycle bin restore",
             _migrate_media_asset_deleted_at_schema,
+        )
+        _run_schema_migration(
+            connection,
+            MEDIA_PUBLICATION_SCHEMA_MIGRATION,
+            "Provider-readable expiring media publication records",
+            _migrate_media_publication_schema,
+        )
+        _run_schema_migration(
+            connection,
+            CHARACTER_IDENTITY_VERSIONS_SCHEMA_MIGRATION,
+            "Immutable character identity and appearance version tables",
+            _migrate_character_identity_versions_schema,
+        )
+        _run_schema_migration(
+            connection,
+            GENERATION_EVIDENCE_SCHEMA_MIGRATION,
+            "Append-only generation attempts with redacted trace evidence",
+            _migrate_generation_evidence_schema,
+        )
+        _run_schema_migration(
+            connection,
+            EXCEPTION_INBOX_SCHEMA_MIGRATION,
+            "Exception inbox items with recommended action and bounded options",
+            _migrate_exception_inbox_schema,
+        )
+        _run_schema_migration(
+            connection,
+            VOICE_DESIGN_SCHEMA_MIGRATION,
+            "Approval-gated voice design records and character-card binding",
+            _migrate_voice_design_schema,
+        )
+        _run_schema_migration(
+            connection,
+            ASSET_VERSION_SCHEMA_MIGRATION,
+            "Version snapshots for reversible auto-adopted asset changes",
+            _migrate_asset_version_schema,
         )
     _backfill_character_reference_profiles()
 
@@ -1252,3 +1294,43 @@ def _backfill_character_reference_profiles() -> None:
 
 def db_session() -> Session:
     return SessionLocal()
+
+
+def _create_table_if_missing(connection, table_name: str) -> None:
+    """Create an ORM-declared table only when it is absent.
+
+    Uses the ORM metadata (dialect-correct DDL) and is idempotent, so the same
+    migration is safe on fresh and existing databases.
+    """
+    if table_name in inspect(connection).get_table_names():
+        return
+    Base.metadata.tables[table_name].create(bind=connection)
+
+
+def _migrate_media_publication_schema(connection) -> None:
+    _create_table_if_missing(connection, "media_publications")
+
+
+def _migrate_character_identity_versions_schema(connection) -> None:
+    _create_table_if_missing(connection, "character_identity_versions")
+    _create_table_if_missing(connection, "character_appearance_versions")
+
+
+def _migrate_generation_evidence_schema(connection) -> None:
+    _create_table_if_missing(connection, "generation_attempts")
+
+
+def _migrate_exception_inbox_schema(connection) -> None:
+    _create_table_if_missing(connection, "exception_inbox_items")
+
+
+def _migrate_voice_design_schema(connection) -> None:
+    _create_table_if_missing(connection, "voice_designs")
+    if "character_cards" in inspect(connection).get_table_names():
+        columns = {column["name"] for column in inspect(connection).get_columns("character_cards")}
+        if "voice_design_id" not in columns:
+            connection.execute(text("ALTER TABLE character_cards ADD COLUMN voice_design_id INTEGER NULL"))
+
+
+def _migrate_asset_version_schema(connection) -> None:
+    _create_table_if_missing(connection, "media_asset_versions")

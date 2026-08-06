@@ -282,6 +282,7 @@ class CharacterCard(Base, TimestampMixin):
     voice_style: Mapped[str] = mapped_column(String(120), default="", nullable=False)
     voice_speed: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     voice_pitch: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    voice_design_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     project: Mapped["Project"] = relationship(back_populates="character_cards")
@@ -427,6 +428,46 @@ class CharacterReferenceProfile(Base, TimestampMixin):
             if asset_id not in normalized:
                 normalized.append(asset_id)
         self.visual_reference_asset_ids_json = json.dumps(normalized, ensure_ascii=False)
+
+
+class CharacterIdentityVersion(Base, TimestampMixin):
+    """不可变规范身份版本：由创作者确认的三视图建立，只能追加新版本，不能原地修改。"""
+
+    __tablename__ = "character_identity_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    character_card_id: Mapped[int] = mapped_column(ForeignKey("character_cards.id"), nullable=False)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    turnaround_asset_id: Mapped[int | None] = mapped_column(ForeignKey("media_assets.id"), nullable=True)
+    checksum: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="confirmed", nullable=False)
+    reason: Mapped[str] = mapped_column(String(40), default="creator_approval", nullable=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    character_card: Mapped["CharacterCard"] = relationship()
+    turnaround_asset: Mapped["MediaAsset | None"] = relationship()
+    appearance_versions: Mapped[list["CharacterAppearanceVersion"]] = relationship(
+        back_populates="identity_version"
+    )
+
+
+class CharacterAppearanceVersion(Base, TimestampMixin):
+    """故事时态外观版本：服装/发型/道具随剧情演进，不重写规范身份。"""
+
+    __tablename__ = "character_appearance_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    identity_version_id: Mapped[int] = mapped_column(ForeignKey("character_identity_versions.id"), nullable=False)
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    costume_name: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    costume_details: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    hairstyle: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    props: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    identity_version: Mapped["CharacterIdentityVersion"] = relationship(back_populates="appearance_versions")
 
 
 class ProjectChapter(Base, TimestampMixin):
@@ -713,6 +754,72 @@ class MediaAsset(Base, TimestampMixin):
     shot: Mapped["StoryboardShot | None"] = relationship()
 
 
+class MediaPublication(Base, TimestampMixin):
+    __tablename__ = "media_publications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    media_asset_id: Mapped[int | None] = mapped_column(ForeignKey("media_assets.id"), nullable=True)
+    source_uri: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    provider_purpose: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    access_url: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    media_asset: Mapped["MediaAsset | None"] = relationship()
+
+
+
+class VoiceDesign(Base, TimestampMixin):
+    """Approval-gated designed voice for a character.
+
+    A design produces only a candidate ``voice_ref`` in ``pending_approval``.
+    Approval is a separate persisted state from speech synthesis: synthesis
+    must not run for a designed voice that is not approved, and a rejected
+    design can never reach audio.
+    """
+
+    __tablename__ = "voice_designs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    character_card_id: Mapped[int | None] = mapped_column(ForeignKey("character_cards.id"), nullable=True)
+    provider: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    model: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    voice_ref: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending_approval", nullable=False)
+    reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    project: Mapped["Project"] = relationship()
+    character_card: Mapped["CharacterCard | None"] = relationship()
+
+
+class MediaAssetVersion(Base, TimestampMixin):
+    """Version snapshot captured before an automatic adoption overwrites an asset.
+
+    Shot first-frame regeneration reuses the same asset row and overwrites its
+    file; this row preserves the previous file bytes and metadata so the
+    adoption can be reverted. Restoring a version snapshots the current state
+    first, so every automatic change stays reversible.
+    """
+
+    __tablename__ = "media_asset_versions"
+    __table_args__ = (UniqueConstraint("media_asset_id", "version_no", name="uq_media_asset_versions_asset_version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    media_asset_id: Mapped[int] = mapped_column(ForeignKey("media_assets.id"), nullable=False)
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    uri: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    meta_json: Mapped[str] = mapped_column(LONG_TEXT, default="{}", nullable=False)
+    reason: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+
+    media_asset: Mapped["MediaAsset"] = relationship()
+
 class VideoTask(Base, TimestampMixin):
     __tablename__ = "video_tasks"
 
@@ -727,6 +834,65 @@ class VideoTask(Base, TimestampMixin):
     project: Mapped["Project"] = relationship()
     storyboard: Mapped["Storyboard"] = relationship(back_populates="video_tasks")
     events: Mapped[list["TaskEvent"]] = relationship(back_populates="video_task")
+
+class ExceptionInboxItem(Base, TimestampMixin):
+    """异常收件箱：留给创作者的素材级决策点，系统不自动替用户做决定。
+
+    每条含推荐动作、理由、影响与最多三个选项；只追加，解决/忽略通过
+    status 与 resolution 记录，不删除（除非用户显式要求清理）。
+    """
+
+    __tablename__ = "exception_inbox_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    item_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="open", nullable=False)
+    severity: Mapped[str] = mapped_column(String(10), default="medium", nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    recommended_action: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    options_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    evidence_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolution: Mapped[str] = mapped_column(String(40), default="", nullable=False)
+
+    project: Mapped["Project"] = relationship()
+
+
+class GenerationAttempt(Base, TimestampMixin):
+    """??????????????????????
+
+    ????????input_asset_versions/prompt ??/provider/??/usage/
+    ????/???????????????????????????
+    """
+
+    __tablename__ = "generation_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
+    storyboard_id: Mapped[int | None] = mapped_column(ForeignKey("storyboards.id"), nullable=True)
+    video_task_id: Mapped[int | None] = mapped_column(ForeignKey("video_tasks.id"), nullable=True)
+    shot_id: Mapped[int | None] = mapped_column(ForeignKey("storyboard_shots.id"), nullable=True)
+    adopted_asset_id: Mapped[int | None] = mapped_column(ForeignKey("media_assets.id"), nullable=True)
+    stage: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    model: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    prompt_contract_id: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    rendered_prompt: Mapped[str] = mapped_column(LONG_TEXT, default="", nullable=False)
+    raw_output: Mapped[str] = mapped_column(LONG_TEXT, default="", nullable=False)
+    parsed_output: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    validation_results: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    parameters: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    usage: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    input_asset_versions: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    cost_estimate_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quality_outcome: Mapped[str] = mapped_column(String(40), default="", nullable=False)
+    provider_ref: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    error_category: Mapped[str] = mapped_column(String(60), default="", nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
 
 
 class GenerationRun(Base, TimestampMixin):

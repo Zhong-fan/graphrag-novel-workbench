@@ -5,6 +5,7 @@ import { api } from "../api";
 import type {
   BootstrapResponse,
   CaptchaChallenge,
+  GenerationAttempt,
   CharacterCard,
   ContextPack,
   ContextPackBuildPayload,
@@ -103,6 +104,10 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     message: "",
     target: {},
   });
+  const generationAttempts = ref<GenerationAttempt[]>([]);
+  const generationAttemptsLoading = ref(false);
+  const generationAttemptsError = ref("");
+  const generationAttemptsLoadedProjectId = ref<number | null>(null);
   const loading = ref(false);
   const error = ref("");
   const success = ref("");
@@ -186,7 +191,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     longformPollingTimer = window.setInterval(() => {
       if (!token.value) return;
       void loadLongformState(projectId, { silent: true }).then(() => {
-        if (!hasActiveLongformJobs()) {
+        if (!hasActiveLongformJobs() && !longformRequestState.value.active) {
           stopLongformPolling();
         }
       });
@@ -343,6 +348,9 @@ export const useWorkbenchStore = defineStore("workbench", () => {
   }
 
   async function selectProject(projectId: number, options: SelectProjectOptions = {}) {
+    generationAttempts.value = [];
+    generationAttemptsLoadedProjectId.value = null;
+    generationAttemptsError.value = "";
     if (!token.value) {
       return;
     }
@@ -1113,7 +1121,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     loading.value = true;
     error.value = "";
     success.value = "";
-    beginLongformRequest("longform_plan", "正在提交长篇概要生成请求…", { target_chapter_count: payload.target_chapter_count });
+    beginLongformRequest("longform_plan", "正在生成长篇规划…（通常需要 1-3 分钟，请稍候）", { target_chapter_count: payload.target_chapter_count });
+    startLongformPolling(activeProject.value.project.id);
     try {
       const plan = await api.generateSeriesPlan(token.value, activeProject.value.project.id, payload);
       await loadLongformState(activeProject.value.project.id);
@@ -1705,6 +1714,26 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       loading.value = false;
     }
   }
+  // 渐进披露约定：同一项目只在第一次展开时加载一次，切换项目后由 selectProject 重置为未加载；强制刷新传 { force: true } 。
+  async function loadGenerationAttempts(projectId: number, options: { force?: boolean } = {}) {
+    if (!token.value) return;
+    if (!options.force && generationAttemptsLoadedProjectId.value === projectId) return;
+    generationAttemptsLoading.value = true;
+    generationAttemptsError.value = "";
+    try {
+      const result = await api.listGenerationAttempts(token.value, projectId);
+      // 请求在行期间用户切换了项目，丢弃过期响应，避免把旧项目证据写进新项目面板。
+      if (activeProject.value?.project.id !== projectId) return;
+      generationAttempts.value = result.items;
+      generationAttemptsLoadedProjectId.value = projectId;
+    } catch (err) {
+      if (activeProject.value?.project.id !== projectId) return;
+      generationAttemptsError.value = err instanceof Error ? err.message : "加载生成证据失败。";
+    } finally {
+      if (activeProject.value?.project.id === projectId) generationAttemptsLoading.value = false;
+    }
+  }
+
 
   return {
     bootstrap,
@@ -1722,6 +1751,9 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     longformState,
     generationProgress,
     longformRequestState,
+    generationAttempts,
+    generationAttemptsLoading,
+    generationAttemptsError,
     loading,
     error,
     success,
@@ -1754,6 +1786,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     restoreTrashItem,
     trashDirtyEvolution,
     loadLongformState,
+    loadGenerationAttempts,
     loadReferenceImages,
     discoverReferenceImages,
     updateReferenceImage,

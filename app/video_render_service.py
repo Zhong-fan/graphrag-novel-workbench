@@ -15,9 +15,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .ark_seedance_video_client import ArkSeedanceVideoClient
+from .cost_estimator import estimate_video_generation_cost
+from .generation_evidence_service import GenerationEvidence, record_generation_evidence
 from .config import Settings
-from .jimeng_video_client import JimengVideoClient
 from .json_utils import ensure_list, json_dumps, json_loads_list, json_loads_object
+from .media_publication_service import MediaPublicationService
 from .models import MediaAsset, NovelChapter, StoryboardShot, TaskEvent, VideoTask
 from .video_quality_service import VideoQualityService
 from .visual_style_prompt import build_visual_generation_prompt, project_visual_style_summary
@@ -26,6 +29,7 @@ from .visual_style_prompt import build_visual_generation_prompt, project_visual_
 class VideoRenderService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._publication_service = MediaPublicationService(settings)
 
     def render(self, *, db: Session, task: VideoTask) -> VideoTask:
         self._require_config()
@@ -42,11 +46,94 @@ class VideoRenderService:
         if not shots:
             raise RuntimeError("分镜稿没有镜头，无法生成视频。")
 
-        if self._jimeng_enabled():
-            return self._render_with_jimeng(db=db, task=task, shots=shots, output_dir=output_dir)
-        return self._render_with_local_pipeline(db=db, task=task, shots=shots, output_dir=output_dir)
+        try:
+            return self._render_with_ark_seedance(db=db, task=task, shots=shots, output_dir=output_dir)
+        except Exception as exc:
+            self._record_video_failure(db=db, task=task, exc=exc)
+            raise
 
-    def _render_with_jimeng(
+    def _record_video_segment_success(
+        self,
+        db: Session,
+        *,
+        task: VideoTask,
+        shot: StoryboardShot,
+        prompt: str,
+        first_frame_asset: MediaAsset | None,
+        first_frame_publication_id: int | None,
+        ark_task_id: str,
+        submit_response: dict[str, Any],
+        result_response: dict[str, Any],
+    ) -> None:
+        video_asset = next(
+            (item for item in task.storyboard.media_assets if item.shot_id == shot.id and item.asset_type == "video"),
+            None,
+        )
+        resolution = self._video_resolution(task)
+        record_generation_evidence(
+            db,
+            evidence=GenerationEvidence(
+                stage="video_segment",
+                status="succeeded",
+                provider="ark_seedance",
+                model=self.settings.ark_video_model,
+                project_id=task.project_id,
+                video_task_id=task.id,
+                shot_id=shot.id,
+                adopted_asset_id=video_asset.id if video_asset is not None else None,
+                rendered_prompt=prompt,
+                parsed_output={
+                    "submit_summary": self._summarize_ark_seedance_response(submit_response),
+                    "result_summary": self._summarize_ark_seedance_response(result_response),
+                },
+                parameters={
+                    "duration_seconds": self.settings.ark_video_duration_seconds,
+                    "ratio": self.settings.ark_video_ratio,
+                    "resolution": resolution,
+                    "used_first_frame": first_frame_asset is not None,
+                    "first_frame_publication_id": first_frame_publication_id,
+                },
+                usage=result_response.get("usage") if isinstance(result_response.get("usage"), dict) else None,
+                cost_estimate_usd=estimate_video_generation_cost(
+                    shot_count=1,
+                    duration_seconds=self.settings.ark_video_duration_seconds,
+                    resolution=resolution,
+                    model=self.settings.ark_video_model,
+                ).estimated_cost_usd,
+                provider_ref=ark_task_id,
+                quality_outcome="requires_review",
+            ),
+        )
+
+    def _record_video_failure(self, db: Session, *, task: VideoTask, exc: Exception) -> None:
+        # 失败证据是尽力而为的遥测：记录异常时吞掉，避免掩盖渲染失败本身。
+        try:
+            progress = json_loads_object(task.progress_json)
+            current_shot_no = progress.get("current_shot_no")
+            shot_id: int | None = None
+            if current_shot_no is not None:
+                for shot in task.storyboard.shots:
+                    if shot.shot_no == int(current_shot_no):
+                        shot_id = shot.id
+                        break
+            record_generation_evidence(
+                db,
+                evidence=GenerationEvidence(
+                    stage="video_segment",
+                    status="failed",
+                    provider="ark_seedance",
+                    model=self.settings.ark_video_model,
+                    project_id=task.project_id,
+                    video_task_id=task.id,
+                    shot_id=shot_id,
+                    error_category=type(exc).__name__,
+                    error_message=str(exc),
+                ),
+            )
+        except Exception:
+            pass
+
+    def _render_with_ark_seedance(
         self,
         *,
         db: Session,
@@ -54,45 +141,34 @@ class VideoRenderService:
         shots: list[StoryboardShot],
         output_dir: Path,
     ) -> VideoTask:
-        text_client = JimengVideoClient(
-            access_key=self.settings.jimeng_access_key,
-            secret_key=self.settings.jimeng_secret_key,
-            endpoint=self.settings.jimeng_endpoint,
-            region=self.settings.jimeng_region,
-            service=self.settings.jimeng_service,
-            req_key=self.settings.jimeng_req_key,
-        )
-        image_client = JimengVideoClient(
-            access_key=self.settings.jimeng_access_key,
-            secret_key=self.settings.jimeng_secret_key,
-            endpoint=self.settings.jimeng_endpoint,
-            region=self.settings.jimeng_region,
-            service=self.settings.jimeng_service,
-            req_key=self.settings.jimeng_i2v_req_key,
+        client = ArkSeedanceVideoClient(
+            api_key=self.settings.ark_api_key,
+            base_url=self.settings.ark_base_url,
+            model=self.settings.ark_video_model,
         )
         composed_paths: list[Path] = []
         for shot in shots:
-            self._set_current_shot(task, shot=shot, step="jimeng_submit")
+            self._set_current_shot(task, shot=shot, step="ark_seedance_submit")
             first_frame_asset = self._shot_first_frame_asset(task=task, shot=shot)
             requires_i2v = self._shot_requires_i2v(shot)
             if requires_i2v and first_frame_asset is None:
                 raise RuntimeError("图片先行镜头必须使用首帧图生视频，不能回退到文生视频。")
-            prompt = self._build_jimeng_prompt(task, shot, first_frame_asset=first_frame_asset)
-            self._persist_render_context(task, provider="jimeng", shot=shot, prompt=prompt, first_frame_asset=first_frame_asset)
+            prompt = self._build_ark_seedance_prompt(task, shot, first_frame_asset=first_frame_asset)
+            self._persist_render_context(task, provider="ark_seedance", shot=shot, prompt=prompt, first_frame_asset=first_frame_asset)
             self._set_progress(
                 task,
-                stage="jimeng_submit",
-                message=f"提交即梦镜头 {shot.shot_no} 视频任务。",
-                extra={"provider": "jimeng", "shot_no": shot.shot_no, "used_first_frame": first_frame_asset is not None},
+                stage="ark_seedance_submit",
+                message=f"提交 Ark Seedance 镜头 {shot.shot_no} 视频任务。",
+                extra={"provider": "ark_seedance", "shot_no": shot.shot_no, "used_first_frame": first_frame_asset is not None},
             )
             self._add_event(
                 db,
                 task=task,
-                event_type="video_task_jimeng_submit",
-                message=f"提交即梦镜头 {shot.shot_no} 视频任务。",
+                event_type="video_task_ark_seedance_submit",
+                message=f"提交 Ark Seedance 镜头 {shot.shot_no} 视频任务。",
                 payload={
                     "shot_no": shot.shot_no,
-                    "req_key": self.settings.jimeng_req_key,
+                    "model": self.settings.ark_video_model,
                     "prompt": prompt,
                     "used_first_frame": first_frame_asset is not None,
                     "first_frame_asset_id": first_frame_asset.id if first_frame_asset is not None else None,
@@ -102,39 +178,38 @@ class VideoRenderService:
             self._update_shot_progress(task, shot, image_status="running")
             db.commit()
 
+            first_frame_publication_id: int | None = None
             if first_frame_asset is not None:
-                first_frame_url = self._resolvable_asset_url(first_frame_asset)
-                if first_frame_url:
-                    jimeng_task_id, submit_response = image_client.submit_first_frame_to_video(
-                        prompt=prompt,
-                        image_url=first_frame_url,
-                        frames=self.settings.jimeng_frames,
-                        aspect_ratio=self.settings.jimeng_aspect_ratio,
-                    )
-                elif requires_i2v:
-                    raise RuntimeError("图片先行镜头必须使用首帧图生视频，不能回退到文生视频。")
-                else:
-                    jimeng_task_id, submit_response = text_client.submit_text_to_video(
-                        prompt=prompt,
-                        frames=self.settings.jimeng_frames,
-                        aspect_ratio=self.settings.jimeng_aspect_ratio,
-                    )
-            else:
-                jimeng_task_id, submit_response = text_client.submit_text_to_video(
+                first_frame_url, first_frame_publication_id = self._provider_asset_url(
+                    db=db, asset=first_frame_asset, purpose="seedance_first_frame"
+                )
+                ark_task_id, submit_response = client.submit_first_frame_to_video(
                     prompt=prompt,
-                    frames=self.settings.jimeng_frames,
-                    aspect_ratio=self.settings.jimeng_aspect_ratio,
+                    image_url=first_frame_url,
+                    duration_seconds=self.settings.ark_video_duration_seconds,
+                    ratio=self.settings.ark_video_ratio,
+                    resolution=self._video_resolution(task),
+                    return_last_frame=self.settings.ark_video_return_last_frame,
+                )
+            else:
+                ark_task_id, submit_response = client.submit_text_to_video(
+                    prompt=prompt,
+                    duration_seconds=self.settings.ark_video_duration_seconds,
+                    ratio=self.settings.ark_video_ratio,
+                    resolution=self._video_resolution(task),
+                    return_last_frame=self.settings.ark_video_return_last_frame,
                 )
             provider_debug_path = output_dir / f"segment-{shot.shot_no:03d}.provider.json"
             self._write_provider_debug_sidecar(
                 path=provider_debug_path,
                 payload={
-                    "provider": "jimeng",
+                    "provider": "ark_seedance",
                     "asset_type": "video",
                     "shot_id": shot.id,
                     "shot_no": shot.shot_no,
-                    "task_id": jimeng_task_id,
+                    "task_id": ark_task_id,
                     "submit_response": self._sanitize_provider_payload(submit_response),
+                    "first_frame_publication_id": first_frame_publication_id,
                 },
             )
             self._upsert_asset(
@@ -146,40 +221,41 @@ class VideoRenderService:
                 prompt=prompt,
                 status="running",
                 meta={
-                    "provider": "jimeng",
-                    "jimeng_task_id": jimeng_task_id,
+                    "provider": "ark_seedance",
+                    "ark_task_id": ark_task_id,
                     "provider_debug_uri": str(provider_debug_path),
-                    "submit_summary": self._summarize_jimeng_video_response(submit_response),
-                    "req_key": self.settings.jimeng_i2v_req_key if first_frame_asset is not None else self.settings.jimeng_req_key,
+                    "submit_summary": self._summarize_ark_seedance_response(submit_response),
+                    "model": self.settings.ark_video_model,
                     "used_first_frame": first_frame_asset is not None,
                     "shot_first_frame_asset_id": first_frame_asset.id if first_frame_asset is not None else None,
+                    "first_frame_publication_id": first_frame_publication_id,
                 },
             )
             self._set_progress(
                 task,
-                stage="jimeng_poll",
-                message=f"等待即梦镜头 {shot.shot_no} 生成完成。",
+                stage="ark_seedance_poll",
+                message=f"等待 Ark Seedance 镜头 {shot.shot_no} 生成完成。",
                 extra={
-                    "provider": "jimeng",
+                    "provider": "ark_seedance",
                     "shot_no": shot.shot_no,
-                    "jimeng_task_id": jimeng_task_id,
+                    "ark_task_id": ark_task_id,
                     "used_first_frame": first_frame_asset is not None,
                 },
             )
-            self._set_current_shot(task, shot=shot, step="jimeng_poll")
+            self._set_current_shot(task, shot=shot, step="ark_seedance_poll")
             db.commit()
 
-            video_url, result_response = self._wait_for_jimeng_result(client=image_client if first_frame_asset is not None else text_client, task_id=jimeng_task_id)
+            video_url, result_response = self._wait_for_ark_seedance_result(client=client, task_id=ark_task_id)
             segment_path = output_dir / f"segment-{shot.shot_no:03d}.mp4"
             self._download_file(url=video_url, path=segment_path)
             self._write_provider_debug_sidecar(
                 path=provider_debug_path,
                 payload={
-                    "provider": "jimeng",
+                    "provider": "ark_seedance",
                     "asset_type": "video",
                     "shot_id": shot.id,
                     "shot_no": shot.shot_no,
-                    "task_id": jimeng_task_id,
+                    "task_id": ark_task_id,
                     "submit_response": self._sanitize_provider_payload(submit_response),
                     "result_response": self._sanitize_provider_payload(result_response),
                 },
@@ -193,13 +269,16 @@ class VideoRenderService:
                 prompt=prompt,
                 status="completed",
                 meta={
-                    "provider": "jimeng",
-                    "jimeng_task_id": jimeng_task_id,
+                    "provider": "ark_seedance",
+                    "ark_task_id": ark_task_id,
                     "video_url": video_url,
                     "provider_debug_uri": str(provider_debug_path),
-                    "submit_summary": self._summarize_jimeng_video_response(submit_response),
-                    "result_summary": self._summarize_jimeng_video_response(result_response),
-                    "req_key": self.settings.jimeng_i2v_req_key if first_frame_asset is not None else self.settings.jimeng_req_key,
+                    "submit_summary": self._summarize_ark_seedance_response(submit_response),
+                    "result_summary": self._summarize_ark_seedance_response(result_response),
+                    "provider_usage": self._sanitize_provider_payload(
+                        result_response.get("usage") if isinstance(result_response.get("usage"), dict) else {}
+                    ),
+                    "model": self.settings.ark_video_model,
                     "used_first_frame": first_frame_asset is not None,
                     "shot_first_frame_asset_id": first_frame_asset.id if first_frame_asset is not None else None,
                 },
@@ -217,9 +296,20 @@ class VideoRenderService:
             self._add_event(
                 db,
                 task=task,
-                event_type="video_task_jimeng_segment_completed",
-                message=f"即梦镜头 {shot.shot_no} 视频生成完成。",
-                payload={"shot_no": shot.shot_no, "jimeng_task_id": jimeng_task_id, "segment_path": str(segment_path)},
+                event_type="video_task_ark_seedance_segment_completed",
+                message=f"Ark Seedance 镜头 {shot.shot_no} 视频生成完成。",
+                payload={"shot_no": shot.shot_no, "ark_task_id": ark_task_id, "segment_path": str(segment_path)},
+            )
+            self._record_video_segment_success(
+                db,
+                task=task,
+                shot=shot,
+                prompt=prompt,
+                first_frame_asset=first_frame_asset,
+                first_frame_publication_id=first_frame_publication_id,
+                ark_task_id=ark_task_id,
+                submit_response=submit_response,
+                result_response=result_response,
             )
             db.commit()
 
@@ -228,7 +318,7 @@ class VideoRenderService:
             self._mark_shot_completed(task, shot=shot)
             db.commit()
 
-        return self._finalize_video_task(db=db, task=task, output_dir=output_dir, segment_paths=composed_paths, provider="jimeng")
+        return self._finalize_video_task(db=db, task=task, output_dir=output_dir, segment_paths=composed_paths, provider="ark_seedance")
 
     def _render_with_local_pipeline(
         self,
@@ -401,59 +491,48 @@ class VideoRenderService:
         self._mark_step(task, "compose", "completed")
         self._clear_current_shot(task)
         self._set_progress(task, stage="completed", message="视频生产完成。", extra={"output_uri": task.output_uri, "provider": provider})
-        self.record_quality_result(task, status="completed", message="Video generation completed.")
+        self.record_quality_result(
+            task, status="completed", message="Video generation completed.", quality_accepted=False
+        )
         self._add_event(db, task=task, event_type="video_task_completed", message="视频生产完成。", payload={"output_uri": task.output_uri})
         db.commit()
         db.refresh(task)
         return task
 
-    def record_quality_result(self, task: VideoTask, *, status: str, message: str) -> None:
+    def record_quality_result(
+        self,
+        task: VideoTask,
+        *,
+        status: str,
+        message: str,
+        quality_accepted: bool = False,
+    ) -> None:
         payload = json_loads_object(task.progress_json)
         payload["video_quality_result"] = VideoQualityService().build_result(
             task=task,
             status=status,
             message=message,
+            quality_accepted=quality_accepted,
         )
         task.progress_json = json_dumps(payload)
 
     def _require_config(self) -> None:
-        if self._jimeng_enabled():
-            missing = []
-            if not self.settings.jimeng_access_key:
-                missing.append("JIMENG_ACCESS_KEY")
-            if not self.settings.jimeng_secret_key:
-                missing.append("JIMENG_SECRET_KEY")
-            if not self.settings.ffmpeg_path:
-                missing.append("CHENFLOW_FFMPEG_PATH")
-            if missing:
-                raise RuntimeError("即梦视频生产配置缺失：" + "、".join(missing))
-            if self.settings.jimeng_frames not in {121, 241}:
-                raise RuntimeError("JIMENG_VIDEO_FRAMES 只能配置为 121（5 秒）或 241（10 秒）。")
-            return
-
         missing = []
-        if not self.settings.image_api_key:
-            missing.append("CHENFLOW_IMAGE_API_KEY")
-        if not self.settings.image_base_url:
-            missing.append("CHENFLOW_IMAGE_BASE_URL")
-        if not self.settings.image_model:
-            missing.append("CHENFLOW_IMAGE_MODEL")
-        if not self.settings.tts_api_key:
-            missing.append("CHENFLOW_TTS_API_KEY")
-        if not self.settings.tts_base_url:
-            missing.append("CHENFLOW_TTS_BASE_URL")
-        if not self.settings.tts_model:
-            missing.append("CHENFLOW_TTS_MODEL")
-        if not self.settings.tts_voice:
-            missing.append("CHENFLOW_TTS_VOICE")
+        if not self.settings.ark_api_key:
+            missing.append("ARK_API_KEY")
+        if not self.settings.ark_base_url:
+            missing.append("ARK_BASE_URL")
+        if not self.settings.ark_video_model:
+            missing.append("ARK_VIDEO_MODEL")
+        if not self.settings.ffmpeg_path:
+            missing.append("CHENFLOW_FFMPEG_PATH")
         if missing:
-            raise RuntimeError("视频生产配置缺失：" + "、".join(missing))
+            raise RuntimeError("Ark Seedance 视频生产配置缺失：" + "、".join(missing))
+        if not 4 <= self.settings.ark_video_duration_seconds <= 15:
+            raise RuntimeError("ARK_VIDEO_DURATION_SECONDS 必须配置为 4 到 15 秒。")
 
-    def _jimeng_enabled(self) -> bool:
-        return bool(self.settings.jimeng_access_key or self.settings.jimeng_secret_key)
-
-    def _build_jimeng_prompt(self, task: VideoTask, shot: StoryboardShot, first_frame_asset: MediaAsset | None = None) -> str:
-        prompt = build_visual_generation_prompt(project=task.project, shot=shot, include_narration=True, max_length=1200)
+    def _build_ark_seedance_prompt(self, task: VideoTask, shot: StoryboardShot, first_frame_asset: MediaAsset | None = None) -> str:
+        prompt = build_visual_generation_prompt(project=task.project, shot=shot, include_narration=True, max_length=900)
         video_direction = (
             "\n视频生成要求：轻微但有目的的镜头运动，保持动画电影质感；"
             "不要做随机推拉摇移，不要抖动，不要流水线素材感；"
@@ -461,12 +540,12 @@ class VideoRenderService:
             "保持画面中的天气、光源、色彩和角色外观连续。"
         )
         if first_frame_asset is None:
-            return f"{prompt}{video_direction}"[:1400]
+            return f"{prompt}{video_direction}"[:1000]
         return (
             f"{prompt}{video_direction}\n"
             "已存在用户确认的镜头首帧，请严格保持首帧中的主体外观、构图、机位和画面氛围一致，"
             "将该首帧视为本镜头的视频起始画面参考。"
-        )[:1400]
+        )[:1000]
 
     def _build_image_prompt(self, task: VideoTask, shot: StoryboardShot) -> str:
         return build_visual_generation_prompt(project=task.project, shot=shot, include_narration=False, max_length=1800)
@@ -500,29 +579,29 @@ class VideoRenderService:
         source_mode = str(meta.get("source_mode") or continuity.get("source_mode") or "").strip()
         return bool(continuity.get("requires_i2v")) or source_mode in {"image_first_reference", "existing_images"}
 
-    def _wait_for_jimeng_result(self, *, client: JimengVideoClient, task_id: str) -> tuple[str, dict[str, Any]]:
+    def _wait_for_ark_seedance_result(self, *, client: ArkSeedanceVideoClient, task_id: str) -> tuple[str, dict[str, Any]]:
         deadline = time.monotonic() + self.settings.jimeng_poll_timeout_seconds
         last_response: dict[str, Any] = {}
         while time.monotonic() < deadline:
             result = client.get_result(task_id=task_id)
             last_response = result.raw
-            if result.status == "done":
+            if result.status == "succeeded":
                 if result.video_url:
                     return result.video_url, result.raw
-                raise RuntimeError(f"即梦任务已完成但没有返回 video_url：{task_id}")
-            if result.status in {"not_found", "expired"}:
-                raise RuntimeError(f"即梦任务状态异常：{result.status}，task_id={task_id}")
-            if result.status not in {"in_queue", "generating"}:
-                raise RuntimeError(f"即梦任务返回未知状态：{result.status}，task_id={task_id}")
+                raise RuntimeError(f"Ark Seedance 任务已成功但没有返回 video_url：{task_id}")
+            if result.status in {"failed", "cancelled"}:
+                raise RuntimeError(f"Ark Seedance 任务状态异常：{result.status}，task_id={task_id}")
+            if result.status not in {"queued", "running"}:
+                raise RuntimeError(f"Ark Seedance 任务返回未知状态：{result.status}，task_id={task_id}")
             time.sleep(self.settings.jimeng_poll_interval_seconds)
-        raise RuntimeError(f"即梦任务等待超时：task_id={task_id}, last_response={last_response}")
+        raise RuntimeError(f"Ark Seedance 任务等待超时：task_id={task_id}, last_response={last_response}")
 
     def _download_file(self, *, url: str, path: Path) -> None:
         try:
             with urllib.request.urlopen(url, timeout=180) as response:
                 content = response.read()
         except Exception as exc:
-            raise RuntimeError(f"下载即梦视频失败：{exc}") from exc
+            raise RuntimeError(f"下载 Ark Seedance 视频失败：{exc}") from exc
         if not content:
             raise RuntimeError("下载即梦视频失败：返回空文件。")
         path.write_bytes(content)
@@ -840,14 +919,23 @@ class VideoRenderService:
             ]
         )
 
-    def _resolvable_asset_url(self, asset: MediaAsset) -> str:
-        meta = json_loads_object(asset.meta_json)
-        public_url = meta.get("public_url")
-        if isinstance(public_url, str) and public_url.strip():
-            return public_url.strip()
-        if asset.uri and Path(asset.uri).exists():
-            return Path(asset.uri).resolve().as_uri()
-        return ""
+    def _video_resolution(self, task: VideoTask) -> str:
+        progress = json_loads_object(task.progress_json)
+        resolution = progress.get("video_resolution")
+        if isinstance(resolution, str) and resolution.strip():
+            return resolution.strip()
+        return self.settings.ark_video_resolution
+
+    def _provider_asset_url(self, *, db: Session, asset: MediaAsset, purpose: str) -> tuple[str, int | None]:
+
+        # 契约：先复用未过期发布；引用失效时最多重发一次，避免无限重试或静默降级。
+        publication = self._publication_service.get_or_create_active(db=db, asset=asset, purpose=purpose)
+        try:
+            access_url = self._publication_service.verify(publication=publication)
+        except RuntimeError:
+            publication = self._publication_service.publish(db=db, asset=asset, purpose=purpose)
+            access_url = self._publication_service.verify(publication=publication)
+        return access_url, publication.id
 
     def _dialogue_items(self, script: Any) -> list[dict[str, Any]]:
         if not isinstance(script, dict):
@@ -931,14 +1019,14 @@ class VideoRenderService:
     def _write_provider_debug_sidecar(self, *, path: Path, payload: dict[str, Any]) -> None:
         path.write_text(json_dumps(payload), encoding="utf-8")
 
-    def _summarize_jimeng_video_response(self, response: dict[str, Any]) -> dict[str, Any]:
-        data = response.get("data") if isinstance(response.get("data"), dict) else {}
+    def _summarize_ark_seedance_response(self, response: dict[str, Any]) -> dict[str, Any]:
+        content = response.get("content") if isinstance(response.get("content"), dict) else {}
         return {
-            "code": response.get("code"),
-            "message": response.get("message") or response.get("msg") or "",
-            "status": data.get("status") or "",
-            "task_id": data.get("task_id") or "",
-            "video_url_present": bool(data.get("video_url")),
+            "id": response.get("id") or "",
+            "model": response.get("model") or self.settings.ark_video_model,
+            "status": response.get("status") or "",
+            "video_url_present": bool(content.get("video_url")),
+            "last_frame_url_present": bool(content.get("last_frame_url")),
         }
 
     def _sanitize_provider_payload(self, value: Any) -> Any:

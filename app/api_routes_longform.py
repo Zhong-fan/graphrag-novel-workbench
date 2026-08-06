@@ -23,7 +23,11 @@ from .audio_script_service import AudioScriptService
 from .auth import get_current_user
 from .batch_generation_service import BatchGenerationService
 from .config import Settings
+from .character_identity_service import CharacterIdentityService
 from .context_pack_service import ContextPackService
+from .cost_estimator import check_cost_gate, estimate_video_generation_cost
+from .exception_inbox_service import create_inbox_item
+from .generation_evidence_service import GenerationEvidence, record_generation_evidence
 from .creative_source_contracts import (
     normalize_source_mode,
     source_mode_requires_brief,
@@ -35,6 +39,7 @@ from .contracts import (
     CanonicalizeDraftVersionRequest,
     ChapterOutlineOut,
     CreateStoryboardRequest,
+    CreateVideoTaskRequest,
     GenerateSeriesPlanRequest,
     LockChapterOutlinesRequest,
     OutlineRevisionResponse,
@@ -91,69 +96,12 @@ from .storyboard_job_service import StoryboardJobService
 from .visual_asset_service import CharacterReferenceProfileService
 from .visual_asset_service import VisualAssetService
 from .visual_style_prompt import build_visual_generation_prompt, project_visual_style_summary
+from .video_preflight_service import video_quality_gate_failures
 from .video_quality_service import VideoQualityService
+from .workflow_guidance_service import recommend_next_action
 from .voice_service import VoiceService
 
 logger = logging.getLogger(__name__)
-
-
-def _video_quality_gate_failures(db: Session, *, settings: Settings, project: Project, storyboard: Storyboard) -> list[str]:
-    failures: list[str] = []
-    visual_service = VisualAssetService(settings)
-    for shot in sorted(storyboard.shots, key=lambda item: item.shot_no):
-        refs = visual_service.locked_turnaround_references(db=db, project=project, shot=shot)
-        character_refs = json_loads_list(shot.character_refs_json)
-        if character_refs and not refs:
-            failures.append(f"镜头 {shot.shot_no} 有角色引用，但没有可用的锁定三视图。")
-        meta = json_loads_object(shot.meta_json)
-        continuity = meta.get("continuity") if isinstance(meta.get("continuity"), dict) else {}
-        source_mode = str(meta.get("source_mode") or continuity.get("source_mode") or "").strip()
-        image_first_shot = source_mode in {"image_first_reference", "existing_images"}
-        requires_i2v = continuity.get("requires_i2v") is not False
-        first_frame_source = str(continuity.get("first_frame_source") or "generated")
-        if requires_i2v and first_frame_source == "previous_last_frame":
-            dependency_shot_no = _continuity_dependency_shot_no(continuity, shot)
-            dependency_shot = next((item for item in storyboard.shots if item.shot_no == dependency_shot_no), None)
-            last_frame = None
-            if dependency_shot is not None:
-                last_frame = db.scalar(
-                    select(MediaAsset).where(
-                        MediaAsset.project_id == project.id,
-                        MediaAsset.storyboard_id == storyboard.id,
-                        MediaAsset.shot_id == dependency_shot.id,
-                        MediaAsset.asset_type == "shot_last_frame",
-                        MediaAsset.status == "completed",
-                        MediaAsset.deleted_at.is_(None),
-                    )
-                )
-            if last_frame is None:
-                failures.append(f"镜头 {shot.shot_no} 依赖镜头 {dependency_shot_no} 缺少已完成尾帧。")
-        elif requires_i2v and first_frame_source == "generated":
-            first_frame = db.scalar(
-                select(MediaAsset).where(
-                    MediaAsset.project_id == project.id,
-                    MediaAsset.storyboard_id == storyboard.id,
-                    MediaAsset.shot_id == shot.id,
-                    MediaAsset.asset_type == "shot_first_frame",
-                    MediaAsset.status == "completed",
-                    MediaAsset.deleted_at.is_(None),
-                )
-            )
-            if first_frame is None:
-                if image_first_shot:
-                    failures.append(f"镜头 {shot.shot_no} 图片先行镜头缺少已完成首帧。")
-                else:
-                    failures.append(f"镜头 {shot.shot_no} 需要首帧，但还没有完成的首帧素材。")
-    return failures
-
-
-def _continuity_dependency_shot_no(continuity: dict, shot: StoryboardShot) -> int:
-    value = continuity.get("depends_on_shot_no")
-    try:
-        dependency = int(value)
-    except (TypeError, ValueError):
-        dependency = shot.shot_no - 1
-    return max(dependency, 1)
 
 
 def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
@@ -663,12 +611,29 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _storyboard_out(storyboard)
 
+    @router.get("/api/projects/{project_id}/next-action")
+    def project_next_action(
+        project_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> dict:
+        project = _project_or_404(db, current_user.id, project_id)
+        guidance = recommend_next_action(db, project=project, settings=settings)
+        return {
+            "state": guidance.state,
+            "next_action": guidance.next_action,
+            "reason": guidance.reason,
+            "defaults": guidance.defaults,
+            "blockers": guidance.blockers,
+        }
+
     @router.post("/api/projects/{project_id}/storyboards/{storyboard_id}/video-tasks", response_model=VideoTaskOut)
     def create_video_task(
         project_id: int,
         storyboard_id: int,
         db: Session = Depends(get_db),
         current_user: User = Depends(get_current_user),
+        payload: CreateVideoTaskRequest | None = None,
     ) -> VideoTaskOut:
         project = _project_or_404(db, current_user.id, project_id)
         try:
@@ -680,7 +645,10 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
             raise HTTPException(status_code=404, detail="分镜稿不存在。")
         if storyboard.status != "draft" or not storyboard.shots:
             raise HTTPException(status_code=409, detail="分镜稿尚未生成完成，不能创建视频任务。")
-        gate_failures = _video_quality_gate_failures(db, settings=settings, project=project, storyboard=storyboard)
+        identity_service = CharacterIdentityService(settings)
+        for shot in storyboard.shots:
+            identity_service.bind_all_shot_characters(db=db, project=project, shot=shot)
+        gate_failures = video_quality_gate_failures(db, settings=settings, project=project, storyboard=storyboard)
         if gate_failures:
             raise HTTPException(status_code=409, detail="视频生产前置检查未通过：" + "；".join(gate_failures[:5]))
         existing_task = db.scalar(
@@ -697,6 +665,79 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         service = MediaPipelineService()
         progress = json_loads_object(service.task_progress_json(storyboard=storyboard))
         progress["video_quality_plan"] = VideoQualityService().build_quality_plan(storyboard)
+        preview_mode = bool(payload is not None and payload.preview)
+        effective_resolution = settings.ark_video_preview_resolution if preview_mode else settings.ark_video_resolution
+        progress["preview_mode"] = preview_mode
+        progress["video_resolution"] = effective_resolution
+        cost_estimate = estimate_video_generation_cost(
+            shot_count=len(storyboard.shots),
+            duration_seconds=settings.ark_video_duration_seconds,
+            resolution=effective_resolution,
+            model=settings.ark_video_model,
+        )
+        progress["estimated_cost"] = {
+            "estimated_cost_usd": cost_estimate.estimated_cost_usd,
+            "currency": cost_estimate.currency,
+            "basis": cost_estimate.basis,
+        }
+        budget_confirmed = bool(payload is not None and payload.budget_confirmed)
+        cost_gate = check_cost_gate(
+            estimate=cost_estimate,
+            confirmation_threshold_usd=settings.video_cost_confirmation_threshold_usd,
+        )
+        if not cost_gate.approved and not budget_confirmed:
+            try:
+                attempt = record_generation_evidence(
+                    db,
+                    evidence=GenerationEvidence(
+                        stage="cost_gate",
+                        status="blocked",
+                        provider="ark_seedance",
+                        model=settings.ark_video_model,
+                        project_id=project.id,
+                        storyboard_id=storyboard.id,
+                        cost_estimate_usd=cost_estimate.estimated_cost_usd,
+                        parameters={
+                            "shot_count": len(storyboard.shots),
+                            "threshold_usd": settings.video_cost_confirmation_threshold_usd,
+                            "budget_confirmed": False,
+                        },
+                        error_category="budget_confirmation_required",
+                        error_message=(
+                            f"{cost_gate.reason} 估算成本 ${cost_estimate.estimated_cost_usd:.2f}"
+                            f"（镜头数 {len(storyboard.shots)}）。如确认继续，请以 budget_confirmed=true 重新提交。"
+                        ),
+                    ),
+                )
+                create_inbox_item(
+                    db,
+                    project=project,
+                    item_type="budget_approval",
+                    title=f"视频生成成本需要确认：约 ${cost_estimate.estimated_cost_usd:.2f}",
+                    reason=(
+                        f"{cost_gate.reason} 估算成本 ${cost_estimate.estimated_cost_usd:.2f}"
+                        f"（镜头数 {len(storyboard.shots)}）。"
+                    ),
+                    recommended_action="确认预算后以 budget_confirmed=true 重新提交，或降低预览分辨率/镜头数。",
+                    options=[
+                        {"label": "确认预算继续", "impact": "将按估算成本提交视频生成，可能产生实际费用。"},
+                        {"label": "改用预览分辨率", "impact": "降低单镜头成本，输出预览级视频。"},
+                        {"label": "暂不生成", "impact": "保留素材与计划，不产生费用。"},
+                    ],
+                    evidence={"generation_attempt_id": attempt.id, "storyboard_id": storyboard.id},
+                    severity="high",
+                )
+                db.commit()
+            except Exception:
+                # 门禁证据与收件箱是尽力而为的遥测：记录失败时仍返回预期的 409，不改成 500。
+                db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{cost_gate.reason} 估算成本 ${cost_estimate.estimated_cost_usd:.2f}"
+                    f"（镜头数 {len(storyboard.shots)}）。如确认继续，请以 budget_confirmed=true 重新提交。"
+                ),
+            )
         task = VideoTask(
             project_id=project.id,
             storyboard=storyboard,
@@ -907,7 +948,7 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
             preflight_summary["generated_dialogue_audio"] = len(generated_assets)
             preflight_summary["skipped_locked_dialogue_audio"] = locked_before
 
-        gate_failures = _video_quality_gate_failures(db, settings=settings, project=project, storyboard=storyboard)
+        gate_failures = video_quality_gate_failures(db, settings=settings, project=project, storyboard=storyboard)
         preflight_summary["quality_gate_failures"] = gate_failures
         if gate_failures:
             db.add(

@@ -86,17 +86,28 @@ class VideoQualityService:
         task: VideoTask,
         status: str,
         message: str,
+        quality_accepted: bool = False,
     ) -> dict[str, Any]:
+        """渲染完成与质量验收分离：render_status 记录渲染结果，status/quality_accepted 记录验收状态。"""
         progress = json_loads_object(task.progress_json)
         plan = progress.get("video_quality_plan") if isinstance(progress.get("video_quality_plan"), dict) else {}
         shot_results = ensure_list(progress.get("shot_results"))
-        passed = status == "completed" and bool(task.output_uri)
+        render_completed = status == "completed" and bool(task.output_uri)
+        if quality_accepted:
+            result_status = "passed"
+        elif render_completed:
+            result_status = "requires_review"
+        else:
+            result_status = "failed"
         return {
-            "status": "passed" if passed else "failed",
+            "status": result_status,
+            "render_status": "completed" if render_completed else "failed",
+            "quality_accepted": bool(quality_accepted),
             "message": message,
             "checked_against_plan": bool(plan),
-            "short_film_structure": "passed" if passed else "requires_manual_review",
-            "visual_stability": "requires_manual_review",
-            "content_consistency": "requires_manual_review",
+            "short_film_structure": "passed" if quality_accepted else "requires_review",
+            "visual_stability": "requires_review",
+            "content_consistency": "requires_review",
             "review_findings": build_review_findings([item for item in shot_results if isinstance(item, dict)]),
         }
+
