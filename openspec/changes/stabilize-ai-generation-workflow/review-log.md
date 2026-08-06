@@ -340,3 +340,21 @@
 - 正面发现：icon 按钮/搜索/画布均有 aria-label，表单控件用 label 包裹，toast aria-live；api.ts 统一抽取后端 detail + 字段中文映射，store 错误均 toast 透出，轮询有停止条件不泄漏；状态色 tone-good/warn/bad 对比度 ≥5.09 达标；图片 lazy loading；单一粉色强调色 + OKLCH 令牌方向明确。
 - 建议整改顺序（按 audit skill 命令映射）：[$adapt] 画布/板面响应式 → [$harden] 对比度+键盘可达 → [$harden] 触控目标 → [$distill] 双主题令牌统一/清理渐变按钮与死 CSS → [$optimize] backdrop-filter 收敛 → [$clarify] 下一步文案 → [$polish] 收尾。
 - 状态：已记录。本轮只审计不修复；需要运行时复测时请先启动 `start-workbench.bat`（Docker + 后端）。
+
+
+## Round 27 — 审计修复落地（对比度 / 键盘可达 / 触控目标 / 文案）
+
+- 日期：2026-08-07
+- 范围：按 Round 26 审计的 P1/P2 逐项修复，仅改前端 3 个文件：
+  - `frontend/src/components/workspace/ToonflowWorkbench.vue`：
+    - 对比度：`--toon-ink-muted` 61%→53%（白底/玻璃底 ≥5.16:1）；`.toon-button--dark`、`.toon-rail button.active`、`.toon-rail__brand`、`.toon-topbar nav button.active`、`.toon-storyboard-list button.active` 背景 `--toon-rose`→`--toon-rose-deep`（白字 3.52→5.24:1）。
+    - 焦点环：`--rose-strong`（红橙 hue15）→`--toon-rose-deep`，与粉色主题一致。
+    - 键盘可达：项目卡片补 `role="button"`+aria-label；`.toon-shot-row` 补 `role="button" tabindex="0"`+aria-label+Enter/Space 键盘处理（WCAG 2.1.1）。
+    - 触控目标：≤900px 下 `.toon-choice-options button`、`.toon-issue-list button`、`.toon-evidence-card button`、`.toon-context-panel article button`、`.toon-storyboard-list button` 补 `min-height:44px`。
+    - 文案：无故事资料时「下一步」改为“先补充故事资料与改编要求，再进入后续生成”（消除跳级提示）。
+  - `frontend/src/components/workspace/SeriesPlanReader.vue`：muted 令牌 61%→53%；`.plan-reader__lock` 背景 `--toon-rose`→`--toon-rose-deep`。
+  - `frontend/src/components/auth/AuthModal.vue`：注册/登录提交按钮显式补 `type="submit"`。
+- 评审结果（check-code-quality）：本轮为模板/Aria/CSS 改动，无新增错误处理路径；新增交互均带可访问性契约（role/tabindex/keydown），无静默失败与 stale 注释。评审通过。
+- 评审结果（check-simplicity）：每个改动与 Round 26 审计项一一对应，无投机抽象；P1 横向滚动按用户确认（滑动窗口正常）跳过修复。评审通过。
+- 构建：`npm run build`（check:template + vue-tsc + vite）通过。
+- 状态：已记录。下一步提交并推送 dev-v3。

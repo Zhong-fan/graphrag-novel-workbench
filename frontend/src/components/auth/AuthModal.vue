@@ -130,7 +130,7 @@ function submitLogin() {
           />
           <small v-if="registerFieldErrors.captcha_answer" class="field-error">{{ registerFieldErrors.captcha_answer }}</small>
         </label>
-        <button class="primary-button" :disabled="loading">{{ loading ? "正在注册..." : "注册并登录" }}</button>
+        <button type="submit" class="primary-button" :disabled="loading">{{ loading ? "正在注册..." : "注册并登录" }}</button>
       </form>
       <form v-else class="form-stack" @submit.prevent="submitLogin()">
         <label class="field">
@@ -153,7 +153,7 @@ function submitLogin() {
           </div>
           <small v-if="loginFieldErrors.password" class="field-error">{{ loginFieldErrors.password }}</small>
         </label>
-        <button class="primary-button" :disabled="loading">{{ loading ? "正在登录..." : "登录" }}</button>
+        <button type="submit" class="primary-button" :disabled="loading">{{ loading ? "正在登录..." : "登录" }}</button>
       </form>
     </section>
   </section>

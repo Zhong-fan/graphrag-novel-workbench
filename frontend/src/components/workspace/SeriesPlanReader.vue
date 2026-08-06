@@ -157,7 +157,7 @@ function statusLabel(status: unknown): string {
   font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
   --toon-ink: oklch(31% 0.055 345);
   --toon-ink-soft: oklch(47% 0.045 345);
-  --toon-ink-muted: oklch(61% 0.035 345);
+  --toon-ink-muted: oklch(53% 0.045 345);
   --toon-line: rgba(255, 226, 239, 0.86);
   --toon-rose: oklch(65% 0.155 350);
   --toon-rose-deep: oklch(55% 0.14 350);
@@ -211,7 +211,7 @@ function statusLabel(status: unknown): string {
   width: 96px;
 }
 .plan-reader__actions { display: flex; gap: 10px; align-items: center; }
-.plan-reader__lock { min-height: 36px; padding: 0 14px; border-radius: 8px; background: var(--toon-rose); color: white; font-weight: 800; font-size: 0.82rem; }
+.plan-reader__lock { min-height: 36px; padding: 0 14px; border-radius: 8px; background: var(--toon-rose-deep); color: white; font-weight: 800; font-size: 0.82rem; }
 .plan-reader__lock:hover { background: var(--toon-rose-deep); color: white; }
 .plan-reader__locked { display: inline-flex; align-items: center; min-height: 36px; padding: 0 14px; border-radius: 8px; background: #d9f5e3; color: #087434; font-size: 0.8rem; font-weight: 800; }
 
