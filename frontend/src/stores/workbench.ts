@@ -911,6 +911,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     if (!token.value) return;
     const targetProjectId = projectId ?? activeProject.value?.project.id;
     if (!targetProjectId) return;
+    // A project switch or newer poll invalidates older responses; stale data must never overwrite the active project.
     const requestSequence = ++longformLoadSequence;
     try {
       const nextState = await api.longformState(token.value, targetProjectId);

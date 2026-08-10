@@ -243,7 +243,7 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
     ) -> SeriesPlanOut:
         project = _project_or_404(db, current_user.id, project_id)
         plan = _series_plan_or_404(db, project.id, series_plan_id)
-        logger.info("???????user_id=%s project_id=%s series_plan_id=%s", current_user.id, project.id, plan.id)
+        logger.info("Unlocking series plan: user_id=%s project_id=%s series_plan_id=%s", current_user.id, project.id, plan.id)
         plan.status = "draft"
         for arc in plan.arc_plans:
             if arc.status != "draft":

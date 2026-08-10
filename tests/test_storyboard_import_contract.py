@@ -27,6 +27,25 @@ class StoryboardImportContractTests(unittest.TestCase):
             StoryboardImportRequest.model_validate({"title": "无效", "shots": [{"visual_prompt": "画面", "duration_seconds": 0}]})
         self.assertIn("duration_seconds", str(ctx.exception))
 
+    def test_rejects_blank_title_and_visual_prompt(self) -> None:
+        with self.assertRaises(ValidationError):
+            StoryboardImportRequest.model_validate({"title": "   ", "shots": [{"visual_prompt": "画面"}]})
+        with self.assertRaises(ValidationError):
+            StoryboardImportRequest.model_validate({"title": "有效", "shots": [{"visual_prompt": "   "}]})
+
+    def test_rejects_duplicate_shot_numbers(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            StoryboardImportRequest.model_validate(
+                {
+                    "title": "重复镜头",
+                    "shots": [
+                        {"shot_no": 1, "visual_prompt": "画面一"},
+                        {"shot_no": 1, "visual_prompt": "画面二"},
+                    ],
+                }
+            )
+        self.assertIn("shot_no", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

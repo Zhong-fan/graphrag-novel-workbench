@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class RegisterRequest(BaseModel):
@@ -897,12 +897,35 @@ class StoryboardImportShotRequest(BaseModel):
     continuity: dict[str, Any] = Field(default_factory=dict)
     duration_seconds: float = Field(default=4, ge=0.5, le=60)
 
+    @field_validator("visual_prompt")
+    @classmethod
+    def visual_prompt_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("visual_prompt 不能为空。")
+        return value
+
 
 class StoryboardImportRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     summary: str = Field(default="", max_length=4000)
     source_chapter_ids: list[int] = Field(default_factory=list, max_length=12)
     shots: list[StoryboardImportShotRequest] = Field(..., min_length=1, max_length=200)
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("title 不能为空。")
+        return value
+
+    @model_validator(mode="after")
+    def shot_numbers_must_be_unique(self) -> "StoryboardImportRequest":
+        shot_numbers = [shot.shot_no for shot in self.shots if shot.shot_no is not None]
+        if len(shot_numbers) != len(set(shot_numbers)):
+            raise ValueError("shots.shot_no 不能重复。")
+        return self
 
 
 class StoryboardShotOut(BaseModel):
