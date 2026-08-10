@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from "vue";
+import DraftReader from "./DraftReader.vue";
 import SeriesPlanReader from "./SeriesPlanReader.vue";
+import TaskCenter from "./TaskCenter.vue";
 import type {
   BatchGenerationPayload,
   CanonicalizeDraftPayload,
@@ -28,10 +30,11 @@ import type {
   UpdateStoryboardShotPayload,
   VideoProductionPreflightPayload,
   VideoTask,
+  StoryboardImportPayload,
 } from "../../types";
 
 type CreationMode = "upload" | "ai" | "manual";
-type WorkbenchModule = "projects" | "script" | "assets" | "production" | "settings" | "trash";
+type WorkbenchModule = "projects" | "script" | "assets" | "production" | "tasks" | "settings" | "trash";
 type RailItem = { module: WorkbenchModule; label: string; iconPaths: string[] };
 
 const props = defineProps<{
@@ -51,6 +54,9 @@ const props = defineProps<{
   workspaceSearch: string;
   loading: boolean;
   longformRequest: { active: boolean; stage: string; message: string; target?: Record<string, unknown> };
+  longformLastRefreshedAt: string | null;
+  longformRefreshError: string;
+  longformPollingFailures: number;
   form: ProjectCreateDraft;
 }>();
 
@@ -58,7 +64,7 @@ const emit = defineEmits<{
   (e: "login"): void;
   (e: "register"): void;
   (e: "logout"): void;
-  (e: "go", view: "studio" | "projectCreate" | "assetLibrary" | "trash" | "planReader"): void;
+  (e: "go", view: "studio" | "projectCreate" | "assetLibrary" | "trash" | "planReader" | "draftReader"): void;
   (e: "open-project-create", mode: CreationMode): void;
   (e: "load-imported-project-draft", payload: ProjectImportDraftPayload): void;
   (e: "load-ai-project-draft", payload: ProjectAIBriefDraftPayload): void;
@@ -74,6 +80,9 @@ const emit = defineEmits<{
   (e: "update-media-asset", assetId: number, meta: Record<string, unknown>): void;
   (e: "delete-media-asset", assetId: number): void;
   (e: "create-video-task", storyboardId: number): void;
+  (e: "create-storyboard", payload: { title: string; reference_video_brief: string }): void;
+  (e: "import-storyboard", payload: StoryboardImportPayload): void;
+  (e: "refresh-tasks"): void;
   (e: "delete-video-task", taskId: number): void;
   (e: "delete-storyboard", storyboardId: number): void;
   (e: "generate-character-turnaround", payload: GenerateCharacterTurnaroundPayload): void;
@@ -85,6 +94,7 @@ const emit = defineEmits<{
   (e: "revise-draft-version", draftVersionId: number, payload: ReviseDraftPayload): void;
   (e: "canonicalize-draft-version", draftVersionId: number, payload: CanonicalizeDraftPayload): void;
   (e: "lock-series-plan", seriesPlanId: number): void;
+  (e: "unlock-series-plan", seriesPlanId: number): void;
   (e: "update-storyboard-shot", storyboardId: number, shotId: number, payload: UpdateStoryboardShotPayload): void;
   (e: "create-storyboard-shot", storyboardId: number, payload: CreateStoryboardShotPayload): void;
   (e: "delete-storyboard-shot", storyboardId: number, shotId: number): void;
@@ -103,6 +113,9 @@ const activeStoryboardId = ref<number | null>(null);
 const evidencePanel = ref<HTMLDetailsElement | null>(null);
 const settingsDraft = reactive({ title: "", genre: "", world_brief: "", writing_rules: "" });
 const creationAssist = reactive({ script_text: "", protagonist: "", core_conflict: "", audience: "", tone: "" });
+const storyboardImportDraft = ref("");
+const storyboardImportError = ref("");
+const document = globalThis.document;
 const longformDraft = reactive({
   target_chapter_count: 12,
   user_brief: "",
@@ -128,6 +141,7 @@ const railItems: RailItem[] = [
   { module: "script", label: "编剧", iconPaths: ["M6 3.5h9l3 3v14H6z", "M15 3.5v4h4", "M9 11h6M9 15h6M9 18h4"] },
   { module: "assets", label: "资产", iconPaths: ["M4 5.5h16v13H4z", "m6 15 3-3 2.5 2.5 2-2 2.5 2.5", "M15.5 9h.01"] },
   { module: "production", label: "出片", iconPaths: ["M4.5 4.5h15v15h-15z", "m10 9 5 3-5 3z"] },
+  { module: "tasks", label: "任务", iconPaths: ["M5 5h14v14H5z", "M8 9h8M8 12h8M8 15h5"] },
   { module: "settings", label: "设置", iconPaths: ["M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z", "M19 13.5v-3l-2-.7-.7-1.7.9-1.9-2.1-2.1-1.9.9-1.7-.7-.7-2h-3l-.7 2-1.7.7-1.9-.9-2.1 2.1.9 1.9-.7 1.7-2 .7v3l2 .7.7 1.7-.9 1.9 2.1 2.1 1.9-.9 1.7.7.7 2h3l.7-2 1.7-.7 1.9.9 2.1-2.1-.9-1.9.7-1.7z"] },
   { module: "trash", label: "回收站", iconPaths: ["M5.5 7h13", "M9 7V4.5h6V7", "m7.5 7 .8 13h7.4l.8-13", "M10 10.5v6M14 10.5v6"] },
 ];
@@ -158,8 +172,31 @@ const latestSeriesPlan = computed(() => props.longformState.series_plans[0] ?? n
 function onReaderLock(planId: number) {
   emit("lock-series-plan", planId);
 }
+function onReaderUnlock(planId: number) {
+  emit("unlock-series-plan", planId);
+}
 const latestDraftVersion = computed(() => props.longformState.draft_versions[0] ?? null);
 const latestBatchJob = computed(() => props.longformState.batch_jobs[0] ?? null);
+const draftChapterCount = computed(() => new Set(props.longformState.draft_versions.map((draft) => draft.chapter_no)).size);
+const planStatusLabel = computed(() => latestSeriesPlan.value ? (latestSeriesPlan.value.status === "locked" ? "已锁定" : "草稿") : "未生成");
+const planStatusTone = computed(() => latestSeriesPlan.value ? (latestSeriesPlan.value.status === "locked" ? "good" : "warn") : "neutral");
+const batchJobLabel = computed(() => latestBatchJob.value ? statusLabel(latestBatchJob.value.job_status) : (draftChapterCount.value ? "有正文" : "未开始"));
+const batchJobTone = computed(() => latestBatchJob.value ? statusTone(latestBatchJob.value.job_status) : (draftChapterCount.value ? "good" : "neutral"));
+const batchProgressText = computed(() => {
+  const job = latestBatchJob.value;
+  if (!job) return draftChapterCount.value ? `${draftChapterCount.value} 章正文已生成` : "等待创建正文任务";
+  const done = job.chapter_tasks.filter((task) => ["completed", "failed", "canceled"].includes(task.status)).length;
+  if (job.chapter_tasks.length > 0) return `${done} / ${job.chapter_tasks.length} 章`;
+  return statusLabel(job.job_status);
+});
+const batchProgressPercent = computed(() => {
+  const job = latestBatchJob.value;
+  if (!job) return 0;
+  const tasks = job.chapter_tasks;
+  if (!tasks.length) return job.job_status === "completed" ? 100 : 0;
+  const done = tasks.filter((task) => ["completed", "failed", "canceled"].includes(task.status)).length;
+  return Math.max(0, Math.min(100, Math.round((done / tasks.length) * 100)));
+});
 const longformRequestActive = computed(() => Boolean(props.longformRequest?.active));
 const longformRequestStage = computed(() => props.longformRequest?.stage ?? "idle");
 const longformRequestMessage = computed(() => props.longformRequest?.message ?? "");
@@ -173,6 +210,7 @@ const workspaceTitle = computed(() => {
   if (props.currentView === "projectCreate") return "新建项目";
   if (activeModule.value === "projects") return "我的项目";
   if (activeModule.value === "trash") return "回收站";
+  if (activeModule.value === "tasks") return "任务中心";
   return selectedProject.value?.title || "选择一个项目";
 });
 const preflight = computed(() => {
@@ -206,6 +244,28 @@ function selectModule(module: WorkbenchModule) {
   if (module === "trash") emit("go", "trash");
   else if (module === "assets") emit("go", "assetLibrary");
   else emit("go", "studio");
+}
+function submitStoryboardImport() {
+  storyboardImportError.value = "";
+  try {
+    const parsed = JSON.parse(storyboardImportDraft.value) as Partial<StoryboardImportPayload>;
+    if (!parsed || typeof parsed !== "object" || !String(parsed.title || "").trim()) throw new Error("缺少 title。");
+    if (!Array.isArray(parsed.shots) || parsed.shots.length === 0) throw new Error("shots 至少需要一个镜头。");
+    const shots = parsed.shots.map((shot, index) => {
+      if (!shot || typeof shot !== "object" || !String(shot.visual_prompt || "").trim()) throw new Error(`shots[${index}].visual_prompt 不能为空。`);
+      const duration = Number(shot.duration_seconds ?? 4);
+      if (!Number.isFinite(duration) || duration < 0.5 || duration > 60) throw new Error(`shots[${index}].duration_seconds 必须在 0.5 到 60 秒之间。`);
+      return { ...shot, visual_prompt: String(shot.visual_prompt).trim(), duration_seconds: duration };
+    });
+    emit("import-storyboard", { title: String(parsed.title).trim(), summary: String(parsed.summary || ""), source_chapter_ids: Array.isArray(parsed.source_chapter_ids) ? parsed.source_chapter_ids.map(Number).filter(Number.isInteger) : [], shots });
+    storyboardImportDraft.value = "";
+  } catch (error) {
+    storyboardImportError.value = error instanceof Error ? error.message : "JSON 格式无效。";
+  }
+}
+function focusStoryboardImport() {
+  storyboardImportError.value = "";
+  document.querySelector<HTMLTextAreaElement>(".toon-storyboard-import textarea")?.focus();
 }
 function openProject(projectId: number) {
   if (!projectId) return;
@@ -312,15 +372,17 @@ function submitDraftCanonicalize() {
 }
 function statusLabel(status: string | undefined) {
   const labels: Record<string, string> = {
-    pending: "等待中", queued: "排队中", running: "生产中", completed: "已完成",
+    pending: "等待中", queued: "排队中", retry_queued: "重试排队中", running: "生产中", completed: "已完成",
     failed: "失败", blocked: "已阻断", locked: "已锁定", draft: "草稿",
+    pause_requested: "暂停请求中", paused: "已暂停", cancel_requested: "取消请求中", canceled: "已取消",
+    outline_draft: "概要草稿", outline_locked: "概要已锁定", chapter_canonical: "已定稿",
   };
   return labels[status || ""] || status || "未记录";
 }
 function statusTone(status: string | undefined) {
-  if (["completed", "locked", "ready", "passed"].includes(status || "")) return "good";
+  if (["completed", "locked", "ready", "passed", "canceled"].includes(status || "")) return "good";
   if (["failed", "blocked"].includes(status || "")) return "bad";
-  if (["running", "queued", "warning"].includes(status || "")) return "warn";
+  if (["running", "queued", "retry_queued", "paused", "pause_requested", "cancel_requested", "pending", "warning"].includes(status || "")) return "warn";
   return "neutral";
 }
 function attemptStageLabel(stage: string | undefined) {
@@ -553,13 +615,20 @@ watch(() => props.contextPack, (pack) => {
       @back="emit('go', 'studio')"
       @lock="onReaderLock"
     />
+    <DraftReader
+      v-if="currentView === 'draftReader'"
+      class="plan-reader-layer"
+      :state="longformState"
+      :project-title="selectedProject?.title ?? ''"
+      @back="emit('go', 'studio')"
+    />
     <aside class="toon-rail" aria-label="ToonFlow style navigation">
       <button class="toon-rail__brand" type="button" aria-label="ChenFlow 项目" :aria-current="activeModule === 'projects' ? 'page' : undefined" @click="selectModule('projects')">CF</button>
-      <button v-for="item in railItems.slice(0, 4)" :key="item.module" type="button" :class="{ active: activeModule === item.module }" :aria-current="activeModule === item.module ? 'page' : undefined" :aria-label="item.label" :title="item.label" @click="selectModule(item.module)">
+      <button v-for="item in railItems.slice(0, 5)" :key="item.module" type="button" :class="{ active: activeModule === item.module }" :aria-current="activeModule === item.module ? 'page' : undefined" :aria-label="item.label" :title="item.label" @click="selectModule(item.module)">
         <svg aria-hidden="true" viewBox="0 0 24 24"><path v-for="path in item.iconPaths" :key="path" :d="path" /></svg><small class="toon-rail__label">{{ item.label }}</small>
       </button>
       <i aria-hidden="true"></i>
-      <button v-for="item in railItems.slice(4)" :key="item.module" type="button" :class="{ active: activeModule === item.module }" :aria-current="activeModule === item.module ? 'page' : undefined" :aria-label="item.label" :title="item.label" @click="selectModule(item.module)">
+      <button v-for="item in railItems.slice(5)" :key="item.module" type="button" :class="{ active: activeModule === item.module }" :aria-current="activeModule === item.module ? 'page' : undefined" :aria-label="item.label" :title="item.label" @click="selectModule(item.module)">
         <svg aria-hidden="true" viewBox="0 0 24 24"><path v-for="path in item.iconPaths" :key="path" :d="path" /></svg><small class="toon-rail__label">{{ item.label }}</small>
       </button>
     </aside>
@@ -571,7 +640,7 @@ watch(() => props.contextPack, (pack) => {
           <h1>{{ workspaceTitle }}</h1>
         </div>
         <nav aria-label="Project modules">
-          <button v-for="item in railItems.slice(1, 5)" :key="item.module" type="button" :class="{ active: activeModule === item.module }" :aria-current="activeModule === item.module ? 'page' : undefined" @click="selectModule(item.module)">
+          <button v-for="item in railItems.slice(1, 6)" :key="item.module" type="button" :class="{ active: activeModule === item.module }" :aria-current="activeModule === item.module ? 'page' : undefined" @click="selectModule(item.module)">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path v-for="path in item.iconPaths" :key="path" :d="path" /></svg>{{ item.label }}
           </button>
         </nav>
@@ -618,6 +687,8 @@ watch(() => props.contextPack, (pack) => {
         </div>
         <div v-else class="toon-empty"><strong>回收站目前是空的</strong><p>删除的项目和资产会暂存在这里。</p></div>
       </section>
+
+      <TaskCenter v-else-if="activeModule === 'tasks'" :project-title="selectedProject?.title ?? ''" :state="longformState" :last-refreshed-at="props.longformLastRefreshedAt" :refresh-error="props.longformRefreshError" :polling-failures="props.longformPollingFailures" @refresh="emit('refresh-tasks')" />
 
       <section v-else class="toon-workbench">
         <aside class="toon-inspector">
@@ -676,22 +747,31 @@ watch(() => props.contextPack, (pack) => {
             <article class="toon-flow-node"><header><span>04 · 分镜出口</span><b :class="`tone-${storyboards.length ? 'good' : 'neutral'}`">{{ storyboards.length ? "已连接" : "未开始" }}</b></header><h3>{{ selectedStoryboard?.title || "等待分镜" }}</h3><p>{{ selectedStoryboard?.summary || "完成故事与正文准备后，从这里进入镜头生产。" }}</p><footer>{{ selectedStoryboard?.shots.length || 0 }} 镜头</footer></article>
             </div>
             <section class="toon-longform-panel"><p v-if="longformRequestActive" class="toon-longform-status">{{ longformRequestMessage }}</p>
-              <article>
-                <header><span>LONGFORM PLAN</span><strong>长篇规划</strong></header>
-                <label><span>目标章节数</span><input v-model.number="longformDraft.target_chapter_count" type="number" min="1" max="200" /></label>
-                <label><span>规划补充要求</span><textarea v-model="longformDraft.user_brief" rows="4" placeholder="补充节奏、主线、人物弧光或禁区。" /></label>
-                <button type="button" :disabled="loading" @click="submitSeriesPlan">{{ longformRequestStage === "longform_plan" ? "生成中…" : latestSeriesPlan ? "重新生成规划" : "生成长篇规划" }}</button>
-                <button v-if="latestSeriesPlan" type="button" class="toon-button--dark" @click="emit('go', 'planReader')">查看规划详情</button>
-                <button v-if="latestSeriesPlan && latestSeriesPlan.status !== 'locked'" type="button" class="toon-button--lock" :disabled="loading" @click="emit('lock-series-plan', latestSeriesPlan.id)">锁定长篇概要</button>
-                <b v-else-if="latestSeriesPlan" class="tone-good toon-lock-state">概要已锁定</b>
+              <article class="toon-longform-card" tabindex="0" role="button" :aria-label="latestSeriesPlan ? '打开长篇规划详情' : '生成长篇规划'" @click="emit('go', 'planReader')" @keydown.enter.self.prevent="emit('go', 'planReader')" @keydown.space.self.prevent="emit('go', 'planReader')">
+                <header><span>LONGFORM PLAN</span><div class="toon-card-title"><strong>长篇规划</strong><b :class="`tone-${planStatusTone}`">{{ planStatusLabel }}</b></div></header>
+                <p>{{ latestSeriesPlan ? `${latestSeriesPlan.title} · 目标 ${latestSeriesPlan.target_chapter_count} 章` : "先生成规划后，点击卡片查看详情。" }}</p>
+                <p class="toon-card-hint">{{ latestSeriesPlan ? (latestSeriesPlan.status === "locked" ? "已锁定 · 点击卡片查看规划详情" : "草稿 · 点击卡片查看规划详情") : "点击卡片进入规划详情" }}</p>
+                <label @click.stop><span>目标章节数</span><input v-model.number="longformDraft.target_chapter_count" type="number" min="1" max="200" /></label>
+                <label @click.stop><span>规划补充要求</span><textarea v-model="longformDraft.user_brief" rows="4" placeholder="补充节奏、主线、人物弧光或禁区。" /></label>
+                <div class="toon-longform-actions" @click.stop>
+                  <button type="button" :disabled="loading" @click="submitSeriesPlan">{{ longformRequestStage === "longform_plan" ? "生成中…" : latestSeriesPlan ? "重新生成规划" : "生成长篇规划" }}</button>
+                  <button v-if="latestSeriesPlan" type="button" class="toon-button--dark" @click="emit('go', 'planReader')">查看规划详情</button>
+                  <button v-if="latestSeriesPlan && latestSeriesPlan.status !== 'locked'" type="button" class="toon-button--lock" :disabled="loading" @click="emit('lock-series-plan', latestSeriesPlan.id)">锁定长篇概要</button>
+                  <button v-else-if="latestSeriesPlan" type="button" class="toon-button--lock" :disabled="loading" @click="emit('unlock-series-plan', latestSeriesPlan.id)">解锁规划</button>
+                </div>
               </article>
-              <article>
-                <header><span>CHAPTER DRAFT</span><strong>正文生成</strong></header>
+              <article class="toon-longform-card" tabindex="0" role="button" aria-label="打开正文生成进度与正文" @click="emit('go', 'draftReader')" @keydown.enter.self.prevent="emit('go', 'draftReader')" @keydown.space.self.prevent="emit('go', 'draftReader')">
+                <header><span>CHAPTER DRAFT</span><div class="toon-card-title"><strong>正文生成</strong><b :class="`tone-${batchJobTone}`">{{ batchJobLabel }}</b></div></header>
                 <p>{{ latestSeriesPlan ? `${latestSeriesPlan.title} · ${latestSeriesPlan.target_chapter_count} 章` : "先生成或选择一个长篇规划。" }}</p>
+                <div v-if="latestBatchJob" class="toon-batch-progress" @click.stop role="progressbar" :aria-label="'正文生成进度'" :aria-valuenow="batchProgressPercent" aria-valuemin="0" aria-valuemax="100"><i :style="{ width: `${batchProgressPercent}%` }"></i></div>
+                <p class="toon-card-hint">{{ batchProgressText }} · 点击卡片查看进度与正文</p>
                 <p v-if="latestSeriesPlan && latestSeriesPlan.status !== 'locked'" class="toon-lock-hint">请先锁定长篇概要，再批量生成正文。</p>
-                <div><label><span>起始章</span><input v-model.number="longformDraft.start_chapter_no" type="number" min="1" /></label><label><span>结束章</span><input v-model.number="longformDraft.end_chapter_no" type="number" min="1" /></label></div>
-                <button type="button" :disabled="loading || !latestSeriesPlan || latestSeriesPlan.status !== 'locked'" @click="submitBatchGeneration">{{ longformRequestStage === "longform_batch" ? "生成中…" : "生成正文任务" }}</button>
+                <div @click.stop><label><span>起始章</span><input v-model.number="longformDraft.start_chapter_no" type="number" min="1" /></label><label><span>结束章</span><input v-model.number="longformDraft.end_chapter_no" type="number" min="1" /></label></div>
+                <div class="toon-longform-actions" @click.stop>
+                  <button type="button" :disabled="loading || !latestSeriesPlan || latestSeriesPlan.status !== 'locked'" @click="submitBatchGeneration">{{ longformRequestStage === "longform_batch" ? "生成中…" : "生成正文任务" }}</button>
+                </div>
                 <small v-if="latestBatchJob">最近任务：{{ statusLabel(latestBatchJob.job_status) }} · {{ latestBatchJob.start_chapter_no }}-{{ latestBatchJob.end_chapter_no }} 章</small>
+                <small v-if="draftChapterCount">已生成 {{ draftChapterCount }} 章正文 · 点击卡片阅读</small>
               </article>
               <article>
                 <header><span>REVISION</span><strong>草稿修订</strong></header>
@@ -730,9 +810,9 @@ watch(() => props.contextPack, (pack) => {
                 <form v-if="editingShotId !== null" class="toon-shot-editor" @submit.prevent="saveShot"><header><strong>编辑镜头</strong><button type="button" @click="editingShotId = null">关闭</button></header><label><span>旁白 / 动作</span><textarea v-model="shotDraft.narration_text" rows="3" /></label><label><span>视觉提示词</span><textarea v-model="shotDraft.visual_prompt" rows="5" /></label><div><label><span>时长（秒）</span><input v-model.number="shotDraft.duration_seconds" type="number" min="0.5" max="60" step="0.5" /></label><label><span>状态</span><select v-model="shotDraft.status"><option value="draft">草稿</option><option value="ready">就绪</option><option value="blocked">阻断</option><option value="completed">完成</option></select></label></div><button type="submit" class="toon-button--dark" :disabled="loading">{{ loading ? "保存中..." : "保存镜头" }}</button></form>
               </article>
               <span class="toon-connector">→</span>
-              <article class="toon-frame-panel"><header><div><span>镜头面板</span><h3>{{ selectedStoryboard.shots.length }} 个镜头</h3></div><div class="toon-inline-actions"><button type="button" :disabled="loading" @click="emit('generate-storyboard-voice', selectedStoryboard.id, { voice_role: 'narrator' })">生成旁白</button><button type="button" :disabled="loading || hasActiveVideoTask(selectedStoryboardTasks)" @click="emit('create-video-task', selectedStoryboard.id)">{{ hasActiveVideoTask(selectedStoryboardTasks) ? "生产中" : "创建视频任务" }}</button></div></header><div class="toon-frame-grid"><div v-for="shot in selectedStoryboard.shots" :key="shot.id"><img v-if="shotAsset(shot)?.uri" :src="shotAsset(shot)?.uri" :alt="`${shotLabel(shot)} 首帧`" /><span v-else>未生成</span><small>{{ shotLabel(shot) }}</small><button type="button" :disabled="loading" @click="emit('generate-shot-first-frame', selectedStoryboard.id, shot.id)">{{ shotAsset(shot) ? "重新生成" : "生成首帧" }}</button></div></div></article>
+              <article class="toon-frame-panel"><header><div><span>镜头面板</span><h3>{{ selectedStoryboard.shots.length }} 个镜头</h3></div><div class="toon-inline-actions"><button type="button" :disabled="loading" @click="emit('generate-storyboard-voice', selectedStoryboard.id, { voice_role: 'narrator' })">生成旁白</button><button type="button" :disabled="loading || hasActiveVideoTask(selectedStoryboardTasks)" @click="emit('create-video-task', selectedStoryboard.id)">{{ hasActiveVideoTask(selectedStoryboardTasks) ? "生产中" : "创建视频任务" }}</button></div></header><div class="toon-frame-grid"><div v-for="shot in selectedStoryboard.shots" :key="shot.id"><img v-if="shotAsset(shot)?.uri" :src="shotAsset(shot)?.uri" :alt="`${shotLabel(shot)} 首帧`" /><span v-else>未生成</span><small>{{ shotLabel(shot) }}</small><button type="button" :disabled="loading" @click="emit('generate-shot-first-frame', selectedStoryboard.id, shot.id)">{{ shotAsset(shot) ? "重新生成" : "生成首帧" }}</button></div></div><section v-if="selectedStoryboardTasks.length" class="toon-task-card"><header><strong>视频任务</strong><small>{{ selectedStoryboardTasks.length }} 条记录</small></header><article v-for="task in selectedStoryboardTasks" :key="task.id"><div class="toon-inline-actions"><span>视频任务 #{{ task.id }}</span><b :class="`tone-${statusTone(task.task_status)}`">{{ statusLabel(task.task_status) }}</b><button v-if="task.task_status === 'failed'" type="button" :disabled="loading" @click="emit('create-video-task', selectedStoryboard.id)">重新创建任务</button><button type="button" :disabled="loading" @click="confirmDeleteVideoTask(task.id)">删除任务</button></div><p v-if="task.error_message" class="toon-task-error">{{ task.error_message }}</p></article></section></article>
             </template>
-            <div v-else class="toon-empty toon-empty--canvas"><strong>Track 1 · 分镜</strong><p>生成或导入分镜后，这里会形成可审核的镜头生产轨道。</p></div>
+            <div v-else class="toon-empty toon-empty--canvas"><strong>还没有分镜</strong><p>故事资料已经进入项目，但视频生产需要先形成可审核的镜头清单。</p><div class="toon-context-actions"><button type="button" class="toon-button--dark" :disabled="loading" @click="emit('create-storyboard', { title: `${selectedProject?.title || '项目'} 分镜`, reference_video_brief: selectedProject?.world_brief || selectedProject?.writing_rules || '' })">生成分镜</button><button type="button" :disabled="loading" @click="focusStoryboardImport">导入分镜 JSON</button></div><form class="toon-storyboard-import" @submit.prevent="submitStoryboardImport"><label><span>分镜 JSON 合同</span><textarea v-model="storyboardImportDraft" rows="10" placeholder='{"title":"第一集分镜","shots":[{"visual_prompt":"夜晚的街道，主角回头","duration_seconds":4}]}' /></label><p v-if="storyboardImportError" class="toon-task-error">{{ storyboardImportError }}</p><button type="submit" :disabled="loading || !storyboardImportDraft.trim()">校验并导入</button></form></div>
           </div>
 
           <form v-else-if="activeModule === 'settings' && selectedProject" class="toon-settings" @submit.prevent="saveProjectSettings()"><header><span>PROJECT SETTINGS</span><h3>{{ selectedProject.title }}</h3></header><label><span>项目标题</span><input v-model="settingsDraft.title" maxlength="120" /></label><label><span>题材 / 风格</span><input v-model="settingsDraft.genre" maxlength="80" /></label><label><span>故事资料</span><textarea v-model="settingsDraft.world_brief" rows="7" /></label><label><span>改编要求</span><textarea v-model="settingsDraft.writing_rules" rows="6" /></label><footer><button type="submit" class="toon-button--dark" :disabled="loading">{{ loading ? "保存中..." : "保存设置" }}</button></footer></form>
@@ -744,7 +824,7 @@ watch(() => props.contextPack, (pack) => {
           <section><span>来源与预检</span><dl><div><dt>来源模式</dt><dd>{{ sourceMode }}</dd></div><div><dt>预检状态</dt><dd :class="`tone-text-${statusTone(String(preflight?.readiness || ''))}`">{{ preflight ? statusLabel(String(preflight.readiness)) : "尚未执行" }}</dd></div><div><dt>阻断 / 风险</dt><dd>{{ preflightFailures.length }} / {{ preflightWarnings.length }}</dd></div></dl><div v-if="preflightFailures.length || preflightWarnings.length" class="toon-issue-list"><button v-for="issue in [...preflightFailures, ...preflightWarnings].slice(0, 5)" :key="issue" type="button" @click="focusIssueShot(issue)"><b :class="`tone-${preflightFailures.includes(issue) ? 'bad' : 'warn'}`">{{ preflightFailures.includes(issue) ? "阻断" : "风险" }}</b><span>{{ issue }}</span><small v-if="issueShotNo(issue)">定位镜头</small></button></div><button v-if="selectedStoryboard" type="button" class="toon-agent__primary" :disabled="loading" @click="emit('prepare-video-production', selectedStoryboard.id, { generate_character_turnarounds: true, generate_audio_scripts: true, generate_dialogue_audio: false, create_video_task: false })">执行生产预检</button></section>
           <section v-if="reviewFindings.length"><span>质量复查</span><article v-for="finding in reviewFindings.slice(0, 4)" :key="String(finding.finding_id)"><b :class="`tone-${finding.severity === 'blocking' ? 'bad' : 'warn'}`">{{ finding.severity === "blocking" ? "阻断" : "建议" }}</b><strong>{{ finding.title }}</strong><p>{{ finding.detail }}</p><button type="button" @click="focusIssueShot(finding.finding_id || finding.title)">{{ reworkLevelLabel(finding.recommended_rework_level) }}</button></article></section>
           <section><span>运行记录</span><article v-for="event in recentEvents" :key="event.id"><time>{{ formatDateTime(event.created_at) }}</time><strong>{{ event.message }}</strong></article><p v-if="!recentEvents.length">当前项目还没有生产运行记录。</p></section>
-          <section v-if="selectedProject"><span>历史证据</span><details ref="evidencePanel" class="toon-evidence" @toggle="onEvidenceToggle"><summary>打开项目级生成证据（只读）</summary><div v-if="generationAttemptsLoading" class="toon-evidence-note">正在读取生成证据…</div><div v-else-if="generationAttemptsError" class="toon-evidence-note toon-evidence-note--error"><strong>读取失败</strong><p>{{ generationAttemptsError }}</p><button type="button" @click="retryEvidenceLoad()">重试</button></div><p v-else-if="!generationAttempts.length" class="toon-evidence-note">该项目还没有生成证据记录。</p><template v-else><article v-for="attempt in generationAttempts" :key="attempt.id" class="toon-evidence-card"><header><strong>{{ attemptStageLabel(attempt.stage) }} #{{ attempt.id }}</strong><b :class="`tone-${statusTone(attempt.status)}`">{{ statusLabel(attempt.status) }}</b></header><p v-if="attempt.provider || attempt.model">{{ [attempt.provider, attempt.model].filter(Boolean).join(" / ") }} · {{ formatDateTime(attempt.created_at) }}</p><p v-if="attempt.quality_outcome || attempt.cost_estimate_usd != null"><span v-if="attempt.quality_outcome">质量判定：{{ attempt.quality_outcome }}</span><span v-if="attempt.quality_outcome && attempt.cost_estimate_usd != null"> · </span><span v-if="attempt.cost_estimate_usd != null">预估成本：${{ attempt.cost_estimate_usd }}</span></p><p v-if="attempt.error_message" class="toon-task-error"><strong>{{ attemptErrorLabel(attempt) }}</strong>{{ attempt.error_message }}</p><details><summary>参数与用量</summary><pre>{{ compactJson({ parameters: attempt.parameters, usage: attempt.usage }) }}</pre></details><details v-if="hasAttemptEvidence(attempt)"><summary>校验与输入版本</summary><pre>{{ compactJson(attemptEvidenceSummary(attempt)) }}</pre></details></article><button type="button" @click="retryEvidenceLoad(true)">刷新</button></template></details></section><section v-if="selectedStoryboardTasks.length"><span>视频任务</span><article v-for="task in selectedStoryboardTasks" :key="task.id" class="toon-task-card"><header><strong>任务 #{{ task.id }}</strong><b :class="`tone-${statusTone(task.task_status)}`">{{ statusLabel(task.task_status) }}</b></header><div class="toon-task-progress" role="progressbar" :aria-label="`视频任务 #${task.id} 进度`" :aria-valuenow="taskProgressPercent(task)" aria-valuemin="0" aria-valuemax="100"><i :style="{ width: `${taskProgressPercent(task)}%` }"></i></div><p>{{ taskProgressText(task) }}</p><p v-if="taskFailureText(task)" class="toon-task-error"><strong>失败原因</strong>{{ taskFailureText(task) }}</p><footer><a v-if="task.output_uri" :href="task.output_uri" target="_blank" rel="noreferrer">查看输出</a><button v-if="['failed', 'blocked'].includes(task.task_status) && selectedStoryboard" type="button" :disabled="loading || hasActiveVideoTask(selectedStoryboardTasks)" @click="emit('create-video-task', selectedStoryboard.id)">重新创建任务</button><button type="button" :disabled="loading || task.task_status === 'running'" @click="confirmDeleteVideoTask(task.id)">删除任务</button></footer></article></section>
+          <section v-if="selectedProject"><span>历史证据</span><details ref="evidencePanel" class="toon-evidence" @toggle="onEvidenceToggle"><summary>打开项目级生成证据（只读）</summary><div v-if="generationAttemptsLoading" class="toon-evidence-note">正在读取生成证据…</div><div v-else-if="generationAttemptsError" class="toon-evidence-note toon-evidence-note--error"><strong>读取失败</strong><p>{{ generationAttemptsError }}</p><button type="button" @click="retryEvidenceLoad()">重试</button></div><p v-else-if="!generationAttempts.length" class="toon-evidence-note">该项目还没有生成证据记录。</p><template v-else><article v-for="attempt in generationAttempts" :key="attempt.id" class="toon-evidence-card"><header><strong>{{ attemptStageLabel(attempt.stage) }} #{{ attempt.id }}</strong><b :class="`tone-${statusTone(attempt.status)}`">{{ statusLabel(attempt.status) }}</b></header><p v-if="attempt.provider || attempt.model">{{ [attempt.provider, attempt.model].filter(Boolean).join(" / ") }} · {{ formatDateTime(attempt.created_at) }}</p><p v-if="attempt.quality_outcome || attempt.cost_estimate_usd != null"><span v-if="attempt.quality_outcome">质量判定：{{ attempt.quality_outcome }}</span><span v-if="attempt.quality_outcome && attempt.cost_estimate_usd != null"> · </span><span v-if="attempt.cost_estimate_usd != null">预估成本：${{ attempt.cost_estimate_usd }}</span></p><p v-if="attempt.error_message" class="toon-task-error"><strong>{{ attemptErrorLabel(attempt) }}</strong>{{ attempt.error_message }}</p><details><summary>参数与用量</summary><pre>{{ compactJson({ parameters: attempt.parameters, usage: attempt.usage }) }}</pre></details><details v-if="hasAttemptEvidence(attempt)"><summary>校验与输入版本</summary><pre>{{ compactJson(attemptEvidenceSummary(attempt)) }}</pre></details></article><button type="button" @click="retryEvidenceLoad(true)">刷新</button></template></details></section>
         </aside>
       </section>
     </main>
@@ -847,6 +927,15 @@ dt { color: var(--toon-ink-muted); font-size: .7rem; } dd { margin: 0; font-weig
 @media (max-width: 460px) { .toon-rail { grid-template-columns: repeat(7, 62px); }.toon-topbar { gap: 12px; }.toon-heading h1 { font-size: 1.15rem; }.toon-user { width: 100%; overflow-x: auto; }.toon-user button { min-height: 44px; }.toon-canvas-toolbar { align-items: flex-start; }.toon-canvas-toolbar > div:last-child { flex-shrink: 0; }.toon-project-grid { grid-template-columns: minmax(0, 1fr); }.toon-create form { padding: 14px; } }
 
 .toon-longform-status { grid-column: 1 / -1; margin: 0; padding: 8px 10px; border-radius: 8px; background: rgba(213,91,141,.08); color: var(--toon-rose-deep); font-size: .74rem; font-weight: 700; animation: toon-pulse 1.2s ease-in-out infinite alternate; }
+.toon-longform-card { cursor: pointer; transition: border-color .18s ease, box-shadow .18s ease; }
+.toon-longform-card:hover { border-color: color-mix(in oklab, var(--toon-rose) 42%, transparent); box-shadow: 0 16px 34px rgba(213,91,141,.16); }
+.toon-longform-card:focus-visible { outline: 2px solid color-mix(in oklab, var(--toon-rose-deep) 66%, white); outline-offset: 2px; }
+.toon-card-title { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.toon-card-title b { padding: 3px 10px; border-radius: 999px; font-size: .7rem; font-weight: 800; white-space: nowrap; }
+.toon-card-hint { min-height: auto; color: var(--toon-ink-muted); font-size: .7rem; font-weight: 700; }
+.toon-longform-actions { display: flex !important; gap: 8px; flex-wrap: wrap; }
+.toon-batch-progress { display: block !important; height: 8px; overflow: hidden; border-radius: 999px; background: rgba(213,91,141,.12); }
+.toon-batch-progress i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--toon-rose), var(--toon-rose-deep)); transition: width .4s ease; }
 @keyframes toon-pulse { from { opacity: .55; } to { opacity: 1; } }
 .plan-reader-layer { position: fixed; inset: 0; z-index: 60; overflow-y: auto; background: #fdf3f8; }
 </style>

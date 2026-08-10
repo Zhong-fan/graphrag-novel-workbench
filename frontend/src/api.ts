@@ -41,6 +41,7 @@ import type {
   BatchGenerationJob,
   BatchGenerationPayload,
   CreateStoryboardPayload,
+  StoryboardImportPayload,
   ContextPack,
   ContextPackBuildPayload,
   GenerateSeriesPlanPayload,
@@ -399,6 +400,11 @@ export const api = {
       method: "POST",
       token,
     }),
+  unlockSeriesPlan: (token: string, projectId: number, seriesPlanId: number) =>
+    request<SeriesPlan>(`/api/projects/${projectId}/series-plans/${seriesPlanId}/unlock`, {
+      method: "POST",
+      token,
+    }),
   restoreSeriesPlanVersion: (token: string, projectId: number, seriesPlanId: number, versionId: number) =>
     request<SeriesPlan>(`/api/projects/${projectId}/series-plans/${seriesPlanId}/versions/${versionId}/restore`, {
       method: "POST",
@@ -434,6 +440,12 @@ export const api = {
     }),
   createStoryboard: (token: string, projectId: number, payload: CreateStoryboardPayload) =>
     request<Storyboard>(`/api/projects/${projectId}/storyboards`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+  importStoryboard: (token: string, projectId: number, payload: StoryboardImportPayload) =>
+    request<Storyboard>(`/api/projects/${projectId}/storyboards/import`, {
       method: "POST",
       token,
       body: JSON.stringify(payload),

@@ -39,6 +39,7 @@ from .contracts import (
     CanonicalizeDraftVersionRequest,
     ChapterOutlineOut,
     CreateStoryboardRequest,
+    StoryboardImportRequest,
     CreateVideoTaskRequest,
     GenerateSeriesPlanRequest,
     LockChapterOutlinesRequest,
@@ -229,6 +230,28 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
             outline.status = "outline_locked"
             if outline.locked_at is None:
                 outline.locked_at = datetime.utcnow()
+        db.commit()
+        db.refresh(plan)
+        return _series_plan_out(plan)
+
+    @router.post("/api/projects/{project_id}/series-plans/{series_plan_id}/unlock", response_model=SeriesPlanOut)
+    def unlock_series_plan(
+        project_id: int,
+        series_plan_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> SeriesPlanOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        plan = _series_plan_or_404(db, project.id, series_plan_id)
+        logger.info("???????user_id=%s project_id=%s series_plan_id=%s", current_user.id, project.id, plan.id)
+        plan.status = "draft"
+        for arc in plan.arc_plans:
+            if arc.status != "draft":
+                arc.status = "draft"
+        for outline in plan.chapter_outlines:
+            if outline.status == "outline_locked":
+                outline.status = "outline_draft"
+                outline.locked_at = None
         db.commit()
         db.refresh(plan)
         return _series_plan_out(plan)
@@ -609,6 +632,60 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _storyboard_out(storyboard)
+
+    @router.post("/api/projects/{project_id}/storyboards/import", response_model=StoryboardOut)
+    def import_storyboard(
+        project_id: int,
+        payload: StoryboardImportRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> StoryboardOut:
+        """Import a validated storyboard contract without invoking a provider."""
+        project = _project_or_404(db, current_user.id, project_id)
+        existing = db.scalar(
+            select(Storyboard).where(
+                Storyboard.project_id == project.id,
+                Storyboard.status.in_(("queued", "running")),
+            )
+        )
+        if existing is not None:
+            raise HTTPException(status_code=409, detail=f"已有进行中的分镜任务（#{existing.id}），请等待完成后再导入。")
+        storyboard = Storyboard(
+            project=project,
+            title=payload.title.strip(),
+            source_chapter_ids_json=json_dumps(payload.source_chapter_ids),
+            summary=payload.summary.strip(),
+            status="draft",
+            error_message="",
+        )
+        db.add(storyboard)
+        db.flush()
+        for index, shot_payload in enumerate(payload.shots, start=1):
+            db.add(
+                StoryboardShot(
+                    storyboard=storyboard,
+                    shot_no=shot_payload.shot_no or index,
+                    narration_text=shot_payload.narration_text.strip(),
+                    visual_prompt=shot_payload.visual_prompt.strip(),
+                    character_refs_json=json_dumps(shot_payload.character_refs),
+                    scene_refs_json=json_dumps(shot_payload.scene_refs),
+                    meta_json=json_dumps({"source_mode": "json_import", "import_provenance": "developer_json", "audio_script": shot_payload.audio_script, "continuity": shot_payload.continuity}),
+                    duration_seconds=shot_payload.duration_seconds,
+                    status="draft",
+                )
+            )
+        db.add(
+            TaskEvent(
+                project_id=project.id,
+                storyboard=storyboard,
+                event_type="storyboard_imported",
+                message="分镜 JSON 导入完成。",
+                payload_json=json_dumps({"source_mode": "json_import", "shot_count": len(payload.shots), "provider_generation": False}),
+            )
+        )
+        db.commit()
+        db.refresh(storyboard)
         return _storyboard_out(storyboard)
 
     @router.get("/api/projects/{project_id}/next-action")

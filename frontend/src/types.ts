@@ -15,7 +15,8 @@ export type ViewKey =
   | "generationTrace"
   | "novelEditor"
   | "auth"
-  | "planReader";
+  | "planReader"
+  | "draftReader";
 
 export interface BootstrapResponse {
   service_name: string;
@@ -727,6 +728,24 @@ export interface CreateStoryboardPayload {
   reference_video_brief?: string;
   key_image_strategy?: string;
   reference_image_asset_ids?: number[];
+}
+
+export interface StoryboardImportShotPayload {
+  shot_no?: number;
+  narration_text?: string;
+  visual_prompt: string;
+  character_refs?: unknown[];
+  scene_refs?: unknown[];
+  audio_script?: Record<string, unknown>;
+  continuity?: Record<string, unknown>;
+  duration_seconds?: number;
+}
+
+export interface StoryboardImportPayload {
+  title: string;
+  summary?: string;
+  source_chapter_ids?: number[];
+  shots: StoryboardImportShotPayload[];
 }
 
 export interface ReviseDraftPayload {

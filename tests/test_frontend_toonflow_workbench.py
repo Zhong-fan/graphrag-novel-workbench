@@ -27,7 +27,7 @@ class FrontendToonflowWorkbenchTests(unittest.TestCase):
     def test_legacy_workspace_components_are_removed(self) -> None:
         remaining = sorted(path.name for path in WORKSPACE_DIR.glob("*.vue"))
 
-        self.assertEqual(remaining, ["ToonflowWorkbench.vue"])
+        self.assertEqual(remaining, ["DraftReader.vue", "SeriesPlanReader.vue", "TaskCenter.vue", "ToonflowWorkbench.vue"])
 
     def test_toonflow_workbench_matches_project_canvas_model(self) -> None:
         source = TOONFLOW_WORKBENCH.read_text(encoding="utf-8")
@@ -245,6 +245,19 @@ class FrontendToonflowWorkbenchTests(unittest.TestCase):
             '@canonicalize-draft-version="store.canonicalizeDraftVersion"',
         ]:
             self.assertIn(binding, app_source)
+
+    def test_longform_cards_open_readers_and_support_lock_unlock(self) -> None:
+        source = TOONFLOW_WORKBENCH.read_text(encoding="utf-8")
+        app_source = APP_VUE.read_text(encoding="utf-8")
+
+        self.assertIn("DraftReader", source)
+        self.assertIn("emit('go', 'planReader')", source)
+        self.assertIn("emit('go', 'draftReader')", source)
+        self.assertIn('(e: "unlock-series-plan"', source)
+        self.assertIn("解锁规划", source)
+        self.assertIn("点击卡片查看进度与正文", source)
+        self.assertIn("toon-batch-progress", source)
+        self.assertIn('@unlock-series-plan="store.unlockSeriesPlan"', app_source)
 
     def test_agent_panel_surfaces_generation_transparency(self) -> None:
         source = TOONFLOW_WORKBENCH.read_text(encoding="utf-8")

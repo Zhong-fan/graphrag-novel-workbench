@@ -38,6 +38,7 @@ import type {
   User,
   BatchGenerationPayload,
   CreateStoryboardPayload,
+  StoryboardImportPayload,
   GenerateSeriesPlanPayload,
   LongformState,
   SubmitOutlineFeedbackPayload,
@@ -115,6 +116,10 @@ export const useWorkbenchStore = defineStore("workbench", () => {
   let generationProgressTimer: number | null = null;
   let longformPollingTimer: number | null = null;
   let longformPollingProjectId: number | null = null;
+  let longformLoadSequence = 0;
+  const longformRefreshError = ref("");
+  const longformLastRefreshedAt = ref<string | null>(null);
+  const longformPollingFailures = ref(0);
 
   const isAuthenticated = computed(() => Boolean(token.value && currentUser.value));
   const currentStoryboard = computed(() => longformState.value.storyboards[0] ?? null);
@@ -906,16 +911,25 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     if (!token.value) return;
     const targetProjectId = projectId ?? activeProject.value?.project.id;
     if (!targetProjectId) return;
+    const requestSequence = ++longformLoadSequence;
     try {
-      longformState.value = await api.longformState(token.value, targetProjectId);
+      const nextState = await api.longformState(token.value, targetProjectId);
+      if (requestSequence !== longformLoadSequence || activeProject.value?.project.id !== targetProjectId) return;
+      longformState.value = nextState;
+      longformRefreshError.value = "";
+      longformPollingFailures.value = 0;
+      longformLastRefreshedAt.value = new Date().toISOString();
       if (hasActiveLongformJobs()) {
         startLongformPolling(targetProjectId);
       } else {
         stopLongformPolling();
       }
     } catch (err) {
+      if (requestSequence !== longformLoadSequence || activeProject.value?.project.id !== targetProjectId) return;
+      longformPollingFailures.value += 1;
+      longformRefreshError.value = err instanceof Error ? err.message : "后台任务状态刷新失败。";
       if (!options.silent) {
-        error.value = err instanceof Error ? err.message : "加载长篇流水线失败。";
+        error.value = longformRefreshError.value;
       }
     }
   }
@@ -1175,6 +1189,24 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
+  async function unlockSeriesPlan(seriesPlanId: number) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const plan = await api.unlockSeriesPlan(token.value, activeProject.value.project.id, seriesPlanId);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "概要已解锁，可以继续调整规划。";
+      return plan;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "解锁概要失败。";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
   async function restoreSeriesPlanVersion(seriesPlanId: number, versionId: number) {
     if (!token.value || !activeProject.value) return null;
     loading.value = true;
@@ -1307,6 +1339,24 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       return null;
     } finally {
       finishLongformRequest();
+      loading.value = false;
+    }
+  }
+
+  async function importStoryboard(payload: StoryboardImportPayload) {
+    if (!token.value || !activeProject.value) return null;
+    loading.value = true;
+    error.value = "";
+    success.value = "";
+    try {
+      const storyboard = await api.importStoryboard(token.value, activeProject.value.project.id, payload);
+      await loadLongformState(activeProject.value.project.id);
+      success.value = "分镜 JSON 已导入。";
+      return storyboard;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "导入分镜失败。";
+      return null;
+    } finally {
       loading.value = false;
     }
   }
@@ -1786,6 +1836,9 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     restoreTrashItem,
     trashDirtyEvolution,
     loadLongformState,
+    longformRefreshError,
+    longformLastRefreshedAt,
+    longformPollingFailures,
     loadGenerationAttempts,
     loadReferenceImages,
     discoverReferenceImages,
@@ -1793,6 +1846,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     generateSeriesPlan,
     submitOutlineFeedback,
     lockSeriesPlan,
+    unlockSeriesPlan,
     restoreSeriesPlanVersion,
     runBatchGeneration,
     retryBatchGeneration,
@@ -1800,6 +1854,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     resumeBatchGeneration,
     cancelBatchGeneration,
     createStoryboard,
+    importStoryboard,
     createImageFirstStoryboard,
     createBriefStoryboard,
     reviseDraftVersion,

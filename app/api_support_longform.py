@@ -496,6 +496,10 @@ def _storyboard_progress(storyboard: Storyboard, events: list[TaskEvent]) -> dic
     latest_payload = json_loads_object(latest_event.payload_json) if latest_event is not None else {}
     queued_event = next((item for item in events if item.event_type == "storyboard_queued"), None)
     queued_payload = json_loads_object(queued_event.payload_json) if queued_event is not None else {}
+    import_event = next((item for item in events if item.event_type == "storyboard_imported"), None)
+    if queued_event is None and import_event is not None:
+        queued_payload = json_loads_object(import_event.payload_json)
+        queued_payload.setdefault("source_mode", "json_import")
     preflight_event = next(
         (
             item
@@ -530,6 +534,8 @@ def _storyboard_progress(storyboard: Storyboard, events: list[TaskEvent]) -> dic
         current_step = "storyboard_parse"
     elif last_event_type == "storyboard_completed":
         current_step = "storyboard_done"
+    elif last_event_type == "storyboard_imported":
+        current_step = "storyboard_imported"
     progress = {
         "stage": storyboard.status,
         "current_step": current_step,

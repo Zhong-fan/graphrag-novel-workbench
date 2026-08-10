@@ -887,6 +887,24 @@ class CreateStoryboardRequest(BaseModel):
     reference_image_asset_ids: list[int] = Field(default_factory=list, max_length=50)
 
 
+class StoryboardImportShotRequest(BaseModel):
+    shot_no: int | None = Field(default=None, ge=1, le=10000)
+    narration_text: str = Field(default="", max_length=8000)
+    visual_prompt: str = Field(..., min_length=1, max_length=8000)
+    character_refs: list[Any] = Field(default_factory=list)
+    scene_refs: list[Any] = Field(default_factory=list)
+    audio_script: dict[str, Any] = Field(default_factory=dict)
+    continuity: dict[str, Any] = Field(default_factory=dict)
+    duration_seconds: float = Field(default=4, ge=0.5, le=60)
+
+
+class StoryboardImportRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    summary: str = Field(default="", max_length=4000)
+    source_chapter_ids: list[int] = Field(default_factory=list, max_length=12)
+    shots: list[StoryboardImportShotRequest] = Field(..., min_length=1, max_length=200)
+
+
 class StoryboardShotOut(BaseModel):
     id: int
     storyboard_id: int

@@ -14,6 +14,20 @@
   align-items: start;
 }
 
+.toon-task-center { display: grid; gap: 18px; align-content: start; padding: 24px; }
+.toon-task-center__toolbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--toon-line); }
+.toon-task-center__toolbar small, .toon-task-center__item footer { color: var(--toon-ink-muted); font-size: .72rem; }
+.toon-task-center__list { display: grid; gap: 10px; max-width: 900px; }
+.toon-task-center__item { display: grid; gap: 9px; padding: 14px; border: 1px solid var(--toon-line); border-radius: 10px; background: rgba(255,255,255,.66); }
+.toon-task-center__item header, .toon-task-center__item footer { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.toon-task-center__item header > div { display: grid; gap: 3px; }
+.toon-task-center__item header span { color: var(--toon-ink-muted); font-size: .68rem; font-weight: 800; letter-spacing: .08em; }
+.toon-task-center__item h3, .toon-task-center__item p { margin: 0; }
+.toon-task-center__item p { color: var(--toon-ink-soft); font-size: .8rem; line-height: 1.55; }
+.toon-task-center__item footer { justify-content: flex-start; }
+.toon-task-center__stale { display: grid; gap: 4px; max-width: 900px; padding: 12px; border: 1px solid #e5b9b5; border-radius: 9px; background: #fff1ef; color: #8f211c; }
+.toon-task-center__stale small { color: #8f211c; }
+
 .sidebar,
 .editor-sidebar {
   position: sticky;
