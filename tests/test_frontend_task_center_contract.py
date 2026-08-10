@@ -30,6 +30,8 @@ class FrontendTaskCenterContractTests(unittest.TestCase):
         self.assertIn('@refresh-tasks="store.loadLongformState(activeProject?.project.id)"', app)
         self.assertIn("@refresh=\"emit('refresh-tasks')\"", workbench)
         self.assertIn("pollingFailures", task_center)
+        self.assertIn("chapter_tasks", task_center)
+        self.assertIn("章节任务", task_center)
         self.assertIn("longformLoadSequence", store)
         self.assertIn("activeProject.value?.project.id !== targetProjectId", store)
         self.assertNotIn("v-if=\"selectedStoryboardTasks.length\" class=\"toon-agent", workbench)

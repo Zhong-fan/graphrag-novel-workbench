@@ -14,12 +14,25 @@ const emit = defineEmits<{ (e: "refresh"): void }>();
 const filter = ref<"all" | "active" | "failed" | "completed">("all");
 
 const tasks = computed(() => {
-  const items: Array<{ id: string; kind: string; title: string; status: string; message: string; updated: string; events: TaskEvent[] }> = [];
+  const items: Array<{ id: string; kind: string; title: string; status: string; message: string; updated: string; events: TaskEvent[]; parent?: string }> = [];
   for (const storyboard of props.state.storyboards) {
     items.push({ id: `storyboard-${storyboard.id}`, kind: "分镜", title: storyboard.title, status: storyboard.status, message: storyboard.error_message || String(storyboard.progress.last_event_message || "等待分镜任务进度"), updated: storyboard.updated_at, events: storyboard.events });
   }
   for (const job of props.state.batch_jobs) {
-    items.push({ id: `batch-${job.id}`, kind: "正文批量", title: `第 ${job.start_chapter_no}-${job.end_chapter_no} 章`, status: job.job_status, message: String(job.result_summary.error_message || "等待正文任务进度"), updated: job.updated_at, events: job.events });
+    const groupId = `batch-${job.id}`;
+    items.push({ id: groupId, kind: "正文任务组", title: `第 ${job.start_chapter_no}-${job.end_chapter_no} 章`, status: job.job_status, message: String(job.result_summary.error_message || "等待正文任务进度"), updated: job.updated_at, events: job.events });
+    for (const chapter of job.chapter_tasks) {
+      items.push({
+        id: `chapter-task-${chapter.id}`,
+        kind: "章节任务",
+        title: `第 ${chapter.chapter_no} 章`,
+        status: chapter.status,
+        message: chapter.error_message || (chapter.status === "waiting_for_dependency" ? "等待前置章节完成" : "等待章节任务进度"),
+        updated: chapter.updated_at,
+        events: [],
+        parent: groupId,
+      });
+    }
   }
   for (const task of props.state.video_tasks) {
     items.push({ id: `video-${task.id}`, kind: "视频", title: `视频任务 #${task.id}`, status: task.task_status, message: task.error_message || String(task.progress.message || task.progress.current_step || "等待视频任务进度"), updated: task.updated_at, events: task.events });
@@ -38,11 +51,12 @@ function statusTone(status: string) {
   if (["failed", "blocked", "canceled", "cancelled"].includes(status)) return "bad";
   if (["queued", "running", "retry_queued", "pause_requested", "cancel_requested"].includes(status)) return "warn";
   if (["completed", "draft", "video_completed"].includes(status)) return "good";
+  if (status === "waiting_for_dependency") return "warn";
   return "neutral";
 }
 function statusLabel(status: string) {
-  const labels: Record<string, string> = { queued: "排队中", running: "执行中", completed: "已完成", failed: "失败", blocked: "已阻断", canceled: "已取消", cancelled: "已取消", draft: "可继续", video_completed: "已完成" };
-  return labels[status] || status || "未知";
+  const labels: Record<string, string> = { queued: "排队中", running: "执行中", waiting_for_dependency: "等待前置章节", completed: "已完成", failed: "失败", blocked: "已阻断", canceled: "已取消", cancelled: "已取消", draft: "可继续", video_completed: "已完成" };
+  return labels[status] || (status ? "未知状态" : "未知");
 }
 function formatTime(value: string | null) {
   return value ? new Date(value).toLocaleString() : "尚未刷新";
@@ -62,7 +76,7 @@ function formatTime(value: string | null) {
     <div v-if="refreshError" class="toon-task-center__stale"><strong>状态刷新异常</strong><span>{{ refreshError }}</span><small>已连续失败 {{ pollingFailures }} 次；任务本身未被标记为失败。</small></div>
     <div v-if="visibleTasks.length" class="toon-task-center__list">
       <article v-for="task in visibleTasks" :key="task.id" class="toon-task-center__item">
-        <header><div><span>{{ task.kind }}</span><h3>{{ task.title }}</h3></div><b :class="`tone-${statusTone(task.status)}`">{{ statusLabel(task.status) }}</b></header>
+        <header><div><span>{{ task.kind }}<small v-if="task.parent"> · 任务组内</small></span><h3>{{ task.title }}</h3></div><b :class="`tone-${statusTone(task.status)}`">{{ statusLabel(task.status) }}</b></header>
         <p>{{ task.message }}</p>
         <footer><small>更新时间：{{ formatTime(task.updated) }}</small><small>{{ task.events.length }} 条事件</small></footer>
       </article>

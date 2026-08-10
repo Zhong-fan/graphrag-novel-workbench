@@ -93,8 +93,7 @@ const emit = defineEmits<{
   (e: "run-batch-generation", payload: BatchGenerationPayload): void;
   (e: "revise-draft-version", draftVersionId: number, payload: ReviseDraftPayload): void;
   (e: "canonicalize-draft-version", draftVersionId: number, payload: CanonicalizeDraftPayload): void;
-  (e: "lock-series-plan", seriesPlanId: number): void;
-  (e: "unlock-series-plan", seriesPlanId: number): void;
+  (e: "confirm-series-plan", seriesPlanId: number): void;
   (e: "update-storyboard-shot", storyboardId: number, shotId: number, payload: UpdateStoryboardShotPayload): void;
   (e: "create-storyboard-shot", storyboardId: number, payload: CreateStoryboardShotPayload): void;
   (e: "delete-storyboard-shot", storyboardId: number, shotId: number): void;
@@ -169,16 +168,13 @@ const selectedStoryboardAssets = computed(() =>
   selectedStoryboard.value ? mediaAssets.value.filter((asset) => asset.storyboard_id === selectedStoryboard.value?.id) : mediaAssets.value,
 );
 const latestSeriesPlan = computed(() => props.longformState.series_plans[0] ?? null);
-function onReaderLock(planId: number) {
-  emit("lock-series-plan", planId);
-}
-function onReaderUnlock(planId: number) {
-  emit("unlock-series-plan", planId);
+function onReaderConfirm(planId: number) {
+  emit("confirm-series-plan", planId);
 }
 const latestDraftVersion = computed(() => props.longformState.draft_versions[0] ?? null);
 const latestBatchJob = computed(() => props.longformState.batch_jobs[0] ?? null);
 const draftChapterCount = computed(() => new Set(props.longformState.draft_versions.map((draft) => draft.chapter_no)).size);
-const planStatusLabel = computed(() => latestSeriesPlan.value ? (latestSeriesPlan.value.status === "locked" ? "已锁定" : "草稿") : "未生成");
+const planStatusLabel = computed(() => latestSeriesPlan.value ? (latestSeriesPlan.value.status === "locked" ? "已确认" : "草稿") : "未生成");
 const planStatusTone = computed(() => latestSeriesPlan.value ? (latestSeriesPlan.value.status === "locked" ? "good" : "warn") : "neutral");
 const batchJobLabel = computed(() => latestBatchJob.value ? statusLabel(latestBatchJob.value.job_status) : (draftChapterCount.value ? "有正文" : "未开始"));
 const batchJobTone = computed(() => latestBatchJob.value ? statusTone(latestBatchJob.value.job_status) : (draftChapterCount.value ? "good" : "neutral"));
@@ -373,9 +369,9 @@ function submitDraftCanonicalize() {
 function statusLabel(status: string | undefined) {
   const labels: Record<string, string> = {
     pending: "等待中", queued: "排队中", retry_queued: "重试排队中", running: "生产中", completed: "已完成",
-    failed: "失败", blocked: "已阻断", locked: "已锁定", draft: "草稿",
+    failed: "失败", blocked: "已阻断", locked: "已确认", draft: "草稿",
     pause_requested: "暂停请求中", paused: "已暂停", cancel_requested: "取消请求中", canceled: "已取消",
-    outline_draft: "概要草稿", outline_locked: "概要已锁定", chapter_canonical: "已定稿",
+    outline_draft: "概要草稿", outline_locked: "概要已确认", chapter_canonical: "已定稿",
   };
   return labels[status || ""] || status || "未记录";
 }
@@ -613,7 +609,7 @@ watch(() => props.contextPack, (pack) => {
       :plan="latestSeriesPlan"
       :project-title="selectedProject?.title ?? ''"
       @back="emit('go', 'studio')"
-      @lock="onReaderLock"
+      @confirm="onReaderConfirm"
     />
     <DraftReader
       v-if="currentView === 'draftReader'"
@@ -750,14 +746,14 @@ watch(() => props.contextPack, (pack) => {
               <article class="toon-longform-card" tabindex="0" role="button" :aria-label="latestSeriesPlan ? '打开长篇规划详情' : '生成长篇规划'" @click="emit('go', 'planReader')" @keydown.enter.self.prevent="emit('go', 'planReader')" @keydown.space.self.prevent="emit('go', 'planReader')">
                 <header><span>LONGFORM PLAN</span><div class="toon-card-title"><strong>长篇规划</strong><b :class="`tone-${planStatusTone}`">{{ planStatusLabel }}</b></div></header>
                 <p>{{ latestSeriesPlan ? `${latestSeriesPlan.title} · 目标 ${latestSeriesPlan.target_chapter_count} 章` : "先生成规划后，点击卡片查看详情。" }}</p>
-                <p class="toon-card-hint">{{ latestSeriesPlan ? (latestSeriesPlan.status === "locked" ? "已锁定 · 点击卡片查看规划详情" : "草稿 · 点击卡片查看规划详情") : "点击卡片进入规划详情" }}</p>
+                <p class="toon-card-hint">{{ latestSeriesPlan ? (latestSeriesPlan.status === "locked" ? "已确认 · 点击卡片查看规划详情" : "草稿 · 点击卡片查看规划详情") : "点击卡片进入规划详情" }}</p>
                 <label @click.stop><span>目标章节数</span><input v-model.number="longformDraft.target_chapter_count" type="number" min="1" max="200" /></label>
                 <label @click.stop><span>规划补充要求</span><textarea v-model="longformDraft.user_brief" rows="4" placeholder="补充节奏、主线、人物弧光或禁区。" /></label>
                 <div class="toon-longform-actions" @click.stop>
                   <button type="button" :disabled="loading" @click="submitSeriesPlan">{{ longformRequestStage === "longform_plan" ? "生成中…" : latestSeriesPlan ? "重新生成规划" : "生成长篇规划" }}</button>
                   <button v-if="latestSeriesPlan" type="button" class="toon-button--dark" @click="emit('go', 'planReader')">查看规划详情</button>
-                  <button v-if="latestSeriesPlan && latestSeriesPlan.status !== 'locked'" type="button" class="toon-button--lock" :disabled="loading" @click="emit('lock-series-plan', latestSeriesPlan.id)">锁定长篇概要</button>
-                  <button v-else-if="latestSeriesPlan" type="button" class="toon-button--lock" :disabled="loading" @click="emit('unlock-series-plan', latestSeriesPlan.id)">解锁规划</button>
+                  <button v-if="latestSeriesPlan && latestSeriesPlan.status !== 'locked'" type="button" class="toon-button--lock" :disabled="loading" @click="emit('confirm-series-plan', latestSeriesPlan.id)">确认规划版本</button>
+                  <b v-else-if="latestSeriesPlan" class="toon-lock-state">已确认规划版本</b>
                 </div>
               </article>
               <article class="toon-longform-card" tabindex="0" role="button" aria-label="打开正文生成进度与正文" @click="emit('go', 'draftReader')" @keydown.enter.self.prevent="emit('go', 'draftReader')" @keydown.space.self.prevent="emit('go', 'draftReader')">
@@ -765,7 +761,7 @@ watch(() => props.contextPack, (pack) => {
                 <p>{{ latestSeriesPlan ? `${latestSeriesPlan.title} · ${latestSeriesPlan.target_chapter_count} 章` : "先生成或选择一个长篇规划。" }}</p>
                 <div v-if="latestBatchJob" class="toon-batch-progress" @click.stop role="progressbar" :aria-label="'正文生成进度'" :aria-valuenow="batchProgressPercent" aria-valuemin="0" aria-valuemax="100"><i :style="{ width: `${batchProgressPercent}%` }"></i></div>
                 <p class="toon-card-hint">{{ batchProgressText }} · 点击卡片查看进度与正文</p>
-                <p v-if="latestSeriesPlan && latestSeriesPlan.status !== 'locked'" class="toon-lock-hint">请先锁定长篇概要，再批量生成正文。</p>
+                <p v-if="latestSeriesPlan && latestSeriesPlan.status !== 'locked'" class="toon-lock-hint">请先确认规划版本，再批量生成正文。</p>
                 <div @click.stop><label><span>起始章</span><input v-model.number="longformDraft.start_chapter_no" type="number" min="1" /></label><label><span>结束章</span><input v-model.number="longformDraft.end_chapter_no" type="number" min="1" /></label></div>
                 <div class="toon-longform-actions" @click.stop>
                   <button type="button" :disabled="loading || !latestSeriesPlan || latestSeriesPlan.status !== 'locked'" @click="submitBatchGeneration">{{ longformRequestStage === "longform_batch" ? "生成中…" : "生成正文任务" }}</button>

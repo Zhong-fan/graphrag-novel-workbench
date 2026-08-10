@@ -7,7 +7,7 @@ const props = defineProps<{
   projectTitle: string;
 }>();
 
-const emit = defineEmits<{ (e: "back"): void; (e: "lock", planId: number): void }>();
+const emit = defineEmits<{ (e: "back"): void; (e: "confirm", planId: number): void }>();
 
 const summary = computed<Record<string, unknown>>(() => {
   const raw = props.plan?.current_version?.summary;
@@ -51,8 +51,8 @@ function list(value: unknown): string[] {
 }
 function statusLabel(status: unknown): string {
   if (status === "draft") return "草稿";
-  if (status === "locked") return "已锁定";
-  if (status === "outline_locked") return "已锁定";
+  if (status === "locked") return "已确认";
+  if (status === "outline_locked") return "已确认";
   return String(status || "");
 }
 </script>
@@ -67,9 +67,11 @@ function statusLabel(status: unknown): string {
         <p>v{{ versionNo }} · 目标 {{ plan?.target_chapter_count ?? 0 }} 章 · {{ statusLabel(plan?.status) }}</p>
       </div>
       <div class="plan-reader__actions">
-      <button v-if="plan && plan.status !== 'locked'" type="button" class="plan-reader__lock" @click="emit('lock', plan.id)">锁定长篇概要</button>
-      <b v-else-if="plan" class="plan-reader__locked">已锁定</b>
-      <span class="plan-reader__spacer"></span>
+        <button v-if="plan && plan.status !== 'locked'" type="button" class="plan-reader__lock" @click="emit('confirm', plan.id)">确认规划版本</button>
+        <template v-else-if="plan">
+          <b class="plan-reader__locked">已确认</b>
+        </template>
+        <span class="plan-reader__spacer"></span>
       </div>
     </header>
 
@@ -214,6 +216,7 @@ function statusLabel(status: unknown): string {
 .plan-reader__lock { min-height: 36px; padding: 0 14px; border-radius: 8px; background: var(--toon-rose-deep); color: white; font-weight: 800; font-size: 0.82rem; }
 .plan-reader__lock:hover { background: var(--toon-rose-deep); color: white; }
 .plan-reader__locked { display: inline-flex; align-items: center; min-height: 36px; padding: 0 14px; border-radius: 8px; background: #d9f5e3; color: #087434; font-size: 0.8rem; font-weight: 800; }
+.plan-reader__unlock { min-height: 36px; padding: 0 14px; border-radius: 8px; background: var(--toon-rose-soft); color: var(--toon-rose-deep); font-weight: 800; font-size: 0.82rem; }
 
 .plan-reader__content {
   width: min(860px, calc(100% - 48px));

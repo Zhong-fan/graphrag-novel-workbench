@@ -1180,7 +1180,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     try {
       const plan = await api.lockSeriesPlan(token.value, activeProject.value.project.id, seriesPlanId);
       await loadLongformState(activeProject.value.project.id);
-      success.value = "概要已锁定。";
+      success.value = "规划版本已确认。";
       return plan;
     } catch (err) {
       error.value = err instanceof Error ? err.message : "锁定概要失败。";
