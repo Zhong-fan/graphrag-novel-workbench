@@ -115,6 +115,33 @@ class ImageGenerationResult:
 
 
 @dataclass(frozen=True)
+class VideoGenerationRequest:
+    """Provider-neutral request for asynchronous video generation."""
+
+    prompt: str
+    mode: str = "text_to_video"
+    first_frame_url: str = ""
+    last_frame_url: str = ""
+    reference_image_urls: tuple[str, ...] = ()
+    duration_seconds: int = 5
+    resolution: str = "2K"
+    ratio: str = "16:9"
+
+
+@dataclass(frozen=True)
+class VideoGenerationResult:
+    provider: str
+    model: str
+    task_id: str
+    status: str
+    video_url: str = ""
+    file_id: str = ""
+    usage: dict[str, Any] = field(default_factory=dict)
+    parameters: dict[str, Any] = field(default_factory=dict)
+    result_summary: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class SpeechSynthesisRequest:
     """Typed input for the speech-synthesis capability."""
 
@@ -144,6 +171,7 @@ class VoiceDesignRequest:
     character_name: str
     preset_speaker: str = ""
     description: str = ""
+    preview_text: str = ""
     reference_audio_base64: str = ""
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import http.client
 import json
 import urllib.error
@@ -20,6 +21,7 @@ from .capabilities import (
     VoiceDesignResult,
     sanitize_provider_payload,
 )
+from .minimax_client import MiniMaxClient
 
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 180
 DOUBAO_DEFAULT_RESOURCE_ID = "seed-tts-2.0"
@@ -57,6 +59,68 @@ class VoiceDesignCapability(ABC):
     @abstractmethod
     def design(self, request: VoiceDesignRequest) -> VoiceDesignResult:
         """Submit one voice design and return a pending approval reference."""
+
+
+class MiniMaxVoiceDesignAdapter(VoiceDesignCapability):
+    """MiniMax Voice Design; the returned voice remains pending approval."""
+
+    def __init__(self, *, api_key: str, base_url: str = "https://api.minimax.io", timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS) -> None:
+        self._api_key = api_key or ""
+        self._base_url = base_url.rstrip("/") if base_url else "https://api.minimax.io"
+        self._timeout_seconds = timeout_seconds
+
+    @classmethod
+    def from_settings(cls, settings: Any) -> "MiniMaxVoiceDesignAdapter":
+        return cls(api_key=getattr(settings, "minimax_api_key", "") or "", base_url=getattr(settings, "minimax_base_url", "https://api.minimax.io") or "https://api.minimax.io", timeout_seconds=getattr(settings, "minimax_timeout_seconds", 180) or 180)
+
+    def declaration(self) -> CapabilityDeclaration:
+        return CapabilityDeclaration(role=self.role, provider="minimax", model="voice_design", flags={"approval_required": True, "voice_clone": False})
+
+    def design(self, request: VoiceDesignRequest) -> VoiceDesignResult:
+        prompt = request.description.strip()
+        preview_text = (request.preview_text or request.character_name).strip()
+        if not prompt or not preview_text:
+            raise AdapterError(AdapterErrorCategory.INVALID_REQUEST_OR_UNSUPPORTED, safe_message="MiniMax Voice Design 需要声音描述和试听文本。", retryable=False)
+        if len(preview_text) > 500:
+            raise AdapterError(AdapterErrorCategory.INVALID_REQUEST_OR_UNSUPPORTED, safe_message="MiniMax Voice Design 试听文本最多 500 个字符。", provider_code="preview_text", retryable=False)
+        client = MiniMaxClient(api_key=self._api_key, base_url=self._base_url, timeout_seconds=self._timeout_seconds)
+        data = client.post_json("/v1/voice_design", {"prompt": prompt, "preview_text": preview_text})
+        voice_ref = str(data.get("voice_id") or "")
+        if not voice_ref:
+            raise AdapterError(AdapterErrorCategory.INVALID_PROVIDER_RESPONSE, safe_message="MiniMax Voice Design 没有返回 voice_id。", details={"response": sanitize_provider_payload(data)})
+        return VoiceDesignResult(provider="minimax", model="voice_design", voice_ref=voice_ref, status="pending_approval", parameters={"character_name": request.character_name}, result_summary=sanitize_provider_payload({"voice_id": voice_ref, "has_trial_audio": bool(data.get("trial_audio"))}))
+
+
+class MiniMaxSpeechSynthesisAdapter(SpeechSynthesisCapability):
+    def __init__(self, *, api_key: str, base_url: str = "https://api.minimax.io", model: str = "speech-2.8-hd", timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS) -> None:
+        self._api_key = api_key or ""
+        self._base_url = base_url.rstrip("/") if base_url else "https://api.minimax.io"
+        self._model = model or "speech-2.8-hd"
+        self._timeout_seconds = timeout_seconds
+
+    @classmethod
+    def from_settings(cls, settings: Any) -> "MiniMaxSpeechSynthesisAdapter":
+        return cls(api_key=getattr(settings, "minimax_api_key", "") or "", base_url=getattr(settings, "minimax_base_url", "https://api.minimax.io") or "https://api.minimax.io", model=getattr(settings, "minimax_voice_model", "speech-2.8-hd") or "speech-2.8-hd", timeout_seconds=getattr(settings, "minimax_timeout_seconds", 180) or 180)
+
+    def declaration(self) -> CapabilityDeclaration:
+        return CapabilityDeclaration(role=self.role, provider="minimax", model=self._model, flags={"protocol": "t2a_v2", "long_text_async": True})
+
+    def synthesize(self, request: SpeechSynthesisRequest) -> SpeechSynthesisResult:
+        if not request.text.strip() or len(request.text) > 10000:
+            raise AdapterError(AdapterErrorCategory.INVALID_REQUEST_OR_UNSUPPORTED, safe_message="MiniMax T2A 文本必须为 1-10000 个字符。", provider_code="text_length", retryable=False)
+        voice_id = request.voice_profile.strip()
+        if not voice_id:
+            raise AdapterError(AdapterErrorCategory.INVALID_REQUEST_OR_UNSUPPORTED, safe_message="MiniMax T2A 需要 voice_profile。", provider_code="voice_id", retryable=False)
+        payload = {"model": self._model, "text": request.text, "stream": False, "output_format": "hex", "voice_setting": {"voice_id": voice_id, "speed": request.speed, "vol": 1, "pitch": 0}, "audio_setting": {"format": request.output_format, "sample_rate": 32000, "channel": 1}}
+        data = MiniMaxClient(api_key=self._api_key, base_url=self._base_url, timeout_seconds=self._timeout_seconds).post_json("/v1/t2a_v2", payload)
+        audio_value = ((data.get("data") or {}).get("audio") if isinstance(data.get("data"), dict) else "")
+        if not isinstance(audio_value, str) or not audio_value:
+            raise AdapterError(AdapterErrorCategory.INVALID_PROVIDER_RESPONSE, safe_message="MiniMax T2A 没有返回音频。", details={"response": sanitize_provider_payload(data)})
+        try:
+            audio_bytes = binascii.unhexlify(audio_value)
+        except (binascii.Error, ValueError) as exc:
+            raise AdapterError(AdapterErrorCategory.INVALID_PROVIDER_RESPONSE, safe_message="MiniMax T2A 返回的音频不是合法 hex。", retryable=False) from exc
+        return SpeechSynthesisResult(provider="minimax", model=self._model, audio_base64=base64.b64encode(audio_bytes).decode("ascii"), mime_type=f"audio/{request.output_format}", parameters={"voice_id": voice_id, "sample_rate": 32000}, result_summary=sanitize_provider_payload({"bytes": len(audio_bytes), "extra_info": data.get("extra_info")}))
 
 
 def _map_http_error(exc: urllib.error.HTTPError) -> AdapterError:
@@ -444,6 +508,8 @@ def build_speech_synthesis_capability(settings: Any, *, provider_hint: str = "")
     """Select the configured speech-synthesis adapter without leaking provider logic."""
 
     provider = (provider_hint or getattr(settings, "tts_provider", "") or "openai_compatible").strip().lower()
+    if provider == "minimax":
+        return MiniMaxSpeechSynthesisAdapter.from_settings(settings)
     if provider == "volcengine_doubao":
         return DoubaoSpeechSynthesisAdapter.from_settings(settings)
     return OpenAICompatibleSpeechSynthesisAdapter.from_settings(settings)
@@ -453,6 +519,8 @@ def build_voice_design_capability(settings: Any, *, provider_hint: str = "") -> 
     """Select the voice-design adapter; only the Doubao preset design is supported."""
 
     provider = (provider_hint or getattr(settings, "tts_provider", "") or "").strip().lower()
+    if provider == "minimax":
+        return MiniMaxVoiceDesignAdapter.from_settings(settings)
     if provider == "volcengine_doubao":
         return DoubaoPresetVoiceDesignAdapter.from_settings(settings)
     raise AdapterError(

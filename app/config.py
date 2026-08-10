@@ -37,6 +37,15 @@ class Settings:
     image_model: str
     image_size: str
     image_provider: str
+    minimax_api_key: str
+    minimax_base_url: str
+    minimax_text_model: str
+    minimax_image_model: str
+    minimax_video_model: str
+    minimax_voice_model: str
+    minimax_timeout_seconds: int
+    minimax_poll_interval_seconds: int
+    minimax_poll_timeout_seconds: int
     ark_image_model: str
     ark_image_size: str
     tts_provider: str
@@ -269,6 +278,15 @@ def load_settings() -> Settings:
         image_model=_resolve_first(("CHENFLOW_IMAGE_MODEL",), dotenv_values, "") or "",
         image_size=_resolve_first(("CHENFLOW_IMAGE_SIZE",), dotenv_values, "1024x1024") or "1024x1024",
         image_provider=_resolve_first(("CHENFLOW_IMAGE_PROVIDER",), dotenv_values, "") or "",
+        minimax_api_key=_resolve_first(("MINIMAX_API_KEY",), dotenv_values, "") or "",
+        minimax_base_url=_resolve_first(("MINIMAX_BASE_URL",), dotenv_values, "https://api.minimax.io") or "https://api.minimax.io",
+        minimax_text_model=_resolve_first(("MINIMAX_TEXT_MODEL",), dotenv_values, "MiniMax-M3") or "MiniMax-M3",
+        minimax_image_model=_resolve_first(("MINIMAX_IMAGE_MODEL",), dotenv_values, "image-01") or "image-01",
+        minimax_video_model=_resolve_first(("MINIMAX_VIDEO_MODEL",), dotenv_values, "MiniMax-H3") or "MiniMax-H3",
+        minimax_voice_model=_resolve_first(("MINIMAX_VOICE_MODEL",), dotenv_values, "speech-2.8-hd") or "speech-2.8-hd",
+        minimax_timeout_seconds=_parse_positive_int(_resolve_first(("MINIMAX_TIMEOUT_SECONDS",), dotenv_values), 180),
+        minimax_poll_interval_seconds=_parse_positive_int(_resolve_first(("MINIMAX_POLL_INTERVAL_SECONDS",), dotenv_values), 10),
+        minimax_poll_timeout_seconds=_parse_positive_int(_resolve_first(("MINIMAX_POLL_TIMEOUT_SECONDS",), dotenv_values), 900),
         ark_image_model=(
             _resolve_first(("ARK_IMAGE_MODEL",), dotenv_values, "doubao-seedream-5-0-lite-260128")
             or "doubao-seedream-5-0-lite-260128"

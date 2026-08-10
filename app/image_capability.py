@@ -27,6 +27,7 @@ from .capabilities import (
     sanitize_provider_payload,
 )
 from .jimeng_image_client import JimengImageClient
+from .minimax_client import MiniMaxClient
 
 DEFAULT_POLL_INTERVAL_SECONDS = 10
 DEFAULT_POLL_TIMEOUT_SECONDS = 900
@@ -45,6 +46,75 @@ class ImageCapability(ABC):
     @abstractmethod
     def generate(self, request: ImageGenerationRequest) -> ImageGenerationResult:
         """Generate one image and return sanitized trace evidence."""
+
+
+class MiniMaxImageAdapter(ImageCapability):
+    """MiniMax image-01 adapter for text and one subject reference image."""
+
+    def __init__(self, *, api_key: str, base_url: str = "https://api.minimax.io", model: str = "image-01", timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS) -> None:
+        self._api_key = api_key or ""
+        self._base_url = base_url.rstrip("/") if base_url else "https://api.minimax.io"
+        self._model = model or "image-01"
+        self._timeout_seconds = int(timeout_seconds or DEFAULT_REQUEST_TIMEOUT_SECONDS)
+
+    @classmethod
+    def from_settings(cls, settings: Any) -> "MiniMaxImageAdapter":
+        return cls(
+            api_key=getattr(settings, "minimax_api_key", "") or "",
+            base_url=getattr(settings, "minimax_base_url", "https://api.minimax.io") or "https://api.minimax.io",
+            model=getattr(settings, "minimax_image_model", "image-01") or "image-01",
+            timeout_seconds=getattr(settings, "minimax_timeout_seconds", DEFAULT_REQUEST_TIMEOUT_SECONDS) or DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        )
+
+    def declaration(self) -> CapabilityDeclaration:
+        return CapabilityDeclaration(
+            role=CapabilityRole.IMAGE,
+            provider="minimax",
+            model=self._model,
+            supports_reference_images=True,
+            supported_input_roles=("character",),
+            flags={"reference_limit": 1, "response_formats": "base64"},
+        )
+
+    def generate(self, request: ImageGenerationRequest) -> ImageGenerationResult:
+        if len(request.reference_images) > 1:
+            raise AdapterError(
+                AdapterErrorCategory.INVALID_REQUEST_OR_UNSUPPORTED,
+                safe_message="MiniMax image-01 每次请求最多支持一张 subject reference 图片。",
+                provider_code="reference_limit",
+                retryable=False,
+            )
+        aspect_ratio = self._aspect_ratio(request.width, request.height)
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "prompt": request.prompt,
+            "aspect_ratio": aspect_ratio,
+            "response_format": "base64",
+        }
+        if request.reference_images:
+            payload["subject_reference"] = [{"type": "character", "image_file": request.reference_images[0]}]
+        data = MiniMaxClient(api_key=self._api_key, base_url=self._base_url, timeout_seconds=self._timeout_seconds).post_json("/v1/image_generation", payload)
+        result_data = data.get("data") if isinstance(data.get("data"), dict) else {}
+        images = result_data.get("image_base64")
+        if not isinstance(images, list) or not images or not isinstance(images[0], str) or not images[0]:
+            raise AdapterError(AdapterErrorCategory.INVALID_PROVIDER_RESPONSE, safe_message="MiniMax 图片接口没有返回 image_base64。", details={"response": sanitize_provider_payload(data)})
+        return ImageGenerationResult(
+            provider="minimax",
+            model=self._model,
+            kind="base64",
+            value=images[0],
+            provider_ref=str(data.get("id") or "") or None,
+            result_summary=sanitize_provider_payload({"image_count": len(images), "response_format": "base64"}),
+            parameters={"aspect_ratio": aspect_ratio, "reference_image_count": len(request.reference_images)},
+        )
+
+    @staticmethod
+    def _aspect_ratio(width: int, height: int) -> str:
+        if width <= 0 or height <= 0:
+            raise AdapterError(AdapterErrorCategory.INVALID_REQUEST_OR_UNSUPPORTED, safe_message="图片宽高必须为正数。", retryable=False)
+        ratio = width / height
+        candidates = {"1:1": 1.0, "4:3": 4 / 3, "3:4": 3 / 4, "16:9": 16 / 9, "9:16": 9 / 16}
+        return min(candidates, key=lambda item: abs(candidates[item] - ratio))
 
 
 def _map_http_error(exc: urllib.error.HTTPError) -> AdapterError:
@@ -517,6 +587,8 @@ def build_image_capability(settings: Any) -> ImageCapability:
         and (getattr(settings, "jimeng_image_req_key", "") or "")
     )
     image_provider = (getattr(settings, "image_provider", "") or "").strip().lower()
+    if image_provider == "minimax":
+        return MiniMaxImageAdapter.from_settings(settings)
     if image_provider == "ark_seedream":
         return ArkSeedreamImageAdapter.from_settings(settings)
     if image_model.startswith("jimeng_") or (not image_base_url and has_jimeng_config):
