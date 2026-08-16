@@ -612,6 +612,17 @@ export interface BatchGenerationChapterTask {
   finished_at?: string | null;
   created_at: string;
   updated_at: string;
+  current_step: string;
+  resolved_input_manifest: Record<string, unknown>;
+  manifest_fingerprint: string;
+  predecessor_chapter_version_id?: number | null;
+  canonical_story_state_version: string;
+  execution_steps: Array<Record<string, unknown>>;
+  attempts: Array<Record<string, unknown>>;
+  output_validity: string;
+  supersedes_task_id?: number | null;
+  estimated_cost?: number | null;
+  actual_cost?: number | null;
 }
 
 export interface TaskEvent {

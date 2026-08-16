@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import socket
@@ -14,10 +15,11 @@ from .api_support_generation import _replace_canonical_evolution, _snapshot_with
 from .api_support_project import _canonical_project_evolution
 from .config import Settings
 from .evolution_service import EvolutionService
-from .json_utils import json_loads_object
+from .json_utils import json_loads_list, json_loads_object
 from .context_pack_service import ContextPackService
 from .models import (
     BatchGenerationChapterTask,
+    ChapterTaskAttempt,
     BatchGenerationJob,
     ChapterOutline,
     DraftVersion,
@@ -99,15 +101,17 @@ class BatchGenerationService:
         db.add(job)
         db.flush()
         for outline in outlines:
-            db.add(
-                BatchGenerationChapterTask(
+            task = BatchGenerationChapterTask(
                     job=job,
                     chapter_outline=outline,
                     chapter_no=outline.chapter_no,
                     status="queued",
                     error_message="",
+                    current_step="resolve_inputs",
+                    execution_steps_json=json.dumps(self._default_steps(), ensure_ascii=False),
                 )
-            )
+            self._resolve_task_manifest(task, project=project, series_plan=series_plan, outline=outline, db=db)
+            db.add(task)
         self._add_event(
             db,
             job=job,
@@ -115,7 +119,7 @@ class BatchGenerationService:
             message=f"已创建批量生成任务：第 {start_chapter_no}-{end_chapter_no} 章。",
             payload={"start_chapter_no": start_chapter_no, "end_chapter_no": end_chapter_no},
         )
-        self._update_job_summary(job, generated=[], failed=[])
+        self._rebuild_job_summary(job)
         db.commit()
         db.refresh(job)
         logger.info("批量正文任务已创建：job_id=%s task_count=%s", job.id, len(outlines))
@@ -144,7 +148,7 @@ class BatchGenerationService:
         job.job_status = "running"
         logger.info("批量正文任务开始执行：job_id=%s project_id=%s chapter_range=%s-%s", job.id, job.project_id, job.start_chapter_no, job.end_chapter_no)
         self._add_event(db, job=job, event_type="job_started", message="批量生成任务开始执行。")
-        self._update_job_summary(job, generated=[], failed=[])
+        self._rebuild_job_summary(job)
         db.commit()
 
         tasks = db.scalars(
@@ -160,30 +164,23 @@ class BatchGenerationService:
                 return job
             if task.status == "completed":
                 continue
+            if task.chapter_no > job.start_chapter_no:
+                previous = next((candidate for candidate in tasks if candidate.chapter_no == task.chapter_no - 1), None)
+                if previous is not None and previous.status != "completed":
+                    task.status = "waiting_for_dependency"
+                    task.current_step = "waiting_for_dependency"
+                    self._rebuild_job_summary(job)
+                    db.commit()
+                    continue
             outline = task.chapter_outline
-            existing_draft = self._latest_draft_for_outline(db, outline.id)
-            if existing_draft is not None and task.status not in ("failed", "running"):
-                logger.info("章节已有草稿，标记为完成：job_id=%s chapter_no=%s draft_version_id=%s", job.id, outline.chapter_no, existing_draft.id)
-                task.status = "completed"
-                task.draft_version_id = existing_draft.id
-                task.generation_run_id = existing_draft.generation_run_id
-                task.error_message = ""
-                task.finished_at = task.finished_at or datetime.utcnow()
-                generated = self._upsert_generated_summary(
-                    generated,
-                    {
-                        "chapter_no": outline.chapter_no,
-                        "outline_id": outline.id,
-                        "generation_id": existing_draft.generation_run_id,
-                        "draft_version_id": existing_draft.id,
-                        "title": existing_draft.title,
-                    },
-                )
-                self._update_job_summary(job, generated, failed)
-                db.commit()
-                continue
-
+            manifest_state = str(json_loads_object(task.manifest_json).get("input_state") or "planned")
+            if not task.attempts and manifest_state.startswith("planned"):
+                self._resolve_task_manifest(task, project=job.project, series_plan=job.series_plan, outline=outline, db=db)
             task.status = "running"
+            task.current_step = "provider_generate"
+            self._set_step_status(task, "resolve_inputs", "completed")
+            self._set_step_status(task, "preflight", "completed")
+            self._set_step_status(task, "provider_generate", "running")
             task.error_message = ""
             task.started_at = datetime.utcnow()
             task.finished_at = None
@@ -200,7 +197,19 @@ class BatchGenerationService:
             self._update_job_summary(job, generated, failed)
             db.commit()
             logger.info("章节正文开始生成：job_id=%s chapter_no=%s outline_id=%s", job.id, outline.chapter_no, outline.id)
+            attempt = None
+            generation_trace: dict[str, Any] = {}
             try:
+                attempt = ChapterTaskAttempt(
+                    chapter_task=task,
+                    attempt_no=len(task.attempts) + 1,
+                    kind="provider_generate",
+                    manifest_fingerprint=task.manifest_fingerprint,
+                    status="running",
+                    started_at=datetime.utcnow(),
+                )
+                db.add(attempt)
+                db.flush()
                 generation, draft = self._generate_one(
                     db=db,
                     project=job.project,
@@ -208,11 +217,22 @@ class BatchGenerationService:
                     outline=outline,
                     writer=writer,
                     evolution=evolution,
+                    task=task,
+                    trace=generation_trace,
                 )
+                self._freeze_manifest_from_trace(task, generation_trace)
+                attempt.manifest_fingerprint = task.manifest_fingerprint
                 task.status = "completed"
+                task.current_step = "completed"
+                self._set_step_status(task, "provider_generate", "completed")
+                self._set_step_status(task, "validate_output", "completed")
+                self._set_step_status(task, "persist_output", "completed")
+                task.output_validity = "valid"
                 task.generation_run_id = generation.id
                 task.draft_version_id = draft.id
                 task.finished_at = datetime.utcnow()
+                attempt.status = "succeeded"
+                attempt.finished_at = datetime.utcnow()
                 self._touch_worker(job)
                 generated = self._upsert_generated_summary(
                     generated,
@@ -246,8 +266,17 @@ class BatchGenerationService:
                 failure = {"chapter_no": outline.chapter_no, "outline_id": outline.id, "error": str(exc)}
                 failed.append(failure)
                 task.status = "failed"
+                task.current_step = "provider_generate"
+                self._set_step_status(task, "provider_generate", "failed")
+                task.output_validity = "invalid"
                 task.error_message = str(exc)
                 task.finished_at = datetime.utcnow()
+                if attempt is not None:
+                    self._freeze_manifest_from_trace(task, generation_trace)
+                    attempt.manifest_fingerprint = task.manifest_fingerprint
+                    attempt.status = "failed"
+                    attempt.error_message = str(exc)
+                    attempt.finished_at = datetime.utcnow()
                 self._touch_worker(job)
                 job.job_status = "failed"
                 self._update_job_summary(job, generated, failed)
@@ -263,6 +292,14 @@ class BatchGenerationService:
                 return job
 
         if self._stop_requested(db, job):
+            return job
+        unfinished = [task for task in tasks if task.status != "completed"]
+        if unfinished:
+            job.job_status = "failed"
+            self._rebuild_job_summary(job)
+            self._add_event(db, job=job, event_type="job_blocked", message="仍有章节未完成，任务不会被误标为已完成。")
+            db.commit()
+            db.refresh(job)
             return job
         job.job_status = "completed"
         job.current_chapter_no = job.end_chapter_no
@@ -282,33 +319,21 @@ class BatchGenerationService:
             db.commit()
             db.refresh(job)
             return job
-        generated = list(self._summary_payload(job).get("generated", []))
-        for task in sorted(job.chapter_tasks, key=lambda item: item.chapter_no):
-            latest_draft = self._latest_draft_for_outline(db, task.chapter_outline_id)
-            if latest_draft is not None:
-                task.status = "completed"
-                task.draft_version_id = latest_draft.id
-                task.generation_run_id = latest_draft.generation_run_id
-                task.error_message = ""
-                generated = self._upsert_generated_summary(
-                    generated,
-                    {
-                        "chapter_no": task.chapter_no,
-                        "outline_id": task.chapter_outline_id,
-                        "generation_id": latest_draft.generation_run_id,
-                        "draft_version_id": latest_draft.id,
-                        "title": latest_draft.title,
-                    },
-                )
-                continue
-            if task.status in ("failed", "running", "canceled"):
-                task.status = "queued"
-                task.error_message = ""
-                task.started_at = None
-                task.finished_at = None
+        retryable_tasks = [task for task in sorted(job.chapter_tasks, key=lambda item: item.chapter_no) if task.status in ("failed", "canceled")]
+        if not retryable_tasks:
+            raise RuntimeError("任务组中没有可安全重试的失败或已取消章节。")
+        for task in retryable_tasks:
+            self._assert_same_input_retry_safe(db=db, task=task, check_job_state=False)
+        for task in retryable_tasks:
+            task.status = "queued"
+            task.current_step = "provider_generate"
+            task.output_validity = "pending"
+            task.error_message = ""
+            task.started_at = None
+            task.finished_at = None
         job.job_status = "retry_queued"
         job.current_chapter_no = None
-        self._update_job_summary(job, generated, [])
+        self._rebuild_job_summary(job)
         self._add_event(db, job=job, event_type="job_retry_queued", message="批量生成任务已重新排队。")
         db.commit()
         db.refresh(job)
@@ -329,6 +354,114 @@ class BatchGenerationService:
         db.commit()
         db.refresh(job)
         return job
+
+    def retry_chapter_task(self, *, db: Session, task: BatchGenerationChapterTask, mode: str = "same_inputs", input_overrides: dict[str, Any] | None = None) -> BatchGenerationChapterTask:
+        if mode == "same_inputs":
+            self._assert_same_input_retry_safe(db=db, task=task)
+            task.status = "queued"
+            task.current_step = "provider_generate"
+            self._set_step_status(task, "provider_generate", "pending")
+            self._set_step_status(task, "validate_output", "pending")
+            self._set_step_status(task, "persist_output", "pending")
+            task.error_message = ""
+            task.output_validity = "pending"
+            task.started_at = None
+            task.finished_at = None
+            self._add_event(db, job=task.job, chapter_task=task, event_type="chapter_retry_queued", message=f"第 {task.chapter_no} 章已按相同冻结输入重新排队。", payload={"manifest_fingerprint": task.manifest_fingerprint})
+            if task.job is not None:
+                self._rebuild_job_summary(task.job)
+                task.job.job_status = "retry_queued"
+            db.commit()
+            db.refresh(task)
+            return task
+
+        overrides = input_overrides or {}
+        unexpected = sorted(set(overrides) - {"user_instruction"})
+        if unexpected:
+            raise RuntimeError("暂不支持修改这些输入字段：" + "、".join(unexpected))
+        user_instruction = str(overrides.get("user_instruction") or "").strip()
+        if not user_instruction:
+            raise RuntimeError("请先填写本次重新生成要追加的修改要求。")
+        source = json_loads_object(task.manifest_json)
+        source.pop("provider_request", None)
+        source["input_state"] = "planned_edited"
+        source["input_overrides"] = {"user_instruction": user_instruction}
+        if task.job is not None and task.job.job_status in ("running", "queued", "retry_queued", "pause_requested", "cancel_requested"):
+            raise RuntimeError("原章节任务组仍在执行，暂不能创建输入变更任务。")
+        replacement_job = BatchGenerationJob(
+            project_id=task.job.project_id if task.job is not None else task.chapter_outline.project_id,
+            series_plan_id=task.job.series_plan_id if task.job is not None else task.chapter_outline.series_plan_id,
+            start_chapter_no=task.chapter_no,
+            end_chapter_no=task.chapter_no,
+            job_status="queued",
+            result_summary_json=json.dumps({}, ensure_ascii=False),
+        )
+        db.add(replacement_job)
+        db.flush()
+        replacement = BatchGenerationChapterTask(
+            job=replacement_job,
+            chapter_outline_id=task.chapter_outline_id,
+            chapter_no=task.chapter_no,
+            status="queued",
+            error_message="",
+            current_step="resolve_inputs",
+            execution_steps_json=json.dumps(self._default_steps(), ensure_ascii=False),
+            supersedes_task_id=task.id,
+            manifest_json=json.dumps(source, ensure_ascii=False, sort_keys=True),
+            manifest_fingerprint=hashlib.sha256(json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
+            canonical_story_state_version=task.canonical_story_state_version,
+            output_validity="pending",
+        )
+        db.add(replacement)
+        downstream_tasks = db.scalars(
+            select(BatchGenerationChapterTask)
+            .join(BatchGenerationJob, BatchGenerationChapterTask.job_id == BatchGenerationJob.id)
+            .where(
+                BatchGenerationJob.series_plan_id == replacement_job.series_plan_id,
+                BatchGenerationChapterTask.chapter_no > task.chapter_no,
+                BatchGenerationChapterTask.output_validity == "valid",
+            )
+        ).all()
+        for downstream in downstream_tasks:
+            downstream.output_validity = "stale_dependency"
+            self._add_event(
+                db,
+                job=downstream.job,
+                chapter_task=downstream,
+                event_type="chapter_output_invalidated",
+                message=f"第 {downstream.chapter_no} 章因上游第 {task.chapter_no} 章开始重生成而需要重新确认。",
+                payload={"changed_upstream_chapter_no": task.chapter_no, "replacement_task_id": replacement.id},
+            )
+        self._rebuild_job_summary(replacement_job)
+        self._add_event(db, job=replacement_job, chapter_task=replacement, event_type="chapter_replacement_queued", message=f"第 {task.chapter_no} 章已按修改后的冻结输入创建新任务。", payload={"supersedes_task_id": task.id})
+        db.commit()
+        db.refresh(replacement)
+        return replacement
+
+    def _assert_same_input_retry_safe(self, *, db: Session, task: BatchGenerationChapterTask, check_job_state: bool = True) -> None:
+        """Guard the invariant that a same-input retry really replays one immutable provider request."""
+        if task.job is None:
+            raise RuntimeError("章节任务缺少所属任务组，不能安全重试。")
+        if check_job_state and task.job.job_status in ("running", "queued", "retry_queued", "pause_requested", "cancel_requested"):
+            raise RuntimeError("章节任务组仍在执行或排队，请勿重复提交重试。")
+        if task.status not in ("failed", "canceled"):
+            raise RuntimeError("只有失败或已取消的章节任务可以按相同输入重试。")
+        manifest = json_loads_object(task.manifest_json)
+        if manifest.get("input_state") != "frozen_actual":
+            raise RuntimeError("该失败发生在模型输入冻结之前，不能承诺按相同输入重试；请修改要求后重新生成。")
+        encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if not task.manifest_fingerprint or hashlib.sha256(encoded.encode("utf-8")).hexdigest() != task.manifest_fingerprint:
+            raise RuntimeError("冻结输入指纹校验失败，不能按相同输入重试。")
+        current_story_state = str(task.job.series_plan.current_version_id or task.job.series_plan.id)
+        if task.canonical_story_state_version != current_story_state:
+            raise RuntimeError("当前故事状态已变化，请改用“编辑输入并重新生成”。")
+        if task.chapter_no > 1:
+            predecessor_outline = db.scalar(select(ChapterOutline).where(ChapterOutline.series_plan_id == task.job.series_plan_id, ChapterOutline.chapter_no == task.chapter_no - 1))
+            latest_predecessor = self._latest_draft_for_outline(db, predecessor_outline.id) if predecessor_outline else None
+            if latest_predecessor is None or latest_predecessor.id != task.predecessor_chapter_version_id:
+                raise RuntimeError("前一章版本已变化，请改用“编辑输入并重新生成”。")
+        if any(attempt.status in ("queued", "running") for attempt in task.attempts):
+            raise RuntimeError("该章节已有执行中的尝试，请勿重复提交。")
 
     def resume_job(self, *, db: Session, job: BatchGenerationJob) -> BatchGenerationJob:
         if job.job_status not in ("paused", "pause_requested"):
@@ -371,6 +504,8 @@ class BatchGenerationService:
         outline: ChapterOutline,
         writer: StoryGenerationService,
         evolution: EvolutionService,
+        task: BatchGenerationChapterTask,
+        trace: dict[str, Any],
     ) -> tuple[GenerationRun, DraftVersion]:
         outline_payload = json_loads_object(outline.outline_json)
         project_chapter = self._ensure_project_chapter(db, project, outline, outline_payload)
@@ -390,6 +525,12 @@ class BatchGenerationService:
         user_prompt = self._outline_to_prompt(outline_payload, active_story_boundary_rules=active_story_boundary_rules)
         memories = [{"title": item.title, "content": item.content} for item in project.memories]
         context_pack_inputs = {**context_pack_inputs, "active_story_boundary_rules": active_story_boundary_rules}
+        frozen_request = json_loads_object(task.manifest_json).get("provider_request", {})
+        input_overrides = json_loads_object(task.manifest_json).get("input_overrides", {})
+        if not isinstance(frozen_request, dict):
+            frozen_request = {}
+        if isinstance(input_overrides, dict) and str(input_overrides.get("user_instruction") or "").strip() and not frozen_request:
+            user_prompt = f"{user_prompt}\n\n用户本次追加修改要求：\n{str(input_overrides['user_instruction']).strip()}"
         title, summary, content = writer.generate(
             project_title=project.title,
             genre=project.genre,
@@ -408,6 +549,9 @@ class BatchGenerationService:
             memories=memories,
             use_refiner=True,
             context_pack_inputs=context_pack_inputs,
+            resolved_system_prompt=str(frozen_request.get("system_prompt")) if frozen_request.get("system_prompt") else None,
+            resolved_user_prompt=str(frozen_request.get("user_prompt")) if frozen_request.get("user_prompt") else None,
+            trace=trace,
         )
 
         generation = GenerationRun(
@@ -503,6 +647,90 @@ class BatchGenerationService:
         db.refresh(draft)
         return generation, draft
 
+    @staticmethod
+    def _default_steps() -> list[dict[str, Any]]:
+        return [
+            {"name": "resolve_inputs", "status": "pending", "recoverable": True},
+            {"name": "preflight", "status": "pending", "recoverable": True},
+            {"name": "provider_generate", "status": "pending", "recoverable": False},
+            {"name": "validate_output", "status": "pending", "recoverable": True},
+            {"name": "persist_output", "status": "pending", "recoverable": True},
+        ]
+
+    def _resolve_task_manifest(self, task: BatchGenerationChapterTask, *, project: Project, series_plan: SeriesPlan, outline: ChapterOutline, db: Session) -> None:
+        previous_manifest = json_loads_object(getattr(task, "manifest_json", "{}"))
+        input_overrides = previous_manifest.get("input_overrides") if isinstance(previous_manifest.get("input_overrides"), dict) else {}
+        predecessor_outline = None
+        if outline.chapter_no > 1:
+            predecessor_outline = db.scalar(
+                select(ChapterOutline).where(
+                    ChapterOutline.series_plan_id == series_plan.id,
+                    ChapterOutline.chapter_no == outline.chapter_no - 1,
+                )
+            )
+        predecessor = self._latest_draft_for_outline(db, predecessor_outline.id) if predecessor_outline else None
+        story_state = str(series_plan.current_version_id or series_plan.id)
+        manifest = {
+            "prompt_id": "longform.chapter_generation",
+            "prompt_version": "1",
+            "model": self.settings.writer_model,
+            "parameters": {"response_type": "完整章节正文"},
+            "project": {"id": project.id, "title": project.title, "genre": project.genre},
+            "series_plan": {"id": series_plan.id, "version_id": series_plan.current_version_id},
+            "chapter": {"outline_id": outline.id, "chapter_no": outline.chapter_no, "title": outline.title, "outline": json_loads_object(outline.outline_json)},
+            "predecessor": {"draft_version_id": predecessor.id} if predecessor else None,
+            "canonical_story_state_version": story_state,
+            "exclusions": [],
+            "truncation": None,
+            "estimated_cost": 0.0,
+            "input_state": "planned_edited" if input_overrides else "planned",
+            "input_overrides": input_overrides,
+        }
+        encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        task.manifest_json = encoded
+        task.manifest_fingerprint = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        task.predecessor_chapter_version_id = predecessor.id if predecessor else None
+        task.canonical_story_state_version = story_state
+        task.estimated_cost = 0.0
+
+    def _freeze_manifest_from_trace(self, task: BatchGenerationChapterTask, trace: dict[str, Any]) -> None:
+        draft_trace = trace.get("draft") if isinstance(trace, dict) else None
+        if not isinstance(draft_trace, dict) or not draft_trace.get("system_prompt") or not draft_trace.get("user_prompt"):
+            return
+        manifest = json_loads_object(task.manifest_json)
+        manifest["input_state"] = "frozen_actual"
+        manifest["provider_request"] = {
+            "model": draft_trace.get("model") or self.settings.writer_model,
+            "messages": [
+                {"role": "system", "content": str(draft_trace["system_prompt"])},
+                {"role": "user", "content": str(draft_trace["user_prompt"])},
+            ],
+            "system_prompt": str(draft_trace["system_prompt"]),
+            "user_prompt": str(draft_trace["user_prompt"]),
+            "response_format": "json",
+        }
+        encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        task.manifest_json = encoded
+        task.manifest_fingerprint = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _set_step_status(task: BatchGenerationChapterTask, name: str, status: str) -> None:
+        steps = json_loads_list(task.execution_steps_json)
+        for step in steps:
+            if isinstance(step, dict) and step.get("name") == name:
+                step["status"] = status
+        task.execution_steps_json = json.dumps(steps, ensure_ascii=False)
+
+    def _rebuild_job_summary(self, job: BatchGenerationJob) -> None:
+        generated = []
+        failed = []
+        for task in sorted(job.chapter_tasks, key=lambda item: item.chapter_no):
+            if task.status == "completed" and task.draft_version_id:
+                generated.append({"chapter_no": task.chapter_no, "outline_id": task.chapter_outline_id, "generation_id": task.generation_run_id, "draft_version_id": task.draft_version_id})
+            elif task.status == "failed":
+                failed.append({"chapter_no": task.chapter_no, "outline_id": task.chapter_outline_id, "error": task.error_message})
+        self._update_job_summary(job, generated, failed)
+
     def _add_event(
         self,
         db: Session,
@@ -592,6 +820,7 @@ class BatchGenerationService:
         running = sum(1 for item in job.chapter_tasks if item.status == "running")
         queued = sum(1 for item in job.chapter_tasks if item.status in ("queued", "retry_queued"))
         canceled = sum(1 for item in job.chapter_tasks if item.status == "canceled")
+        processed = completed + len(failed) + canceled
         payload = {
             "generated": generated,
             "failed": failed,
@@ -601,10 +830,12 @@ class BatchGenerationService:
                 "failure_stage": "chapter_generate" if job.job_status == "failed" else "",
                 "total_chapters": total,
                 "completed_chapters": completed,
-                "failed_chapters": len(failed),
+                "failed_chapters": sum(1 for item in job.chapter_tasks if item.status == "failed"),
                 "running_chapters": running,
                 "queued_chapters": queued,
                 "canceled_chapters": canceled,
+                "processed_chapters": processed,
+                "remaining_chapters": max(0, total - processed),
                 "current_chapter_no": job.current_chapter_no,
                 "job_status": job.job_status,
                 "last_updated_at": datetime.utcnow().isoformat(),

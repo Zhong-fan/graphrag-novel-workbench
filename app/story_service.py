@@ -62,6 +62,8 @@ class StoryGenerationService:
         memories: list[dict[str, str]],
         use_refiner: bool,
         context_pack_inputs: dict[str, Any] | None = None,
+        resolved_system_prompt: str | None = None,
+        resolved_user_prompt: str | None = None,
         progress: Callable[..., None] | None = None,
         trace: dict | None = None,
     ) -> tuple[str, str, str]:
@@ -126,6 +128,10 @@ class StoryGenerationService:
             reference_guidance=reference_guidance,
             scene_card=scene_card,
         )
+        if resolved_system_prompt is not None:
+            system_prompt = resolved_system_prompt
+        if resolved_user_prompt is not None:
+            prompt = resolved_user_prompt
 
         if progress:
             progress(
@@ -134,6 +140,13 @@ class StoryGenerationService:
                 details={"model": self.settings.writer_model, "phase": "draft"},
             )
         logger.info("Draft base generation started: project=%s response_type=%s", project_title, response_type)
+        if trace is not None:
+            trace["draft"] = {
+                "status": "running",
+                "model": self.settings.writer_model,
+                "system_prompt": system_prompt,
+                "user_prompt": prompt,
+            }
         response = self.llm.generate(
             model=text_model_for_role(self.settings, CapabilityRole.CREATIVE_TEXT),
             system_prompt=system_prompt,
@@ -142,13 +155,7 @@ class StoryGenerationService:
             event_callback=self._model_event_callback(progress, "draft"),
         )
         if trace is not None:
-            trace["draft"] = {
-                "status": "succeeded",
-                "model": self.settings.writer_model,
-                "system_prompt": system_prompt,
-                "user_prompt": prompt,
-                "raw_output": response.text,
-            }
+            trace["draft"].update(status="succeeded", raw_output=response.text)
         payload = self._parse_json(response.text)
         title = str(payload.get("title", "")).strip() or "未命名章节"
         summary = str(payload.get("summary", "")).strip() or user_prompt[:80]

@@ -39,6 +39,7 @@ import type {
   MyWorkspaceResponse,
   RestoreTrashPayload,
   BatchGenerationJob,
+  BatchGenerationChapterTask,
   BatchGenerationPayload,
   CreateStoryboardPayload,
   StoryboardImportPayload,
@@ -437,6 +438,14 @@ export const api = {
     request<BatchGenerationJob>(`/api/projects/${projectId}/batch-generation/${jobId}/cancel`, {
       method: "POST",
       token,
+    }),
+  chapterTask: (token: string, projectId: number, taskId: number) =>
+    request<BatchGenerationChapterTask>(`/api/projects/${projectId}/chapter-tasks/${taskId}`, { token }),
+  retryChapterTask: (token: string, projectId: number, taskId: number, mode: "same_inputs" | "edit_inputs" = "same_inputs", input_overrides: Record<string, unknown> = {}) =>
+    request<BatchGenerationChapterTask>(`/api/projects/${projectId}/chapter-tasks/${taskId}/retry`, {
+      method: "POST",
+      token,
+      body: JSON.stringify({ mode, input_overrides }),
     }),
   createStoryboard: (token: string, projectId: number, payload: CreateStoryboardPayload) =>
     request<Storyboard>(`/api/projects/${projectId}/storyboards`, {

@@ -102,6 +102,7 @@ async function testProjectCreateDeleteRestore(page) {
   await page.getByText(projectTitle).first().waitFor();
 
   const projectCard = page.locator(".toon-project-grid article").filter({ hasText: projectTitle }).first();
+  page.once("dialog", (dialog) => dialog.accept());
   await projectCard.getByRole("button", { name: "删除" }).click();
   await page.locator(".toon-empty").filter({ hasText: "还没有项目" }).waitFor();
 
@@ -143,7 +144,9 @@ async function testWorkbenchSmokePath(page) {
 
     await buttonByText(page, "出片").click();
     await page.locator(".toon-canvas--production").waitFor();
-    await page.getByText("Track 1 · 分镜").waitFor();
+    await page.getByText("还没有分镜").waitFor();
+    await buttonByText(page, "生成分镜").waitFor();
+    await buttonByText(page, "导入分镜 JSON").waitFor();
 
     await buttonByText(page, "设置").click();
     await page.locator(".toon-canvas--settings").waitFor();

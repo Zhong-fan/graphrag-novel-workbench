@@ -354,6 +354,7 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
         @update-context-pack-todo="store.updateContextPackTodo"
         @generate-series-plan="store.generateSeriesPlan"
         @run-batch-generation="store.runBatchGeneration"
+        @retry-chapter-task="store.retryChapterTask"
         @revise-draft-version="store.reviseDraftVersion"
         @canonicalize-draft-version="store.canonicalizeDraftVersion"
         @confirm-series-plan="store.lockSeriesPlan"

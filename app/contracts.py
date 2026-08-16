@@ -845,6 +845,22 @@ class BatchGenerationChapterTaskOut(BaseModel):
     finished_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    current_step: str = "resolve_inputs"
+    resolved_input_manifest: dict[str, Any] = Field(default_factory=dict)
+    manifest_fingerprint: str = ""
+    predecessor_chapter_version_id: int | None = None
+    canonical_story_state_version: str = ""
+    execution_steps: list[dict[str, Any]] = Field(default_factory=list)
+    attempts: list[dict[str, Any]] = Field(default_factory=list)
+    output_validity: str = "pending"
+    supersedes_task_id: int | None = None
+    estimated_cost: float | None = None
+    actual_cost: float | None = None
+
+
+class ChapterTaskRetryRequest(BaseModel):
+    mode: str = Field(default="same_inputs", pattern="^(same_inputs|edit_inputs)$")
+    input_overrides: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskEventOut(BaseModel):

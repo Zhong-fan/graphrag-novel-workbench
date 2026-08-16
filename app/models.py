@@ -667,12 +667,43 @@ class BatchGenerationChapterTask(Base, TimestampMixin):
     error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    current_step: Mapped[str] = mapped_column(String(60), default="resolve_inputs", nullable=False)
+    manifest_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    manifest_fingerprint: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    predecessor_chapter_version_id: Mapped[int | None] = mapped_column(ForeignKey("draft_versions.id"), nullable=True)
+    canonical_story_state_version: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    execution_steps_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    output_validity: Mapped[str] = mapped_column(String(40), default="pending", nullable=False)
+    supersedes_task_id: Mapped[int | None] = mapped_column(ForeignKey("batch_generation_chapter_tasks.id"), nullable=True)
+    estimated_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    actual_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     job: Mapped["BatchGenerationJob"] = relationship(back_populates="chapter_tasks")
     chapter_outline: Mapped["ChapterOutline"] = relationship()
-    draft_version: Mapped["DraftVersion | None"] = relationship()
+    draft_version: Mapped["DraftVersion | None"] = relationship(foreign_keys=[draft_version_id])
     generation_run: Mapped["GenerationRun | None"] = relationship()
     events: Mapped[list["TaskEvent"]] = relationship(back_populates="chapter_task")
+    predecessor_chapter_version: Mapped["DraftVersion | None"] = relationship(foreign_keys=[predecessor_chapter_version_id])
+    supersedes_task: Mapped["BatchGenerationChapterTask | None"] = relationship(remote_side=[id], foreign_keys=[supersedes_task_id])
+    attempts: Mapped[list["ChapterTaskAttempt"]] = relationship(back_populates="chapter_task", cascade="all, delete-orphan")
+
+
+class ChapterTaskAttempt(Base, TimestampMixin):
+    __tablename__ = "chapter_task_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chapter_task_id: Mapped[int] = mapped_column(ForeignKey("batch_generation_chapter_tasks.id"), nullable=False)
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), default="provider_generate", nullable=False)
+    manifest_fingerprint: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="queued", nullable=False)
+    provider_output_id: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    reused_output: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    chapter_task: Mapped["BatchGenerationChapterTask"] = relationship(back_populates="attempts")
 
 
 class TaskEvent(Base):

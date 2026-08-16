@@ -36,6 +36,7 @@ GENERATION_EVIDENCE_SCHEMA_MIGRATION = "20260806_0023_generation_evidence_schema
 EXCEPTION_INBOX_SCHEMA_MIGRATION = "20260806_0024_exception_inbox_schema"
 VOICE_DESIGN_SCHEMA_MIGRATION = "20260806_0025_voice_design_schema"
 ASSET_VERSION_SCHEMA_MIGRATION = "20260806_0026_asset_version_schema"
+CHAPTER_TASK_RECOVERY_SCHEMA_MIGRATION = "20260816_0027_chapter_task_recovery_schema"
 
 
 settings = load_settings()
@@ -225,6 +226,12 @@ def _migrate_schema() -> None:
             ASSET_VERSION_SCHEMA_MIGRATION,
             "Version snapshots for reversible auto-adopted asset changes",
             _migrate_asset_version_schema,
+        )
+        _run_schema_migration(
+            connection,
+            CHAPTER_TASK_RECOVERY_SCHEMA_MIGRATION,
+            "Recoverable chapter task manifests, steps, attempts, and output validity",
+            _migrate_chapter_task_recovery_schema,
         )
     _backfill_character_reference_profiles()
 
@@ -1334,3 +1341,27 @@ def _migrate_voice_design_schema(connection) -> None:
 
 def _migrate_asset_version_schema(connection) -> None:
     _create_table_if_missing(connection, "media_asset_versions")
+
+
+def _migrate_chapter_task_recovery_schema(connection) -> None:
+    if "batch_generation_chapter_tasks" not in inspect(connection).get_table_names():
+        return
+    columns = {column["name"] for column in inspect(connection).get_columns("batch_generation_chapter_tasks")}
+    definitions = {
+        "current_step": "VARCHAR(60) NOT NULL DEFAULT 'resolve_inputs'",
+        "manifest_json": "TEXT NULL",
+        "manifest_fingerprint": "VARCHAR(64) NOT NULL DEFAULT ''",
+        "predecessor_chapter_version_id": "INTEGER NULL",
+        "canonical_story_state_version": "VARCHAR(120) NOT NULL DEFAULT ''",
+        "execution_steps_json": "TEXT NULL",
+        "output_validity": "VARCHAR(40) NOT NULL DEFAULT 'pending'",
+        "supersedes_task_id": "INTEGER NULL",
+        "estimated_cost": "FLOAT NULL",
+        "actual_cost": "FLOAT NULL",
+    }
+    for name, definition in definitions.items():
+        if name not in columns:
+            connection.execute(text(f"ALTER TABLE batch_generation_chapter_tasks ADD COLUMN {name} {definition}"))
+    connection.execute(text("UPDATE batch_generation_chapter_tasks SET manifest_json = '{}' WHERE manifest_json IS NULL"))
+    connection.execute(text("UPDATE batch_generation_chapter_tasks SET execution_steps_json = '[]' WHERE execution_steps_json IS NULL"))
+    _create_table_if_missing(connection, "chapter_task_attempts")

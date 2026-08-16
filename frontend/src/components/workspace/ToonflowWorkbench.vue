@@ -91,6 +91,7 @@ const emit = defineEmits<{
   (e: "prepare-video-production", storyboardId: number, payload: VideoProductionPreflightPayload): void;
   (e: "generate-series-plan", payload: GenerateSeriesPlanPayload): void;
   (e: "run-batch-generation", payload: BatchGenerationPayload): void;
+  (e: "retry-chapter-task", taskId: number, mode?: "same_inputs" | "edit_inputs", inputOverrides?: Record<string, unknown>): void;
   (e: "revise-draft-version", draftVersionId: number, payload: ReviseDraftPayload): void;
   (e: "canonicalize-draft-version", draftVersionId: number, payload: CanonicalizeDraftPayload): void;
   (e: "confirm-series-plan", seriesPlanId: number): void;
@@ -240,6 +241,10 @@ function selectModule(module: WorkbenchModule) {
   if (module === "trash") emit("go", "trash");
   else if (module === "assets") emit("go", "assetLibrary");
   else emit("go", "studio");
+}
+
+function onChapterTaskRetry(taskId: number, mode: "same_inputs" | "edit_inputs" = "same_inputs", inputOverrides: Record<string, unknown> = {}) {
+  emit("retry-chapter-task", taskId, mode, inputOverrides);
 }
 function submitStoryboardImport() {
   storyboardImportError.value = "";
@@ -617,6 +622,7 @@ watch(() => props.contextPack, (pack) => {
       :state="longformState"
       :project-title="selectedProject?.title ?? ''"
       @back="emit('go', 'studio')"
+      @retry-chapter-task="onChapterTaskRetry"
     />
     <aside class="toon-rail" aria-label="ToonFlow style navigation">
       <button class="toon-rail__brand" type="button" aria-label="ChenFlow 项目" :aria-current="activeModule === 'projects' ? 'page' : undefined" @click="selectModule('projects')">CF</button>

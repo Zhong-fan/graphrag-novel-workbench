@@ -1344,6 +1344,22 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
+  async function retryChapterTask(taskId: number, mode: "same_inputs" | "edit_inputs" = "same_inputs", inputOverrides: Record<string, unknown> = {}) {
+    if (!token.value || !activeProject.value) return null;
+    error.value = "";
+    success.value = "";
+    try {
+      const task = await api.retryChapterTask(token.value, activeProject.value.project.id, taskId, mode, inputOverrides);
+      await loadLongformState(activeProject.value.project.id);
+      startLongformPolling(activeProject.value.project.id);
+      success.value = mode === "same_inputs" ? "章节已按相同输入重新排队。" : "章节已创建新的输入版本任务。";
+      return task;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "章节重试失败。";
+      return null;
+    }
+  }
+
   async function importStoryboard(payload: StoryboardImportPayload) {
     if (!token.value || !activeProject.value) return null;
     loading.value = true;
@@ -1851,6 +1867,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     restoreSeriesPlanVersion,
     runBatchGeneration,
     retryBatchGeneration,
+    retryChapterTask,
     pauseBatchGeneration,
     resumeBatchGeneration,
     cancelBatchGeneration,

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from .api_support import _project_or_404
 from .api_support_longform import (
     _batch_job_out,
+    _batch_chapter_task_out,
     _chapter_outline_out,
     _draft_version_out,
     _outline_feedback_out,
@@ -36,6 +37,8 @@ from .creative_source_contracts import (
 from .contracts import (
     BatchGenerationJobOut,
     BatchGenerationRequest,
+    BatchGenerationChapterTaskOut,
+    ChapterTaskRetryRequest,
     CanonicalizeDraftVersionRequest,
     ChapterOutlineOut,
     CreateStoryboardRequest,
@@ -70,6 +73,7 @@ from .media_asset_recycle import soft_delete_media_asset
 from .models import (
     ArcPlan,
     BatchGenerationJob,
+    BatchGenerationChapterTask,
     ChapterOutline,
     DraftVersion,
     Novel,
@@ -404,8 +408,42 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         plan = _series_plan_or_404(db, project.id, previous_job.series_plan_id)
         if plan.status != "locked":
             raise HTTPException(status_code=409, detail="请先锁定长篇概要再重试批量生成。")
-        job = BatchGenerationService(settings).retry_job(db=db, job=previous_job)
+        try:
+            job = BatchGenerationService(settings).retry_job(db=db, job=previous_job)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _batch_job_out(job)
+
+    @router.get("/api/projects/{project_id}/chapter-tasks/{task_id}", response_model=BatchGenerationChapterTaskOut)
+    def get_chapter_task(
+        project_id: int,
+        task_id: int,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> BatchGenerationChapterTaskOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        task = db.scalar(select(BatchGenerationChapterTask).join(ChapterOutline, BatchGenerationChapterTask.chapter_outline_id == ChapterOutline.id).where(BatchGenerationChapterTask.id == task_id, ChapterOutline.project_id == project.id))
+        if task is None:
+            raise HTTPException(status_code=404, detail="章节任务不存在。")
+        return _batch_chapter_task_out(task)
+
+    @router.post("/api/projects/{project_id}/chapter-tasks/{task_id}/retry", response_model=BatchGenerationChapterTaskOut)
+    def retry_chapter_task(
+        project_id: int,
+        task_id: int,
+        payload: ChapterTaskRetryRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> BatchGenerationChapterTaskOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        task = db.scalar(select(BatchGenerationChapterTask).join(ChapterOutline, BatchGenerationChapterTask.chapter_outline_id == ChapterOutline.id).where(BatchGenerationChapterTask.id == task_id, ChapterOutline.project_id == project.id))
+        if task is None:
+            raise HTTPException(status_code=404, detail="章节任务不存在。")
+        try:
+            replacement = BatchGenerationService(settings).retry_chapter_task(db=db, task=task, mode=payload.mode, input_overrides=payload.input_overrides)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _batch_chapter_task_out(replacement)
 
     @router.post("/api/projects/{project_id}/batch-generation/{job_id}/pause", response_model=BatchGenerationJobOut)
     def pause_batch_generation(

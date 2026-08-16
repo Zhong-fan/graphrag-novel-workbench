@@ -22,6 +22,7 @@ from .json_utils import json_loads_list, json_loads_object
 from .models import (
     ArcPlan,
     BatchGenerationChapterTask,
+    ChapterTaskAttempt,
     BatchGenerationJob,
     ChapterOutline,
     DraftVersion,
@@ -432,7 +433,33 @@ def _batch_chapter_task_out(task: BatchGenerationChapterTask) -> BatchGeneration
         finished_at=task.finished_at,
         created_at=task.created_at,
         updated_at=task.updated_at,
+        current_step=task.current_step,
+        resolved_input_manifest=json_loads_object(task.manifest_json),
+        manifest_fingerprint=task.manifest_fingerprint,
+        predecessor_chapter_version_id=task.predecessor_chapter_version_id,
+        canonical_story_state_version=task.canonical_story_state_version,
+        execution_steps=json_loads_list(task.execution_steps_json),
+        attempts=[_chapter_task_attempt_out(item) for item in sorted(task.attempts, key=lambda value: value.attempt_no)],
+        output_validity=task.output_validity,
+        supersedes_task_id=task.supersedes_task_id,
+        estimated_cost=task.estimated_cost,
+        actual_cost=task.actual_cost,
     )
+
+
+def _chapter_task_attempt_out(attempt: ChapterTaskAttempt) -> dict[str, Any]:
+    return {
+        "id": attempt.id,
+        "attempt_no": attempt.attempt_no,
+        "kind": attempt.kind,
+        "manifest_fingerprint": attempt.manifest_fingerprint,
+        "status": attempt.status,
+        "provider_output_id": attempt.provider_output_id,
+        "reused_output": attempt.reused_output,
+        "error_message": attempt.error_message,
+        "started_at": attempt.started_at,
+        "finished_at": attempt.finished_at,
+    }
 
 
 def _task_event_out(event: TaskEvent) -> TaskEventOut:
