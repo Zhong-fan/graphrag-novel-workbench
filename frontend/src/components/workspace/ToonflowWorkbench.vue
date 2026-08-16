@@ -92,6 +92,7 @@ const emit = defineEmits<{
   (e: "generate-series-plan", payload: GenerateSeriesPlanPayload): void;
   (e: "run-batch-generation", payload: BatchGenerationPayload): void;
   (e: "retry-chapter-task", taskId: number, mode?: "same_inputs" | "edit_inputs", inputOverrides?: Record<string, unknown>): void;
+  (e: "cascade-regenerate-chapters", seriesPlanId: number, startChapterNo: number): void;
   (e: "revise-draft-version", draftVersionId: number, payload: ReviseDraftPayload): void;
   (e: "canonicalize-draft-version", draftVersionId: number, payload: CanonicalizeDraftPayload): void;
   (e: "confirm-series-plan", seriesPlanId: number): void;
@@ -245,6 +246,9 @@ function selectModule(module: WorkbenchModule) {
 
 function onChapterTaskRetry(taskId: number, mode: "same_inputs" | "edit_inputs" = "same_inputs", inputOverrides: Record<string, unknown> = {}) {
   emit("retry-chapter-task", taskId, mode, inputOverrides);
+}
+function onCascadeRegenerateChapters(seriesPlanId: number, startChapterNo: number) {
+  emit("cascade-regenerate-chapters", seriesPlanId, startChapterNo);
 }
 function submitStoryboardImport() {
   storyboardImportError.value = "";
@@ -623,6 +627,7 @@ watch(() => props.contextPack, (pack) => {
       :project-title="selectedProject?.title ?? ''"
       @back="emit('go', 'studio')"
       @retry-chapter-task="onChapterTaskRetry"
+      @cascade-regenerate-chapters="onCascadeRegenerateChapters"
     />
     <aside class="toon-rail" aria-label="ToonFlow style navigation">
       <button class="toon-rail__brand" type="button" aria-label="ChenFlow 项目" :aria-current="activeModule === 'projects' ? 'page' : undefined" @click="selectModule('projects')">CF</button>

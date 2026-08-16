@@ -447,6 +447,12 @@ export const api = {
       token,
       body: JSON.stringify({ mode, input_overrides }),
     }),
+  cascadeRegenerateChapters: (token: string, projectId: number, seriesPlanId: number, startChapterNo: number) =>
+    request<BatchGenerationJob>(`/api/projects/${projectId}/series-plans/${seriesPlanId}/cascade-regeneration`, {
+      method: "POST",
+      token,
+      body: JSON.stringify({ start_chapter_no: startChapterNo, confirmed: true }),
+    }),
   createStoryboard: (token: string, projectId: number, payload: CreateStoryboardPayload) =>
     request<Storyboard>(`/api/projects/${projectId}/storyboards`, {
       method: "POST",

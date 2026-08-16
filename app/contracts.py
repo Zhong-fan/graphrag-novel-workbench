@@ -863,6 +863,11 @@ class ChapterTaskRetryRequest(BaseModel):
     input_overrides: dict[str, Any] = Field(default_factory=dict)
 
 
+class CascadeChapterRegenerationRequest(BaseModel):
+    start_chapter_no: int = Field(..., ge=1, le=10000)
+    confirmed: bool = False
+
+
 class TaskEventOut(BaseModel):
     id: int
     project_id: int

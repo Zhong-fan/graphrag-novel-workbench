@@ -7,7 +7,11 @@ const props = defineProps<{
   projectTitle: string;
 }>();
 
-const emit = defineEmits<{ (e: "back"): void; (e: "retry-chapter-task", taskId: number, mode?: "same_inputs" | "edit_inputs", inputOverrides?: Record<string, unknown>): void }>();
+const emit = defineEmits<{
+  (e: "back"): void;
+  (e: "retry-chapter-task", taskId: number, mode?: "same_inputs" | "edit_inputs", inputOverrides?: Record<string, unknown>): void;
+  (e: "cascade-regenerate-chapters", seriesPlanId: number, startChapterNo: number): void;
+}>();
 
 const latestPlan = computed(() => props.state.series_plans[0] ?? null);
 const latestJob = computed(() => props.state.batch_jobs[0] ?? null);
@@ -21,6 +25,8 @@ const chapterTasks = computed(() => {
   }
   return [...latestByChapter.values()].sort((a, b) => a.chapter_no - b.chapter_no);
 });
+const staleTasks = computed(() => chapterTasks.value.filter((task) => task.output_validity === "stale_dependency"));
+const earliestStaleChapterNo = computed(() => staleTasks.value.length ? Math.min(...staleTasks.value.map((task) => task.chapter_no)) : null);
 const drafts = computed(() => {
   const byChapter = new Map<number, DraftVersion>();
   for (const draft of props.state.draft_versions) {
@@ -99,6 +105,13 @@ function submitEdit(taskId: number) {
   editingTaskId.value = null;
   editInstruction.value = "";
 }
+function confirmCascadeRegeneration() {
+  const start = earliestStaleChapterNo.value;
+  if (!latestPlan.value || start === null) return;
+  const chapters = staleTasks.value.map((task) => task.chapter_no).sort((a, b) => a - b);
+  if (!window.confirm(`将从第 ${start} 章开始重新调用模型。受影响章节：${chapters.join("、")}。旧正文会保留为历史版本，是否继续？`)) return;
+  emit("cascade-regenerate-chapters", latestPlan.value.id, start);
+}
 function stepLabel(name: string): string {
   return ({ resolve_inputs: "解析输入", preflight: "生成前检查", provider_generate: "调用写作模型", validate_output: "校验输出", persist_output: "保存正文" } as Record<string, string>)[name] || name;
 }
@@ -146,6 +159,10 @@ function chapterStatusLabel(chapterNo: number): string {
 
       <section v-if="chapterTasks.length" class="draft-reader__section">
         <header><h2>章节任务</h2><span>{{ chapterTasks.length }} 个章节 · 每章取最新任务</span></header>
+        <aside v-if="earliestStaleChapterNo !== null" class="draft-reader__cascade-warning">
+          <div><strong>后续章节依赖了旧的上游版本</strong><p>受影响章节：{{ staleTasks.map((task) => task.chapter_no).join("、") }}。旧正文仍会保留，但不能继续作为当前有效续写输入。</p></div>
+          <button type="button" @click="confirmCascadeRegeneration">从第 {{ earliestStaleChapterNo }} 章开始重生成</button>
+        </aside>
         <div class="draft-reader__tasks">
             <article v-for="task in chapterTasks" :key="task.id" class="draft-reader__task">
             <button type="button" class="draft-reader__task-open" @click="toggleTask(task.id)"><strong>第 {{ task.chapter_no }} 章</strong>
@@ -285,6 +302,9 @@ function chapterStatusLabel(chapterNo: number): string {
   border-radius: 10px;
   background: #fffafd;
 }
+.draft-reader__cascade-warning { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 14px; border: 1px solid #e8b45d; border-radius: 10px; background: #fff8e8; }
+.draft-reader__cascade-warning p { margin: 4px 0 0; color: var(--toon-ink-soft); line-height: 1.6; }
+.draft-reader__cascade-warning button { flex: 0 0 auto; }
 .draft-reader__prompt-card h3 { margin: 0; font-size: 0.9rem; }
 .draft-reader__prompt-card p { margin: 0; }
 .draft-reader__edit-form label { display: grid; gap: 8px; font-weight: 800; font-size: 0.82rem; }

@@ -117,6 +117,33 @@ class ChapterTaskRetryBehaviorTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "输入冻结之前"):
             self.service.retry_job(db=self.db, job=task.job)
 
+    def test_cascade_regeneration_starts_at_earliest_stale_chapter_and_preserves_history(self):
+        source = self.db.get(BatchGenerationChapterTask, self.task_id)
+        outline_two = ChapterOutline(project_id=source.job.project_id, series_plan_id=source.job.series_plan_id, chapter_no=2, title="第二章", outline_json='{"goal":"延续"}', status="draft_generated")
+        historical_job = BatchGenerationJob(project_id=source.job.project_id, series_plan_id=source.job.series_plan_id, start_chapter_no=2, end_chapter_no=2, job_status="completed", result_summary_json="{}")
+        historical = BatchGenerationChapterTask(job=historical_job, chapter_outline=outline_two, chapter_no=2, status="completed", error_message="", output_validity="stale_dependency")
+        self.db.add(historical)
+        self.db.commit()
+        historical_id = historical.id
+
+        with self.assertRaisesRegex(RuntimeError, "最早失效"):
+            self.service.create_stale_cascade_job(
+                db=self.db,
+                project=source.job.project,
+                series_plan=source.job.series_plan,
+                start_chapter_no=3,
+            )
+        job = self.service.create_stale_cascade_job(
+            db=self.db,
+            project=source.job.project,
+            series_plan=source.job.series_plan,
+            start_chapter_no=2,
+        )
+        self.assertEqual(job.job_status, "queued")
+        self.assertEqual([task.chapter_no for task in job.chapter_tasks], [2])
+        self.assertEqual(job.chapter_tasks[0].supersedes_task_id, historical_id)
+        self.assertEqual(self.db.get(BatchGenerationChapterTask, historical_id).output_validity, "stale_dependency")
+
 
 if __name__ == "__main__":
     unittest.main()

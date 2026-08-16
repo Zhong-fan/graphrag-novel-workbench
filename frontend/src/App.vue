@@ -355,6 +355,7 @@ watch(() => [authError.value, error.value, success.value], ([nextAuthError, next
         @generate-series-plan="store.generateSeriesPlan"
         @run-batch-generation="store.runBatchGeneration"
         @retry-chapter-task="store.retryChapterTask"
+        @cascade-regenerate-chapters="store.cascadeRegenerateChapters"
         @revise-draft-version="store.reviseDraftVersion"
         @canonicalize-draft-version="store.canonicalizeDraftVersion"
         @confirm-series-plan="store.lockSeriesPlan"

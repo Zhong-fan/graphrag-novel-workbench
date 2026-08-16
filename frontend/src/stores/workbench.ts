@@ -1360,6 +1360,22 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     }
   }
 
+  async function cascadeRegenerateChapters(seriesPlanId: number, startChapterNo: number) {
+    if (!token.value || !activeProject.value) return null;
+    error.value = "";
+    success.value = "";
+    try {
+      const job = await api.cascadeRegenerateChapters(token.value, activeProject.value.project.id, seriesPlanId, startChapterNo);
+      await loadLongformState(activeProject.value.project.id);
+      startLongformPolling(activeProject.value.project.id);
+      success.value = `已从第 ${startChapterNo} 章开始创建级联重生成任务。`;
+      return job;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "创建级联重生成任务失败。";
+      return null;
+    }
+  }
+
   async function importStoryboard(payload: StoryboardImportPayload) {
     if (!token.value || !activeProject.value) return null;
     loading.value = true;
@@ -1868,6 +1884,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     runBatchGeneration,
     retryBatchGeneration,
     retryChapterTask,
+    cascadeRegenerateChapters,
     pauseBatchGeneration,
     resumeBatchGeneration,
     cancelBatchGeneration,

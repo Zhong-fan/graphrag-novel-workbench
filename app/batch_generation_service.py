@@ -110,8 +110,8 @@ class BatchGenerationService:
                     current_step="resolve_inputs",
                     execution_steps_json=json.dumps(self._default_steps(), ensure_ascii=False),
                 )
-            self._resolve_task_manifest(task, project=project, series_plan=series_plan, outline=outline, db=db)
             db.add(task)
+            self._resolve_task_manifest(task, project=project, series_plan=series_plan, outline=outline, db=db)
         self._add_event(
             db,
             job=job,
@@ -437,6 +437,95 @@ class BatchGenerationService:
         db.commit()
         db.refresh(replacement)
         return replacement
+
+    def create_stale_cascade_job(
+        self,
+        *,
+        db: Session,
+        project: Project,
+        series_plan: SeriesPlan,
+        start_chapter_no: int,
+    ) -> BatchGenerationJob:
+        if series_plan.status != "locked":
+            raise RuntimeError("请先确认当前长篇规划版本，再进行级联重生成。")
+        active_job = db.scalar(
+            select(BatchGenerationJob)
+            .where(
+                BatchGenerationJob.project_id == project.id,
+                BatchGenerationJob.job_status.in_(self.ACTIVE_JOB_STATUSES),
+            )
+            .order_by(BatchGenerationJob.created_at.desc(), BatchGenerationJob.id.desc())
+            .limit(1)
+        )
+        if active_job is not None:
+            raise RuntimeError(f"已有未结束的正文任务（#{active_job.id}），请等待它结束后再级联重生成。")
+
+        all_tasks = db.scalars(
+            select(BatchGenerationChapterTask)
+            .join(BatchGenerationJob, BatchGenerationChapterTask.job_id == BatchGenerationJob.id)
+            .where(BatchGenerationJob.series_plan_id == series_plan.id)
+            .order_by(BatchGenerationChapterTask.chapter_no.asc(), BatchGenerationChapterTask.id.desc())
+        ).all()
+        latest_by_chapter: dict[int, BatchGenerationChapterTask] = {}
+        for chapter_task in all_tasks:
+            latest_by_chapter.setdefault(chapter_task.chapter_no, chapter_task)
+        stale_tasks = [
+            chapter_task
+            for chapter_task in latest_by_chapter.values()
+            if chapter_task.output_validity == "stale_dependency"
+        ]
+        if not stale_tasks:
+            raise RuntimeError("当前没有因上游变化而失效的章节。")
+        earliest = min(chapter_task.chapter_no for chapter_task in stale_tasks)
+        if start_chapter_no != earliest:
+            raise RuntimeError(f"必须从最早失效的第 {earliest} 章开始，不能跳过仍依赖旧版本的章节。")
+
+        selected = sorted((task for task in stale_tasks if task.chapter_no >= earliest), key=lambda item: item.chapter_no)
+        expected_chapters = list(range(selected[0].chapter_no, selected[-1].chapter_no + 1))
+        actual_chapters = [task.chapter_no for task in selected]
+        if actual_chapters != expected_chapters:
+            raise RuntimeError("失效章节范围不连续，请先检查章节依赖记录，系统不会跳章生成。")
+        job = BatchGenerationJob(
+            project=project,
+            series_plan=series_plan,
+            start_chapter_no=selected[0].chapter_no,
+            end_chapter_no=selected[-1].chapter_no,
+            job_status="queued",
+            result_summary_json=json.dumps({}, ensure_ascii=False),
+        )
+        db.add(job)
+        db.flush()
+        for stale_task in selected:
+            replacement = BatchGenerationChapterTask(
+                job=job,
+                chapter_outline=stale_task.chapter_outline,
+                chapter_no=stale_task.chapter_no,
+                status="queued",
+                error_message="",
+                current_step="resolve_inputs",
+                execution_steps_json=json.dumps(self._default_steps(), ensure_ascii=False),
+                supersedes_task_id=stale_task.id,
+                output_validity="pending",
+            )
+            db.add(replacement)
+            self._resolve_task_manifest(
+                replacement,
+                project=project,
+                series_plan=series_plan,
+                outline=stale_task.chapter_outline,
+                db=db,
+            )
+        self._rebuild_job_summary(job)
+        self._add_event(
+            db,
+            job=job,
+            event_type="cascade_regeneration_queued",
+            message=f"已确认从第 {earliest} 章开始级联重生成，共 {len(selected)} 章。",
+            payload={"start_chapter_no": earliest, "affected_chapter_nos": [task.chapter_no for task in selected]},
+        )
+        db.commit()
+        db.refresh(job)
+        return job
 
     def _assert_same_input_retry_safe(self, *, db: Session, task: BatchGenerationChapterTask, check_job_state: bool = True) -> None:
         """Guard the invariant that a same-input retry really replays one immutable provider request."""

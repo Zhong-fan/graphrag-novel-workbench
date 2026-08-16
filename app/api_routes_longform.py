@@ -39,6 +39,7 @@ from .contracts import (
     BatchGenerationRequest,
     BatchGenerationChapterTaskOut,
     ChapterTaskRetryRequest,
+    CascadeChapterRegenerationRequest,
     CanonicalizeDraftVersionRequest,
     ChapterOutlineOut,
     CreateStoryboardRequest,
@@ -444,6 +445,29 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _batch_chapter_task_out(replacement)
+
+    @router.post("/api/projects/{project_id}/series-plans/{series_plan_id}/cascade-regeneration", response_model=BatchGenerationJobOut)
+    def cascade_regenerate_chapters(
+        project_id: int,
+        series_plan_id: int,
+        payload: CascadeChapterRegenerationRequest,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> BatchGenerationJobOut:
+        project = _project_or_404(db, current_user.id, project_id)
+        plan = _series_plan_or_404(db, project.id, series_plan_id)
+        if not payload.confirmed:
+            raise HTTPException(status_code=409, detail="请先确认受影响章节范围和本次模型调用成本。")
+        try:
+            job = BatchGenerationService(settings).create_stale_cascade_job(
+                db=db,
+                project=project,
+                series_plan=plan,
+                start_chapter_no=payload.start_chapter_no,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _batch_job_out(job)
 
     @router.post("/api/projects/{project_id}/batch-generation/{job_id}/pause", response_model=BatchGenerationJobOut)
     def pause_batch_generation(
