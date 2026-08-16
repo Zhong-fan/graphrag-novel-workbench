@@ -323,9 +323,19 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         outline = _chapter_outline_or_404(db, project.id, outline_id)
         if outline.status == "chapter_canonical":
             raise HTTPException(status_code=409, detail="已定稿章节不能直接修改概要。")
-        outline.title = payload.title.strip()
-        outline.outline_json = json_dumps(payload.outline)
-        outline.status = payload.status.strip() or "outline_draft"
+        next_title = payload.title.strip()
+        next_outline_json = json_dumps(payload.outline)
+        next_status = payload.status.strip() or "outline_draft"
+        generation_inputs_changed = outline.title != next_title or outline.outline_json != next_outline_json
+        generation_contract_changed = generation_inputs_changed or outline.status != next_status
+        if generation_contract_changed:
+            try:
+                BatchGenerationService(settings).assert_no_active_job_for_upstream_change(db=db, project_id=project.id)
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        outline.title = next_title
+        outline.outline_json = next_outline_json
+        outline.status = next_status
         if outline.status == "outline_locked" and outline.locked_at is None:
             outline.locked_at = datetime.utcnow()
         if outline.status != "outline_locked":
@@ -337,6 +347,14 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         if project_chapter is not None:
             project_chapter.title = outline.title
             project_chapter.premise = _outline_payload_to_prompt(payload.outline)
+        if generation_inputs_changed:
+            BatchGenerationService(settings).invalidate_chapter_outputs(
+                db=db,
+                series_plan_id=outline.series_plan_id,
+                from_chapter_no=outline.chapter_no,
+                changed_chapter_no=outline.chapter_no,
+                reason=f"第 {outline.chapter_no} 章概要已修改",
+            )
         db.commit()
         db.refresh(outline)
         return _chapter_outline_out(outline)
@@ -596,7 +614,24 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
     ) -> DraftVersionOut:
         project = _project_or_404(db, current_user.id, project_id)
         draft = _draft_version_or_404(db, project.id, draft_version_id)
+        if draft.status == "chapter_canonical":
+            raise HTTPException(status_code=409, detail="该正文版本已经确认，无需重复确认。")
         outline = draft.chapter_outline
+        previous_canonical = db.scalar(
+            select(DraftVersion)
+            .where(
+                DraftVersion.chapter_outline_id == outline.id,
+                DraftVersion.status == "chapter_canonical",
+                DraftVersion.id != draft.id,
+            )
+            .order_by(DraftVersion.version_no.desc(), DraftVersion.id.desc())
+            .limit(1)
+        )
+        if previous_canonical is not None:
+            try:
+                BatchGenerationService(settings).assert_no_active_job_for_upstream_change(db=db, project_id=project.id)
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         novel = None
         if payload.novel_id is not None:
             novel = db.scalar(
@@ -655,6 +690,15 @@ def register_longform_routes(router: APIRouter, *, settings: Settings) -> None:
         outline.status = "chapter_canonical"
         if draft.generation_run is not None and draft.generation_run.canonicalized_at is None:
             draft.generation_run.canonicalized_at = datetime.utcnow()
+        if previous_canonical is not None:
+            BatchGenerationService(settings).invalidate_chapter_outputs(
+                db=db,
+                series_plan_id=outline.series_plan_id,
+                from_chapter_no=outline.chapter_no + 1,
+                changed_chapter_no=outline.chapter_no,
+                reason=f"第 {outline.chapter_no} 章确认了新的正文版本 v{draft.version_no}",
+                invalidated_by_draft_version_id=draft.id,
+            )
         db.commit()
         db.refresh(draft)
         return _draft_version_out(draft)

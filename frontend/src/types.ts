@@ -620,6 +620,9 @@ export interface BatchGenerationChapterTask {
   execution_steps: Array<Record<string, unknown>>;
   attempts: Array<Record<string, unknown>>;
   output_validity: string;
+  invalidation_reason: string;
+  invalidated_by_chapter_no?: number | null;
+  invalidated_by_draft_version_id?: number | null;
   supersedes_task_id?: number | null;
   estimated_cost?: number | null;
   actual_cost?: number | null;

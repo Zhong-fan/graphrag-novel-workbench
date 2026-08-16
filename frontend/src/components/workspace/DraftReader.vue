@@ -160,7 +160,7 @@ function chapterStatusLabel(chapterNo: number): string {
       <section v-if="chapterTasks.length" class="draft-reader__section">
         <header><h2>章节任务</h2><span>{{ chapterTasks.length }} 个章节 · 每章取最新任务</span></header>
         <aside v-if="earliestStaleChapterNo !== null" class="draft-reader__cascade-warning">
-          <div><strong>后续章节依赖了旧的上游版本</strong><p>受影响章节：{{ staleTasks.map((task) => task.chapter_no).join("、") }}。旧正文仍会保留，但不能继续作为当前有效续写输入。</p></div>
+          <div><strong>后续章节依赖了旧的上游版本</strong><p>{{ staleTasks[0]?.invalidation_reason || "上游章节已变化" }}。受影响章节：{{ staleTasks.map((task) => task.chapter_no).join("、") }}。旧正文仍会保留，但不能继续作为当前有效续写输入。</p></div>
           <button type="button" @click="confirmCascadeRegeneration">从第 {{ earliestStaleChapterNo }} 章开始重生成</button>
         </aside>
         <div class="draft-reader__tasks">
@@ -170,6 +170,7 @@ function chapterStatusLabel(chapterNo: number): string {
             </button>
             <div v-if="selectedTaskId === task.id" class="draft-reader__task-detail">
               <p><strong>当前步骤：</strong>{{ stepLabel(task.current_step) }} · <strong>输出状态：</strong>{{ task.output_validity === "valid" ? "有效" : task.output_validity === "invalid" ? "无效" : task.output_validity === "stale_dependency" ? "上游已变化，需要重新确认" : "尚未产出" }}</p>
+              <p v-if="task.invalidation_reason" class="draft-reader__error">失效原因：{{ task.invalidation_reason }}<span v-if="task.invalidated_by_draft_version_id"> · 正文版本 #{{ task.invalidated_by_draft_version_id }}</span></p>
               <p v-if="task.error_message" class="draft-reader__error">{{ task.error_message }}</p>
               <p><strong>输入指纹：</strong>{{ task.manifest_fingerprint || "未生成" }}</p>
               <p><strong>预估成本：</strong>{{ task.estimated_cost ?? "不可用" }}</p>

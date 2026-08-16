@@ -853,6 +853,9 @@ class BatchGenerationChapterTaskOut(BaseModel):
     execution_steps: list[dict[str, Any]] = Field(default_factory=list)
     attempts: list[dict[str, Any]] = Field(default_factory=list)
     output_validity: str = "pending"
+    invalidation_reason: str = ""
+    invalidated_by_chapter_no: int | None = None
+    invalidated_by_draft_version_id: int | None = None
     supersedes_task_id: int | None = None
     estimated_cost: float | None = None
     actual_cost: float | None = None

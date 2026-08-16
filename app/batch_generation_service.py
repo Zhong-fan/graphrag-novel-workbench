@@ -413,30 +413,75 @@ class BatchGenerationService:
             output_validity="pending",
         )
         db.add(replacement)
-        downstream_tasks = db.scalars(
-            select(BatchGenerationChapterTask)
-            .join(BatchGenerationJob, BatchGenerationChapterTask.job_id == BatchGenerationJob.id)
-            .where(
-                BatchGenerationJob.series_plan_id == replacement_job.series_plan_id,
-                BatchGenerationChapterTask.chapter_no > task.chapter_no,
-                BatchGenerationChapterTask.output_validity == "valid",
-            )
-        ).all()
-        for downstream in downstream_tasks:
-            downstream.output_validity = "stale_dependency"
-            self._add_event(
-                db,
-                job=downstream.job,
-                chapter_task=downstream,
-                event_type="chapter_output_invalidated",
-                message=f"第 {downstream.chapter_no} 章因上游第 {task.chapter_no} 章开始重生成而需要重新确认。",
-                payload={"changed_upstream_chapter_no": task.chapter_no, "replacement_task_id": replacement.id},
-            )
+        self.invalidate_chapter_outputs(
+            db=db,
+            series_plan_id=replacement_job.series_plan_id,
+            from_chapter_no=task.chapter_no + 1,
+            changed_chapter_no=task.chapter_no,
+            reason=f"上游第 {task.chapter_no} 章开始重生成",
+            replacement_task_id=replacement.id,
+        )
         self._rebuild_job_summary(replacement_job)
         self._add_event(db, job=replacement_job, chapter_task=replacement, event_type="chapter_replacement_queued", message=f"第 {task.chapter_no} 章已按修改后的冻结输入创建新任务。", payload={"supersedes_task_id": task.id})
         db.commit()
         db.refresh(replacement)
         return replacement
+
+    def assert_no_active_job_for_upstream_change(self, *, db: Session, project_id: int) -> None:
+        active_job = db.scalar(
+            select(BatchGenerationJob)
+            .where(
+                BatchGenerationJob.project_id == project_id,
+                BatchGenerationJob.job_status.in_(self.ACTIVE_JOB_STATUSES),
+            )
+            .order_by(BatchGenerationJob.created_at.desc(), BatchGenerationJob.id.desc())
+            .limit(1)
+        )
+        if active_job is not None:
+            raise RuntimeError(f"正文任务 #{active_job.id} 尚未结束，不能修改它依赖的上游章节。")
+
+    def invalidate_chapter_outputs(
+        self,
+        *,
+        db: Session,
+        series_plan_id: int,
+        from_chapter_no: int,
+        changed_chapter_no: int,
+        reason: str,
+        invalidated_by_draft_version_id: int | None = None,
+        replacement_task_id: int | None = None,
+    ) -> list[int]:
+        """Mark current descendants stale without rewriting their historical execution result."""
+        affected_tasks = db.scalars(
+            select(BatchGenerationChapterTask)
+            .join(BatchGenerationJob, BatchGenerationChapterTask.job_id == BatchGenerationJob.id)
+            .where(
+                BatchGenerationJob.series_plan_id == series_plan_id,
+                BatchGenerationChapterTask.chapter_no >= from_chapter_no,
+                BatchGenerationChapterTask.output_validity == "valid",
+            )
+            .order_by(BatchGenerationChapterTask.chapter_no.asc(), BatchGenerationChapterTask.id.asc())
+        ).all()
+        affected_chapters: set[int] = set()
+        for affected in affected_tasks:
+            affected.output_validity = "stale_dependency"
+            affected.invalidation_reason = reason
+            affected.invalidated_by_chapter_no = changed_chapter_no
+            affected.invalidated_by_draft_version_id = invalidated_by_draft_version_id
+            affected_chapters.add(affected.chapter_no)
+            self._add_event(
+                db,
+                job=affected.job,
+                chapter_task=affected,
+                event_type="chapter_output_invalidated",
+                message=f"第 {affected.chapter_no} 章因{reason}而需要重新生成。",
+                payload={
+                    "changed_upstream_chapter_no": changed_chapter_no,
+                    "invalidated_by_draft_version_id": invalidated_by_draft_version_id,
+                    "replacement_task_id": replacement_task_id,
+                },
+            )
+        return sorted(affected_chapters)
 
     def create_stale_cascade_job(
         self,

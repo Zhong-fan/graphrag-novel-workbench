@@ -37,6 +37,7 @@ EXCEPTION_INBOX_SCHEMA_MIGRATION = "20260806_0024_exception_inbox_schema"
 VOICE_DESIGN_SCHEMA_MIGRATION = "20260806_0025_voice_design_schema"
 ASSET_VERSION_SCHEMA_MIGRATION = "20260806_0026_asset_version_schema"
 CHAPTER_TASK_RECOVERY_SCHEMA_MIGRATION = "20260816_0027_chapter_task_recovery_schema"
+CHAPTER_DEPENDENCY_INVALIDATION_SCHEMA_MIGRATION = "20260816_0028_chapter_dependency_invalidation_schema"
 
 
 settings = load_settings()
@@ -232,6 +233,12 @@ def _migrate_schema() -> None:
             CHAPTER_TASK_RECOVERY_SCHEMA_MIGRATION,
             "Recoverable chapter task manifests, steps, attempts, and output validity",
             _migrate_chapter_task_recovery_schema,
+        )
+        _run_schema_migration(
+            connection,
+            CHAPTER_DEPENDENCY_INVALIDATION_SCHEMA_MIGRATION,
+            "Chapter output invalidation cause and source version metadata",
+            _migrate_chapter_dependency_invalidation_schema,
         )
     _backfill_character_reference_profiles()
 
@@ -1355,6 +1362,9 @@ def _migrate_chapter_task_recovery_schema(connection) -> None:
         "canonical_story_state_version": "VARCHAR(120) NOT NULL DEFAULT ''",
         "execution_steps_json": "TEXT NULL",
         "output_validity": "VARCHAR(40) NOT NULL DEFAULT 'pending'",
+        "invalidation_reason": "TEXT NULL",
+        "invalidated_by_chapter_no": "INTEGER NULL",
+        "invalidated_by_draft_version_id": "INTEGER NULL",
         "supersedes_task_id": "INTEGER NULL",
         "estimated_cost": "FLOAT NULL",
         "actual_cost": "FLOAT NULL",
@@ -1364,4 +1374,20 @@ def _migrate_chapter_task_recovery_schema(connection) -> None:
             connection.execute(text(f"ALTER TABLE batch_generation_chapter_tasks ADD COLUMN {name} {definition}"))
     connection.execute(text("UPDATE batch_generation_chapter_tasks SET manifest_json = '{}' WHERE manifest_json IS NULL"))
     connection.execute(text("UPDATE batch_generation_chapter_tasks SET execution_steps_json = '[]' WHERE execution_steps_json IS NULL"))
+    connection.execute(text("UPDATE batch_generation_chapter_tasks SET invalidation_reason = '' WHERE invalidation_reason IS NULL"))
     _create_table_if_missing(connection, "chapter_task_attempts")
+
+
+def _migrate_chapter_dependency_invalidation_schema(connection) -> None:
+    if "batch_generation_chapter_tasks" not in inspect(connection).get_table_names():
+        return
+    columns = {column["name"] for column in inspect(connection).get_columns("batch_generation_chapter_tasks")}
+    definitions = {
+        "invalidation_reason": "TEXT NULL",
+        "invalidated_by_chapter_no": "INTEGER NULL",
+        "invalidated_by_draft_version_id": "INTEGER NULL",
+    }
+    for name, definition in definitions.items():
+        if name not in columns:
+            connection.execute(text(f"ALTER TABLE batch_generation_chapter_tasks ADD COLUMN {name} {definition}"))
+    connection.execute(text("UPDATE batch_generation_chapter_tasks SET invalidation_reason = '' WHERE invalidation_reason IS NULL"))

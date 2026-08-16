@@ -104,7 +104,9 @@ class ChapterTaskRetryBehaviorTests(unittest.TestCase):
         replacement_manifest = json.loads(replacement.manifest_json)
         self.assertEqual(replacement_manifest["input_state"], "planned_edited")
         self.assertEqual(replacement_manifest["input_overrides"]["user_instruction"], "加强雨夜氛围")
-        self.assertEqual(self.db.get(BatchGenerationChapterTask, downstream_id).output_validity, "stale_dependency")
+        invalidated = self.db.get(BatchGenerationChapterTask, downstream_id)
+        self.assertEqual(invalidated.output_validity, "stale_dependency")
+        self.assertIn("第 1 章", invalidated.invalidation_reason)
 
     def test_batch_retry_cannot_bypass_frozen_input_gate(self):
         task = self.db.get(BatchGenerationChapterTask, self.task_id)
@@ -143,6 +145,32 @@ class ChapterTaskRetryBehaviorTests(unittest.TestCase):
         self.assertEqual([task.chapter_no for task in job.chapter_tasks], [2])
         self.assertEqual(job.chapter_tasks[0].supersedes_task_id, historical_id)
         self.assertEqual(self.db.get(BatchGenerationChapterTask, historical_id).output_validity, "stale_dependency")
+
+    def test_invalidation_keeps_execution_truth_and_records_cause(self):
+        source = self.db.get(BatchGenerationChapterTask, self.task_id)
+        outline_two = ChapterOutline(project_id=source.job.project_id, series_plan_id=source.job.series_plan_id, chapter_no=2, title="第二章", outline_json='{"goal":"延续"}', status="chapter_canonical")
+        job = BatchGenerationJob(project_id=source.job.project_id, series_plan_id=source.job.series_plan_id, start_chapter_no=2, end_chapter_no=2, job_status="completed", result_summary_json="{}")
+        completed = BatchGenerationChapterTask(job=job, chapter_outline=outline_two, chapter_no=2, status="completed", error_message="", output_validity="valid")
+        self.db.add(completed)
+        self.db.flush()
+        completed_id = completed.id
+
+        affected = self.service.invalidate_chapter_outputs(
+            db=self.db,
+            series_plan_id=source.job.series_plan_id,
+            from_chapter_no=2,
+            changed_chapter_no=1,
+            reason="第 1 章确认了新的正文版本 v2",
+            invalidated_by_draft_version_id=99,
+        )
+        self.db.commit()
+        historical = self.db.get(BatchGenerationChapterTask, completed_id)
+        self.assertEqual(affected, [2])
+        self.assertEqual(historical.status, "completed")
+        self.assertEqual(historical.output_validity, "stale_dependency")
+        self.assertEqual(historical.invalidated_by_chapter_no, 1)
+        self.assertEqual(historical.invalidated_by_draft_version_id, 99)
+        self.assertIn("正文版本 v2", historical.invalidation_reason)
 
 
 if __name__ == "__main__":
